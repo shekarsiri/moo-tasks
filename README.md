@@ -11,6 +11,10 @@
 
 [Quick Start](#-quick-start) • [Agent Setup](#-agent--mcp-setup) • [Agent Protocol](#-mandatory-agent-protocol) • [Architecture](#%EF%B8%8F-architecture) • [MCP Tools](#%EF%B8%8F-mcp-tool-reference)
 
+<br/>
+
+<img src="./assets/moo-tasks-dashboard.png" alt="Moo Tasks Dashboard Interface" width="100%" />
+
 </div>
 
 ---
