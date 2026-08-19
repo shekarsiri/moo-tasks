@@ -1,247 +1,297 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Moo Tasks — Agentic Task Orchestration & Visibility</title>
+  <title>Moo Tasks — Agentic Task Orchestration & Visibilty</title>
   <link rel="stylesheet" href="/styles.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
-  <!-- Top Navigation -->
-  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30 px-6 py-3.5 flex items-center justify-between">
-    <div class="flex items-center space-x-4">
-      <div class="flex items-center space-x-2">
-        <span class="text-2xl">🐮</span>
-        <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-indigo-300 bg-clip-text text-transparent">Moo Tasks</span>
+<body>
+  <div id="appLayout">
+    <!-- Left Sidebar -->
+    <aside id="sidebar">
+      <!-- Workspace Brand -->
+      <div class="sidebar-header">
+        <div class="workspace-badge">
+          <div class="workspace-icon">🐮</div>
+          <div>
+            <div>Moo Tasks</div>
+            <div class="text-[10px] text-slate-500 font-mono font-normal">v1.0.0 • Local Engine</div>
+          </div>
+        </div>
       </div>
-      <span class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">MCP Engine</span>
-      <div id="connectionStatus" class="flex items-center space-x-1.5 text-xs text-emerald-400 font-mono">
-        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-        <span>Live SSE</span>
+
+      <!-- Navigation List -->
+      <div class="sidebar-nav">
+        <div class="sidebar-section-title">Views</div>
+        
+        <div class="nav-item active" data-view="tasks">
+          <div class="nav-item-content">
+            <span class="nav-icon">⚡</span>
+            <span>All Issues</span>
+          </div>
+          <span class="nav-counter" id="navCounterTotal">0</span>
+        </div>
+
+        <div class="nav-item" data-view="goals">
+          <div class="nav-item-content">
+            <span class="nav-icon">🎯</span>
+            <span>Goals & Roadmap</span>
+          </div>
+          <span class="nav-counter" id="navCounterGoals">0</span>
+        </div>
+
+        <div class="nav-item" data-view="human">
+          <div class="nav-item-content">
+            <span class="nav-icon">🙋</span>
+            <span>Human Inbox</span>
+          </div>
+          <span class="nav-counter alert hidden" id="navCounterHuman">0</span>
+        </div>
+
+        <div class="nav-item" data-view="review">
+          <div class="nav-item-content">
+            <span class="nav-icon">🔍</span>
+            <span>Review & Proofs</span>
+          </div>
+          <span class="nav-counter alert hidden" id="navCounterReview">0</span>
+        </div>
+
+        <div class="sidebar-section-title">Knowledge & Sync</div>
+
+        <div class="nav-item" data-view="decisions">
+          <div class="nav-item-content">
+            <span class="nav-icon">🏛️</span>
+            <span>Decisions (ADR)</span>
+          </div>
+          <span class="nav-counter" id="navCounterDecisions">0</span>
+        </div>
+
+        <div class="nav-item" data-view="activity">
+          <div class="nav-item-content">
+            <span class="nav-icon">📡</span>
+            <span>Activity Feed</span>
+          </div>
+        </div>
+
+        <div class="nav-item" data-view="resume">
+          <div class="nav-item-content">
+            <span class="nav-icon">🧭</span>
+            <span>Session Resume</span>
+          </div>
+        </div>
       </div>
-    </div>
 
-    <!-- Navigation Tabs -->
-    <nav class="flex items-center space-x-1 bg-slate-950/60 p-1 rounded-lg border border-slate-800 text-sm">
-      <button class="nav-btn active" data-tab="board">📋 Board</button>
-      <button class="nav-btn" data-tab="goals">🎯 Goals & Loose Ends</button>
-      <button class="nav-btn" data-tab="human">
-        🙋 Human Inbox <span id="humanInboxBadge" class="badge-count hidden">0</span>
-      </button>
-      <button class="nav-btn" data-tab="review">
-        🔍 Review Feed <span id="reviewBadge" class="badge-count hidden">0</span>
-      </button>
-      <button class="nav-btn" data-tab="decisions">🏛️ Decisions</button>
-      <button class="nav-btn" data-tab="activity">⚡ Activity</button>
-      <button class="nav-btn" data-tab="resume">🧭 Where Did I Leave Off</button>
-    </nav>
+      <!-- Sidebar Footer -->
+      <div class="sidebar-footer">
+        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Live Sync</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <kbd class="kbd-key">C</kbd>
+          <span class="text-[10px] text-slate-500">New</span>
+        </div>
+      </div>
+    </aside>
 
-    <!-- Action Buttons -->
-    <div class="flex items-center space-x-2">
-      <button id="btnNewGoal" class="btn-secondary text-xs">+ Goal</button>
-      <button id="btnNewTask" class="btn-primary text-xs">+ Task</button>
-      <button id="btnExport" class="btn-secondary text-xs">Export</button>
-    </div>
-  </header>
+    <!-- Main Content Area -->
+    <main id="mainWorkspace">
+      <!-- Top Header -->
+      <header class="top-header">
+        <div class="breadcrumb-area">
+          <span>Workspace</span>
+          <span class="text-slate-600">/</span>
+          <span class="breadcrumb-active" id="activeViewTitle">All Issues</span>
+        </div>
 
-  <!-- Main Content Area -->
-  <main class="flex-1 p-6 overflow-x-hidden">
-    <!-- Tab 1: Board View -->
-    <section id="tab-board" class="tab-pane active">
-      <!-- Filter Bar -->
-      <div class="flex items-center justify-between mb-4">
-        <div class="flex items-center space-x-3 text-xs">
-          <label class="text-slate-400">Filter Goal:</label>
-          <select id="boardGoalFilter" class="select-field">
+        <div class="flex items-center gap-3">
+          <!-- Command Palette Trigger -->
+          <div class="search-trigger" id="btnOpenPalette">
+            <span class="text-slate-500">🔍</span>
+            <span class="flex-1">Search or jump to...</span>
+            <kbd class="kbd-key">⌘K</kbd>
+          </div>
+
+          <!-- View Switcher (Only visible in tasks view) -->
+          <div class="view-switcher" id="tasksViewSwitcher">
+            <button class="view-btn active" data-mode="list" id="btnViewList">
+              <span>☰</span> List
+            </button>
+            <button class="view-btn" data-mode="board" id="btnViewBoard">
+              <span>⊞</span> Board
+            </button>
+          </div>
+
+          <!-- Quick Action Buttons -->
+          <button class="btn-secondary" id="btnHeaderExport">
+            <span>↓</span> Export
+          </button>
+          <button class="btn-primary" id="btnHeaderNewTask">
+            <span>+</span> New Issue <kbd class="kbd-key ml-1 bg-indigo-900/60 border-indigo-700 text-indigo-200">C</kbd>
+          </button>
+        </div>
+      </header>
+
+      <!-- Filter Toolbar -->
+      <div class="filter-toolbar" id="filterToolbar">
+        <div class="filter-group">
+          <select id="filterGoal" class="filter-select">
             <option value="">All Goals</option>
           </select>
-          <input type="text" id="boardSearchInput" placeholder="Search tasks..." class="input-field w-56">
+
+          <select id="filterPriority" class="filter-select">
+            <option value="">All Priorities</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+
+          <select id="filterAgent" class="filter-select">
+            <option value="">All Assignees</option>
+          </select>
+
+          <input type="text" id="filterSearch" placeholder="Filter issues..." class="filter-select w-44">
         </div>
-        <div class="flex items-center space-x-2 text-xs text-slate-400 font-mono">
-          <span id="totalTasksCount">0 Tasks</span>
+
+        <div class="flex items-center gap-3 text-xs text-slate-500 font-mono">
+          <span id="displayCountLabel">0 issues</span>
         </div>
       </div>
 
-      <!-- Kanban Columns -->
-      <div class="grid grid-cols-6 gap-3.5 min-h-[calc(100vh-210px)]">
-        <!-- Todo -->
-        <div class="kanban-column" data-status="todo">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-slate-400"></span> Todo</span>
-            <span class="column-count" id="count-todo">0</span>
+      <!-- Viewport Area -->
+      <div class="content-viewport">
+        <!-- Tab 1: All Issues (Tasks) -->
+        <section id="pane-tasks" class="view-pane active">
+          <!-- Mode A: List View -->
+          <div id="tasksListView" class="list-container"></div>
+          <!-- Mode B: Board View -->
+          <div id="tasksBoardView" class="board-container hidden"></div>
+        </section>
+
+        <!-- Tab 2: Goals & Roadmap -->
+        <section id="pane-goals" class="view-pane hidden">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-base font-semibold text-slate-100">Project Goals & Loose Ends</h2>
+              <p class="text-xs text-slate-400">Verbatim human prompts and tracking against task caps.</p>
+            </div>
+            <button class="btn-primary text-xs" id="btnCreateGoal">+ Create Goal</button>
           </div>
-          <div class="column-cards" id="cards-todo"></div>
-        </div>
+          <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-5xl"></div>
+        </section>
 
-        <!-- Doing -->
-        <div class="kanban-column" data-status="doing">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-blue-400"></span> In Progress</span>
-            <span class="column-count" id="count-doing">0</span>
+        <!-- Tab 3: Human Inbox -->
+        <section id="pane-human" class="view-pane hidden">
+          <div class="mb-4">
+            <h2 class="text-base font-semibold text-purple-400">🙋 Human Attention Queue</h2>
+            <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering immediately unblocks the waiting agent.</p>
           </div>
-          <div class="column-cards" id="cards-doing"></div>
-        </div>
+          <div id="humanInboxList" class="space-y-3 max-w-3xl"></div>
+        </section>
 
-        <!-- Blocked on Dependency -->
-        <div class="kanban-column" data-status="blocked-on-dependency">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Blocked (Dep)</span>
-            <span class="column-count" id="count-blocked-on-dependency">0</span>
+        <!-- Tab 4: Review & Proofs -->
+        <section id="pane-review" class="view-pane hidden">
+          <div class="mb-4">
+            <h2 class="text-base font-semibold text-slate-100">🔍 Review & Proof Verification</h2>
+            <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks or review dropped tasks.</p>
           </div>
-          <div class="column-cards" id="cards-blocked-on-dependency"></div>
-        </div>
+          <div id="reviewFeedList" class="space-y-3.5 max-w-3xl"></div>
+        </section>
 
-        <!-- Waiting on Human -->
-        <div class="kanban-column" data-status="waiting-on-human">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-purple-400"></span> Waiting on Human</span>
-            <span class="column-count" id="count-waiting-on-human">0</span>
+        <!-- Tab 5: Decisions (ADR) -->
+        <section id="pane-decisions" class="view-pane hidden">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-base font-semibold text-slate-100">🏛️ Settled Architectural Decisions</h2>
+              <p class="text-xs text-slate-400">Firm decisions consulted by agents prior to task planning.</p>
+            </div>
+            <button class="btn-primary text-xs" id="btnCreateDecision">+ Record Decision</button>
           </div>
-          <div class="column-cards" id="cards-waiting-on-human"></div>
-        </div>
+          <div id="decisionsList" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-5xl"></div>
+        </section>
 
-        <!-- Done -->
-        <div class="kanban-column" data-status="done">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Done</span>
-            <span class="column-count" id="count-done">0</span>
+        <!-- Tab 6: Activity Feed -->
+        <section id="pane-activity" class="view-pane hidden">
+          <div class="mb-4">
+            <h2 class="text-base font-semibold text-slate-100">📡 Live Activity Feed</h2>
           </div>
-          <div class="column-cards" id="cards-done"></div>
-        </div>
+          <div id="activityStream" class="space-y-2 max-w-3xl font-mono text-xs"></div>
+        </section>
 
-        <!-- Dropped -->
-        <div class="kanban-column" data-status="dropped">
-          <div class="column-header">
-            <span class="column-title"><span class="w-2 h-2 rounded-full bg-rose-400"></span> Dropped</span>
-            <span class="column-count" id="count-dropped">0</span>
+        <!-- Tab 7: Session Resume -->
+        <section id="pane-resume" class="view-pane hidden">
+          <div class="mb-4">
+            <h2 class="text-base font-semibold text-slate-100">🧭 Where Did I Leave Off</h2>
+            <p class="text-xs text-slate-400">Instant session continuity snapshot.</p>
           </div>
-          <div class="column-cards" id="cards-dropped"></div>
-        </div>
+          <div id="sessionResumeDashboard" class="max-w-4xl space-y-4"></div>
+        </section>
       </div>
-    </section>
+    </main>
+  </div>
 
-    <!-- Tab 2: Goals & Loose Ends -->
-    <section id="tab-goals" class="tab-pane hidden">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold">Project Goals & Loose Ends</h2>
-        <button id="btnNewGoal2" class="btn-primary text-xs">+ Create Goal</button>
+  <!-- Command Palette (Cmd+K) -->
+  <div id="commandPalette" class="palette-backdrop hidden">
+    <div class="palette-box">
+      <div class="palette-input-wrapper">
+        <span class="text-slate-400 text-sm">🔍</span>
+        <input type="text" id="paletteInput" class="palette-input" placeholder="Type a command or search issues, goals, decisions...">
+        <kbd class="kbd-key">ESC</kbd>
       </div>
-      <div id="goalsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
-    </section>
-
-    <!-- Tab 3: Human Inbox -->
-    <section id="tab-human" class="tab-pane hidden">
-      <div class="mb-4">
-        <h2 class="text-lg font-semibold">🙋 Waiting on Human Guidance</h2>
-        <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering instantly unblocks the agent without restarting.</p>
-      </div>
-      <div id="humanInboxContainer" class="space-y-3 max-w-4xl"></div>
-    </section>
-
-    <!-- Tab 4: Review Feed -->
-    <section id="tab-review" class="tab-pane hidden">
-      <div class="mb-4">
-        <h2 class="text-lg font-semibold">🔍 Review & Verification Feed</h2>
-        <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks and review dropped tasks. Verify or reject with feedback.</p>
-      </div>
-      <div id="reviewContainer" class="space-y-4 max-w-4xl"></div>
-    </section>
-
-    <!-- Tab 5: Decisions -->
-    <section id="tab-decisions" class="tab-pane hidden">
-      <div class="flex items-center justify-between mb-4">
-        <div>
-          <h2 class="text-lg font-semibold">🏛️ Settled Architectural Decisions</h2>
-          <p class="text-xs text-slate-400">Agents consult these decisions before planning to keep settled choices firm.</p>
-        </div>
-        <button id="btnNewDecision" class="btn-primary text-xs">+ Record Decision</button>
-      </div>
-      <div id="decisionsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
-    </section>
-
-    <!-- Tab 6: Activity Feed -->
-    <section id="tab-activity" class="tab-pane hidden">
-      <div class="mb-4">
-        <h2 class="text-lg font-semibold">⚡ Real-time Agent Activity Feed</h2>
-      </div>
-      <div id="activityContainer" class="space-y-2 max-w-3xl font-mono text-xs"></div>
-    </section>
-
-    <!-- Tab 7: Where Did I Leave Off -->
-    <section id="tab-resume" class="tab-pane hidden">
-      <div class="mb-4">
-        <h2 class="text-lg font-semibold">🧭 Session Resume Overview</h2>
-        <p class="text-xs text-slate-400">Instant snapshot of active in-flight tasks, pending answers, and ready tasks.</p>
-      </div>
-      <div id="resumeContainer" class="max-w-4xl space-y-4"></div>
-    </section>
-  </main>
-
-  <!-- Task Detail Modal -->
-  <div id="modalTaskDetail" class="modal-backdrop hidden">
-    <div class="modal-card max-w-2xl">
-      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
-        <div class="flex items-center space-x-2">
-          <span id="modalTaskBadge" class="status-badge">todo</span>
-          <span id="modalTaskId" class="font-mono text-xs text-slate-400">task-xxx</span>
-        </div>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
-      </div>
-
-      <div id="modalTaskBody" class="space-y-4 text-sm max-h-[70vh] overflow-y-auto pr-1"></div>
-
-      <div class="flex items-center justify-between border-t border-slate-800 pt-3 mt-4">
-        <div class="flex items-center space-x-2" id="modalTaskActions"></div>
-        <button class="modal-close btn-secondary text-xs">Close</button>
+      <div class="palette-results" id="paletteResults"></div>
+      <div class="palette-footer">
+        <span>Navigation: <kbd class="kbd-key">↑</kbd> <kbd class="kbd-key">↓</kbd> Select: <kbd class="kbd-key">↵</kbd></span>
+        <span class="text-slate-500 font-mono text-[10px]">Moo Tasks Quick Engine</span>
       </div>
     </div>
   </div>
 
-  <!-- Create Goal Modal -->
-  <div id="modalCreateGoal" class="modal-backdrop hidden">
-    <div class="modal-card max-w-lg">
-      <h3 class="text-base font-semibold mb-3">🎯 Create New Goal</h3>
-      <form id="formCreateGoal" class="space-y-3 text-xs">
-        <div>
-          <label class="block text-slate-400 mb-1">Goal Title</label>
-          <input type="text" id="inputGoalTitle" required class="input-field w-full" placeholder="e.g. Implement User Authentication">
+  <!-- Slide-Over Task Inspector Drawer -->
+  <div id="drawerInspector" class="drawer-backdrop hidden">
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <div class="flex items-center gap-2.5">
+          <span id="drawerStatusDot" class="status-dot todo"></span>
+          <span id="drawerTaskId" class="font-mono text-xs text-slate-400 font-semibold">TASK-001</span>
+          <span class="text-slate-600">•</span>
+          <span id="drawerPriorityBadge" class="text-xs font-semibold text-slate-300 uppercase">MEDIUM</span>
         </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Verbatim Human Request</label>
-          <textarea id="inputGoalVerbatim" required rows="4" class="input-field w-full" placeholder="Paste the original user request verbatim here..."></textarea>
+        <div class="flex items-center gap-2">
+          <button class="drawer-close btn-secondary text-xs">Close</button>
         </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Open Tasks Cap (Enforces execution over planning)</label>
-          <input type="number" id="inputGoalCap" value="10" min="1" max="50" class="input-field w-24">
-        </div>
-        <div class="flex justify-end space-x-2 pt-2">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Create Goal</button>
-        </div>
-      </form>
+      </div>
+
+      <div class="drawer-body" id="drawerBody">
+        <!-- Injected via JS -->
+      </div>
     </div>
   </div>
 
-  <!-- Create Task Modal -->
+  <!-- Modal: Create Task -->
   <div id="modalCreateTask" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
-      <h3 class="text-base font-semibold mb-3">📋 Create New Task</h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">📋 Create New Issue</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
       <form id="formCreateTask" class="space-y-3 text-xs">
         <div>
-          <label class="block text-slate-400 mb-1">Task Title</label>
-          <input type="text" id="inputTaskTitle" required class="input-field w-full" placeholder="e.g. Create JWT token generator utility">
+          <label class="block text-slate-400 mb-1">Title</label>
+          <input type="text" id="inputTaskTitle" required class="input-field" placeholder="Issue title...">
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-slate-400 mb-1">Linked Goal</label>
-            <select id="inputTaskGoal" class="select-field w-full"></select>
+            <label class="block text-slate-400 mb-1">Goal</label>
+            <select id="inputTaskGoal" class="select-field"></select>
           </div>
           <div>
             <label class="block text-slate-400 mb-1">Priority</label>
-            <select id="inputTaskPriority" class="select-field w-full">
+            <select id="inputTaskPriority" class="select-field">
               <option value="medium">Medium</option>
               <option value="low">Low</option>
               <option value="high">High</option>
@@ -250,51 +300,82 @@
           </div>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Acceptance Criteria (Mandatory before starting)</label>
-          <textarea id="inputTaskAC" required rows="3" class="input-field w-full" placeholder="Specify concrete verifiable criteria (e.g. unit tests pass, endpoint returns 200)"></textarea>
+          <label class="block text-slate-400 mb-1">Acceptance Criteria (Mandatory before start)</label>
+          <textarea id="inputTaskAC" required rows="3" class="input-field" placeholder="Verifiable criteria required to complete this task..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Declared Files / Touch Paths (Optional, comma-separated)</label>
-          <input type="text" id="inputTaskFiles" class="input-field w-full" placeholder="e.g. src/auth/jwt.ts, tests/jwt.test.ts">
+          <label class="block text-slate-400 mb-1">Declared Touch Files (Comma-separated)</label>
+          <input type="text" id="inputTaskFiles" class="input-field" placeholder="src/controllers/auth.ts, src/routes/user.ts">
         </div>
-        <div class="flex items-center space-x-2 pt-1">
+        <div class="flex items-center gap-2 pt-1">
           <input type="checkbox" id="inputTaskDeferred">
-          <label for="inputTaskDeferred" class="text-slate-300">Defer to backlog pile (exclude from ready queue)</label>
+          <label for="inputTaskDeferred" class="text-slate-300">Defer to backlog pile</label>
         </div>
-        <div class="flex justify-end space-x-2 pt-2">
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Create Task</button>
+          <button type="submit" class="btn-primary">Create Issue</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- Create Decision Modal -->
+  <!-- Modal: Create Goal -->
+  <div id="modalCreateGoal" class="modal-backdrop hidden">
+    <div class="modal-card max-w-lg">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">🎯 Create Goal</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <form id="formCreateGoal" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Title</label>
+          <input type="text" id="inputGoalTitle" required class="input-field" placeholder="e.g. Implement Multi-Factor Authentication">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Verbatim Human Request</label>
+          <textarea id="inputGoalVerbatim" required rows="4" class="input-field" placeholder="Paste verbatim original prompt here..."></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Open Tasks Cap</label>
+          <input type="number" id="inputGoalCap" value="10" min="1" max="50" class="input-field w-24">
+        </div>
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Create Goal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Create Decision -->
   <div id="modalCreateDecision" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
-      <h3 class="text-base font-semibold mb-3">🏛️ Record Architectural Decision</h3>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">🏛️ Record Architectural Decision</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
       <form id="formCreateDecision" class="space-y-3 text-xs">
         <div>
-          <label class="block text-slate-400 mb-1">Decision Title</label>
-          <input type="text" id="inputDecTitle" required class="input-field w-full" placeholder="e.g. Use SQLite for local persistence">
+          <label class="block text-slate-400 mb-1">Title</label>
+          <input type="text" id="inputDecTitle" required class="input-field" placeholder="e.g. Use SQLite with WAL mode">
         </div>
         <div>
           <label class="block text-slate-400 mb-1">Context</label>
-          <textarea id="inputDecContext" required rows="2" class="input-field w-full" placeholder="What is the problem or background?"></textarea>
+          <textarea id="inputDecContext" required rows="2" class="input-field" placeholder="Background problem..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Choice Made</label>
-          <input type="text" id="inputDecChoice" required class="input-field w-full" placeholder="e.g. better-sqlite3 with WAL mode">
+          <label class="block text-slate-400 mb-1">Choice</label>
+          <input type="text" id="inputDecChoice" required class="input-field" placeholder="The selected solution...">
         </div>
         <div>
           <label class="block text-slate-400 mb-1">Rationale</label>
-          <textarea id="inputDecRationale" required rows="2" class="input-field w-full" placeholder="Why was this choice selected over alternatives?"></textarea>
+          <textarea id="inputDecRationale" required rows="2" class="input-field" placeholder="Why this was selected..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Tags (comma-separated)</label>
-          <input type="text" id="inputDecTags" class="input-field w-full" placeholder="e.g. storage, database, architecture">
+          <label class="block text-slate-400 mb-1">Tags (Comma-separated)</label>
+          <input type="text" id="inputDecTags" class="input-field" placeholder="storage, database">
         </div>
-        <div class="flex justify-end space-x-2 pt-2">
+        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
           <button type="submit" class="btn-primary">Save Decision</button>
         </div>
@@ -302,15 +383,15 @@
     </div>
   </div>
 
-  <!-- Prompt Modal (Drop/Reject reason) -->
+  <!-- Modal: Mandatory Reason Prompt -->
   <div id="modalReasonPrompt" class="modal-backdrop hidden">
     <div class="modal-card max-w-md">
       <h3 id="modalReasonTitle" class="text-sm font-semibold mb-2">Mandatory Reason</h3>
       <form id="formReasonPrompt" class="space-y-3 text-xs">
-        <textarea id="inputReasonText" required rows="3" class="input-field w-full" placeholder="Provide explanation..."></textarea>
-        <div class="flex justify-end space-x-2">
+        <textarea id="inputReasonText" required rows="3" class="input-field" placeholder="Provide reason..."></textarea>
+        <div class="flex justify-end gap-2 pt-2">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary" id="btnSubmitReason">Confirm</button>
+          <button type="submit" class="btn-primary">Confirm</button>
         </div>
       </form>
     </div>
