@@ -37,10 +37,23 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-* {
+*, ::before, ::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  border-color: var(--border-subtle);
+}
+
+.border-subtle {
+  border-color: var(--border-subtle) !important;
+}
+
+.border-default {
+  border-color: var(--border-default) !important;
+}
+
+.border-active {
+  border-color: var(--border-active) !important;
 }
 
 body {
