@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Moo Tasks — Agentic Task Orchestration & Visibility</title>
   
+  <!-- Lucide Icons Engine -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
   <!-- Marked.js Markdown Engine -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
@@ -71,7 +74,9 @@
       <!-- Workspace Brand -->
       <div class="sidebar-header p-3.5 border-b border-borderSubtle flex items-center justify-between">
         <div class="flex items-center gap-2.5 font-bold text-[13px] text-slate-100">
-          <div class="w-6 h-6 rounded-md bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-xs shadow-md shadow-indigo-600/30">🐮</div>
+          <div class="w-6 h-6 rounded-md bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white shadow-md shadow-indigo-600/30">
+            <i data-lucide="layers" class="w-3.5 h-3.5"></i>
+          </div>
           <div>
             <div class="leading-tight">Moo Tasks</div>
             <div class="text-[10px] text-slate-500 font-mono font-normal">v1.0.0 • Local Engine</div>
@@ -85,7 +90,7 @@
         
         <div class="nav-item active" data-view="tasks">
           <div class="nav-item-content">
-            <span class="nav-icon">⚡</span>
+            <span class="nav-icon"><i data-lucide="check-square" class="w-4 h-4"></i></span>
             <span>All Issues</span>
           </div>
           <span class="nav-counter" id="navCounterTotal">0</span>
@@ -93,7 +98,7 @@
 
         <div class="nav-item" data-view="goals">
           <div class="nav-item-content">
-            <span class="nav-icon">🎯</span>
+            <span class="nav-icon"><i data-lucide="target" class="w-4 h-4"></i></span>
             <span>Goals & Roadmap</span>
           </div>
           <span class="nav-counter" id="navCounterGoals">0</span>
@@ -101,7 +106,7 @@
 
         <div class="nav-item" data-view="human">
           <div class="nav-item-content">
-            <span class="nav-icon">🙋</span>
+            <span class="nav-icon"><i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i></span>
             <span>Human Inbox</span>
           </div>
           <span class="nav-counter alert hidden" id="navCounterHuman">0</span>
@@ -109,7 +114,7 @@
 
         <div class="nav-item" data-view="review">
           <div class="nav-item-content">
-            <span class="nav-icon">🔍</span>
+            <span class="nav-icon"><i data-lucide="shield-check" class="w-4 h-4 text-indigo-400"></i></span>
             <span>Review & Proofs</span>
           </div>
           <span class="nav-counter alert hidden" id="navCounterReview">0</span>
@@ -119,7 +124,7 @@
 
         <div class="nav-item" data-view="decisions">
           <div class="nav-item-content">
-            <span class="nav-icon">🏛️</span>
+            <span class="nav-icon"><i data-lucide="landmark" class="w-4 h-4"></i></span>
             <span>Decisions (ADR)</span>
           </div>
           <span class="nav-counter" id="navCounterDecisions">0</span>
@@ -127,14 +132,14 @@
 
         <div class="nav-item" data-view="activity">
           <div class="nav-item-content">
-            <span class="nav-icon">📡</span>
+            <span class="nav-icon"><i data-lucide="activity" class="w-4 h-4"></i></span>
             <span>Activity Feed</span>
           </div>
         </div>
 
         <div class="nav-item" data-view="resume">
           <div class="nav-item-content">
-            <span class="nav-icon">🧭</span>
+            <span class="nav-icon"><i data-lucide="compass" class="w-4 h-4"></i></span>
             <span>Session Resume</span>
           </div>
         </div>
@@ -166,7 +171,7 @@
         <div class="flex items-center gap-3">
           <!-- Command Palette Trigger -->
           <div class="search-trigger cursor-pointer flex items-center gap-2 bg-surface border border-borderDefault hover:border-borderActive rounded-md px-2.5 py-1 text-slate-400 text-xs transition" id="btnOpenPalette">
-            <span class="text-slate-500 text-xs">🔍</span>
+            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400"></i>
             <span class="flex-1 text-[11.5px]">Search or jump to...</span>
             <kbd class="kbd-key">⌘K</kbd>
           </div>
@@ -174,19 +179,19 @@
           <!-- View Switcher (List vs Board) -->
           <div class="view-switcher flex bg-surface border border-borderDefault rounded-md p-0.5 gap-0.5" id="tasksViewSwitcher">
             <button class="view-btn active" data-mode="list" id="btnViewList">
-              <span>☰</span> List
+              <i data-lucide="list" class="w-3.5 h-3.5"></i> <span>List</span>
             </button>
             <button class="view-btn" data-mode="board" id="btnViewBoard">
-              <span>⊞</span> Board
+              <i data-lucide="kanban" class="w-3.5 h-3.5"></i> <span>Board</span>
             </button>
           </div>
 
           <!-- Quick Action Buttons -->
           <button class="btn-secondary" id="btnHeaderExport">
-            <span>↓</span> Export
+            <i data-lucide="download" class="w-3.5 h-3.5"></i> <span>Export</span>
           </button>
           <button class="btn-primary" id="btnHeaderNewTask">
-            <span>+</span> New Issue <kbd class="kbd-key ml-1 bg-indigo-900/60 border-indigo-700 text-indigo-200">C</kbd>
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> <span>New Issue</span> <kbd class="kbd-key ml-1 bg-indigo-900/60 border-indigo-700 text-indigo-200">C</kbd>
           </button>
         </div>
       </header>
@@ -196,7 +201,7 @@
         <div class="filter-group flex items-center gap-2">
           <select id="filterGoal" class="filter-select">
             <option value="">All Goals</option>
-            <option value="__orphans__">⚠️ Scope Drift (Orphans)</option>
+            <option value="__orphans__">Scope Drift (Orphans)</option>
           </select>
 
           <select id="filterPriority" class="filter-select">
@@ -233,10 +238,14 @@
         <section id="pane-goals" class="view-pane hidden">
           <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
             <div>
-              <h2 class="text-base font-semibold text-slate-100">Project Goals & Loose Ends</h2>
+              <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+                <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Project Goals & Loose Ends
+              </h2>
               <p class="text-xs text-slate-400">Verbatim human prompts and tracking against task caps.</p>
             </div>
-            <button class="btn-primary text-xs" id="btnCreateGoal">+ Create Goal</button>
+            <button class="btn-primary text-xs" id="btnCreateGoal">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Goal
+            </button>
           </div>
           <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
         </section>
@@ -244,7 +253,9 @@
         <!-- View 3: Human Inbox -->
         <section id="pane-human" class="view-pane hidden">
           <div class="mb-4 max-w-4xl mx-auto">
-            <h2 class="text-base font-semibold text-purple-400">🙋 Human Attention Queue</h2>
+            <h2 class="text-base font-semibold text-purple-400 flex items-center gap-2">
+              <i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i> Human Attention Queue
+            </h2>
             <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering immediately unblocks the waiting agent.</p>
           </div>
           <div id="humanInboxList" class="space-y-3 max-w-4xl mx-auto"></div>
@@ -253,7 +264,9 @@
         <!-- View 4: Review & Proofs -->
         <section id="pane-review" class="view-pane hidden">
           <div class="mb-4 max-w-4xl mx-auto">
-            <h2 class="text-base font-semibold text-slate-100">🔍 Review & Proof Verification</h2>
+            <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i> Review & Proof Verification
+            </h2>
             <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks or review dropped tasks.</p>
           </div>
           <div id="reviewFeedList" class="space-y-3.5 max-w-4xl mx-auto"></div>
@@ -263,10 +276,14 @@
         <section id="pane-decisions" class="view-pane hidden">
           <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
             <div>
-              <h2 class="text-base font-semibold text-slate-100">🏛️ Settled Architectural Decisions</h2>
+              <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+                <i data-lucide="landmark" class="w-4 h-4 text-indigo-400"></i> Settled Architectural Decisions
+              </h2>
               <p class="text-xs text-slate-400">Firm decisions consulted by agents prior to task planning.</p>
             </div>
-            <button class="btn-primary text-xs" id="btnCreateDecision">+ Record Decision</button>
+            <button class="btn-primary text-xs" id="btnCreateDecision">
+              <i data-lucide="plus" class="w-3.5 h-3.5"></i> Record Decision
+            </button>
           </div>
           <div id="decisionsList" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
         </section>
@@ -274,7 +291,9 @@
         <!-- View 6: Activity Feed -->
         <section id="pane-activity" class="view-pane hidden">
           <div class="mb-4 max-w-4xl mx-auto">
-            <h2 class="text-base font-semibold text-slate-100">📡 Live Activity Feed</h2>
+            <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <i data-lucide="activity" class="w-4 h-4 text-blue-400"></i> Live Activity Feed
+            </h2>
           </div>
           <div id="activityStream" class="space-y-2 max-w-4xl mx-auto font-mono text-xs"></div>
         </section>
@@ -282,7 +301,9 @@
         <!-- View 7: Session Resume -->
         <section id="pane-resume" class="view-pane hidden">
           <div class="mb-4 max-w-4xl mx-auto">
-            <h2 class="text-base font-semibold text-slate-100">🧭 Where Did I Leave Off</h2>
+            <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <i data-lucide="compass" class="w-4 h-4 text-indigo-400"></i> Where Did I Leave Off
+            </h2>
             <p class="text-xs text-slate-400">Instant session continuity snapshot.</p>
           </div>
           <div id="sessionResumeDashboard" class="max-w-4xl mx-auto space-y-4"></div>
@@ -295,7 +316,7 @@
   <div id="commandPalette" class="palette-backdrop hidden">
     <div class="palette-box">
       <div class="palette-input-wrapper">
-        <span class="text-slate-400 text-sm">🔍</span>
+        <i data-lucide="search" class="w-4 h-4 text-slate-400"></i>
         <input type="text" id="paletteInput" class="palette-input" placeholder="Type a command or search issues, goals, decisions...">
         <kbd class="kbd-key">ESC</kbd>
       </div>
@@ -318,7 +339,9 @@
           <span id="drawerPriorityBadge" class="text-xs font-semibold text-slate-300 uppercase">MEDIUM</span>
         </div>
         <div class="flex items-center gap-2">
-          <button class="drawer-close btn-secondary text-xs">Close</button>
+          <button class="drawer-close btn-secondary text-xs">
+            <i data-lucide="x" class="w-3.5 h-3.5"></i> Close
+          </button>
         </div>
       </div>
 
@@ -332,7 +355,9 @@
   <div id="modalCreateTask" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">📋 Create New Issue</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="plus-circle" class="w-4 h-4 text-indigo-400"></i> Create New Issue
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formCreateTask" class="space-y-3 text-xs">
@@ -379,7 +404,9 @@
   <div id="modalCreateSubtask" class="modal-backdrop hidden">
     <div class="modal-card max-w-md">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">➕ Add Subtask</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="corner-down-right" class="w-4 h-4 text-indigo-400"></i> Add Subtask
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formCreateSubtask" class="space-y-3 text-xs">
@@ -404,7 +431,9 @@
   <div id="modalMergeTask" class="modal-backdrop hidden">
     <div class="modal-card max-w-md">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">🔀 Merge Issue into Another</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="git-merge" class="w-4 h-4 text-indigo-400"></i> Merge Issue into Another
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formMergeTask" class="space-y-3 text-xs">
@@ -432,7 +461,9 @@
   <div id="modalCreateGoal" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">🎯 Create Goal</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Create Goal
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formCreateGoal" class="space-y-3 text-xs">
@@ -460,7 +491,9 @@
   <div id="modalCreateDecision" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">🏛️ Record Architectural Decision</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="landmark" class="w-4 h-4 text-indigo-400"></i> Record Architectural Decision
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formCreateDecision" class="space-y-3 text-xs">
@@ -496,7 +529,9 @@
   <div id="modalSupersedeDecision" class="modal-backdrop hidden">
     <div class="modal-card max-w-lg">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100">🔄 Supersede Decision</h3>
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="refresh-cw" class="w-4 h-4 text-indigo-400"></i> Supersede Decision
+        </h3>
         <button class="modal-close text-slate-400 hover:text-white">&times;</button>
       </div>
       <form id="formSupersedeDecision" class="space-y-3 text-xs">

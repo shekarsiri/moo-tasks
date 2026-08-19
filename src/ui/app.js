@@ -15,6 +15,13 @@ const state = {
   paletteSelectedIndex: 0,
 };
 
+// Lucide Refresh Helper
+function refreshLucideIcons() {
+  if (window.lucide && typeof window.lucide.createIcons === 'function') {
+    window.lucide.createIcons();
+  }
+}
+
 // Markdown Parser Helper
 function renderMarkdown(text) {
   if (!text) return '';
@@ -25,7 +32,6 @@ function renderMarkdown(text) {
       // fallback
     }
   }
-  // Safe basic fallback
   const div = document.createElement('div');
   div.textContent = text;
   return `<p>${div.innerHTML.replace(/\n/g, '<br>')}</p>`;
@@ -93,12 +99,13 @@ function showToast(message, type = 'info') {
   const toast = document.createElement('div');
   toast.className = `toast-msg ${type}`;
   
-  let icon = 'ℹ️';
-  if (type === 'success') icon = '✅';
-  if (type === 'error') icon = '⚠️';
+  let iconName = 'info';
+  if (type === 'success') iconName = 'check-circle';
+  if (type === 'error') iconName = 'alert-circle';
 
-  toast.innerHTML = `<span>${icon}</span><span class="font-medium">${message}</span>`;
+  toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4"></i><span class="font-medium">${message}</span>`;
   toastContainer.appendChild(toast);
+  refreshLucideIcons();
 
   setTimeout(() => {
     toast.style.opacity = '0';
@@ -131,6 +138,7 @@ async function fetchGoals() {
     renderGoalFilters();
     renderGoalsView();
     if (navCounterGoals) navCounterGoals.textContent = state.goals.length;
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to fetch goals:', err);
   }
@@ -147,6 +155,7 @@ async function fetchTasks() {
     renderResumeView();
     updateAssigneeFilter();
     updateSidebarCounters();
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to fetch tasks:', err);
   }
@@ -159,6 +168,7 @@ async function fetchDecisions() {
     state.decisions = data.decisions || [];
     renderDecisionsView();
     if (navCounterDecisions) navCounterDecisions.textContent = state.decisions.length;
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to fetch decisions:', err);
   }
@@ -170,6 +180,7 @@ async function fetchActivity() {
     const data = await res.json();
     state.activity = data.notes || [];
     renderActivityFeed();
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to fetch activity:', err);
   }
@@ -180,6 +191,7 @@ async function refreshAll() {
   if (state.selectedTaskId) {
     openInspector(state.selectedTaskId, false);
   }
+  refreshLucideIcons();
 }
 
 // Sidebar Navigation
@@ -214,6 +226,7 @@ function switchView(viewName) {
 
   if (viewName === 'resume') renderResumeView();
   if (viewName === 'activity') fetchActivity();
+  refreshLucideIcons();
 }
 
 // View Mode (List vs Board)
@@ -286,7 +299,7 @@ if (filterSearch) {
 function renderGoalFilters() {
   if (!filterGoal) return;
   const cur = filterGoal.value;
-  filterGoal.innerHTML = '<option value="">All Goals</option><option value="__orphans__">⚠️ Scope Drift (Orphans)</option>';
+  filterGoal.innerHTML = '<option value="">All Goals</option><option value="__orphans__">Scope Drift (Orphans)</option>';
   const inputTaskGoal = document.getElementById('inputTaskGoal');
   if (inputTaskGoal) inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
 
@@ -340,19 +353,19 @@ function updateSidebarCounters() {
   }
 }
 
-// Priority Icon Helper
+// Priority Icon Helper (Lucide SVGs)
 function getPriorityIcon(priority) {
   switch (priority) {
     case 'critical':
-      return `<span class="priority-icon priority-critical" title="Critical">▲▲▲</span>`;
+      return `<i data-lucide="chevrons-up" class="w-3.5 h-3.5 text-rose-500" title="Critical"></i>`;
     case 'high':
-      return `<span class="priority-icon priority-high" title="High">▲▲</span>`;
+      return `<i data-lucide="chevron-up" class="w-3.5 h-3.5 text-amber-500" title="High"></i>`;
     case 'medium':
-      return `<span class="priority-icon priority-medium" title="Medium">▲</span>`;
+      return `<i data-lucide="equal" class="w-3.5 h-3.5 text-blue-400" title="Medium"></i>`;
     case 'low':
-      return `<span class="priority-icon priority-low" title="Low">▽</span>`;
+      return `<i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-500" title="Low"></i>`;
     default:
-      return `<span class="priority-icon text-slate-600">-</span>`;
+      return `<i data-lucide="minus" class="w-3.5 h-3.5 text-slate-600"></i>`;
   }
 }
 
@@ -376,6 +389,7 @@ function renderTasks() {
   } else {
     renderBoardView(filtered);
   }
+  refreshLucideIcons();
 }
 
 // Mode 1: List View
@@ -433,7 +447,7 @@ function renderListView(tasks) {
         row.innerHTML = `
           <div class="list-col-id flex items-center gap-1">
             <span>${task.id}</span>
-            ${isStalled ? `<span title="High Thrash/Attempts" class="text-[10px]">⚠️</span>` : ''}
+            ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="High Thrash/Attempts"></i>` : ''}
           </div>
           <div class="list-col-priority">${getPriorityIcon(task.priority)}</div>
           <div class="list-col-title">
@@ -442,7 +456,7 @@ function renderListView(tasks) {
           </div>
           ${goal ? `<div class="list-col-goal">${goal.title}</div>` : `<div class="list-col-goal border-amber-900/40 text-amber-400 bg-amber-950/20">Scope Drift</div>`}
           <div class="list-col-agent">
-            ${task.claimedByAgent ? `<span>🤖 ${task.claimedByAgent}</span>` : `<span class="text-slate-600 font-sans">Unassigned</span>`}
+            ${task.claimedByAgent ? `<span class="flex items-center gap-1"><i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 font-sans">Unassigned</span>`}
           </div>
           <div class="list-col-status">
             <span class="status-pill">
@@ -539,13 +553,13 @@ function renderBoardView(tasks) {
         <div class="board-card-header">
           <div class="flex items-center gap-1 font-mono text-[11px] text-slate-500">
             <span>${task.id}</span>
-            ${isStalled ? `<span title="Stalled/High Attempts">⚠️</span>` : ''}
+            ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="Stalled"></i>` : ''}
           </div>
           ${getPriorityIcon(task.priority)}
         </div>
         <div class="board-card-title">${task.title}</div>
         <div class="board-card-footer">
-          ${task.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10.5px]">🤖 ${task.claimedByAgent}</span>` : `<span class="text-slate-600 text-[10px]">Unassigned</span>`}
+          ${task.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10.5px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 text-[10px]">Unassigned</span>`}
           <span class="text-slate-500 text-[10px] font-mono">${formatRelativeTime(task.lastStateChangeAt)}</span>
         </div>
       `;
@@ -586,7 +600,7 @@ async function openInspector(taskId, showDrawer = true) {
       <!-- Inline Editable Title -->
       <div class="space-y-1">
         <input type="text" id="drawerInputTitle" value="${task.title.replace(/"/g, '&quot;')}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveInlineField('${task.id}', 'title', this.value)">
-        <div class="text-[11px] text-slate-500 font-mono">Last changed: ${formatRelativeTime(task.lastStateChangeAt)} (${task.lastStateChangeAt})</div>
+        <div class="text-[11px] text-slate-500 font-mono flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3"></i> Last changed: ${formatRelativeTime(task.lastStateChangeAt)} (${task.lastStateChangeAt})</div>
       </div>
 
       <!-- Properties Grid -->
@@ -624,8 +638,8 @@ async function openInspector(taskId, showDrawer = true) {
         </div>
 
         <span class="property-label">Claimed Agent</span>
-        <div class="property-value font-mono text-indigo-300">
-          ${task.claimedByAgent ? `🤖 ${task.claimedByAgent} ${task.attemptCount > 1 ? `(Attempt #${task.attemptCount})` : ''}` : '<span class="text-slate-500 font-sans">Unclaimed</span>'}
+        <div class="property-value font-mono text-indigo-300 flex items-center gap-1.5">
+          ${task.claimedByAgent ? `<i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent} ${task.attemptCount > 1 ? `(Attempt #${task.attemptCount})` : ''}` : '<span class="text-slate-500 font-sans">Unclaimed</span>'}
         </div>
 
         ${task.leaseExpiresAt ? `
@@ -670,7 +684,9 @@ async function openInspector(taskId, showDrawer = true) {
         <div class="bg-surface border border-subtle rounded-lg p-3">
           <div class="flex items-center justify-between mb-2">
             <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">SUBTASKS (${subtasks.length})</div>
-            <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="promptAddSubtask('${task.id}')">+ Add Subtask</button>
+            <button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptAddSubtask('${task.id}')">
+              <i data-lucide="plus" class="w-3 h-3"></i> Add Subtask
+            </button>
           </div>
           <div class="space-y-1.5">
             ${subtasks.length === 0 ? `<div class="text-xs text-slate-500 italic">No subtasks.</div>` : ''}
@@ -687,8 +703,9 @@ async function openInspector(taskId, showDrawer = true) {
           </div>
         </div>
       ` : `
-        <div class="bg-surface border border-subtle rounded-lg p-2.5 text-xs text-slate-400">
-          <span>↳ Subtask of parent issue: </span>
+        <div class="bg-surface border border-subtle rounded-lg p-2.5 text-xs text-slate-400 flex items-center gap-1.5">
+          <i data-lucide="corner-down-right" class="w-3.5 h-3.5 text-indigo-400"></i>
+          <span>Subtask of parent issue: </span>
           <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector('${task.parentId}')">${task.parentId}</span>
         </div>
       `}
@@ -696,7 +713,9 @@ async function openInspector(taskId, showDrawer = true) {
       <!-- Dependencies & Blockers -->
       <div class="bg-surface border border-subtle rounded-lg p-3 space-y-2.5">
         <div class="flex items-center justify-between">
-          <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 font-mono">BLOCKERS (Depends on)</div>
+          <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 font-mono flex items-center gap-1">
+            <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-amber-400"></i> BLOCKERS (Depends on)
+          </div>
           <div class="flex items-center gap-1">
             <select id="selectAddBlocker" class="filter-select text-[11px]">
               <option value="">+ Add Blocker...</option>
@@ -718,7 +737,9 @@ async function openInspector(taskId, showDrawer = true) {
 
         ${dependents.length > 0 ? `
           <div class="pt-2 border-t border-subtle">
-            <div class="text-[10px] font-bold tracking-wider uppercase text-blue-400 mb-1 font-mono">BLOCKS DOWNSTREAM</div>
+            <div class="text-[10px] font-bold tracking-wider uppercase text-blue-400 mb-1 font-mono flex items-center gap-1">
+              <i data-lucide="zap" class="w-3.5 h-3.5 text-blue-400"></i> BLOCKS DOWNSTREAM
+            </div>
             <div class="flex flex-wrap gap-1.5">
               ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${d}</span>`).join('')}
             </div>
@@ -729,7 +750,9 @@ async function openInspector(taskId, showDrawer = true) {
       ${task.evidence ? `
         <!-- Completion Proof -->
         <div class="bg-surface border border-indigo-500/30 rounded-lg p-3">
-          <div class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 mb-1.5 font-mono">VERIFIED EVIDENCE PROOF</div>
+          <div class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 mb-1.5 font-mono flex items-center gap-1">
+            <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> VERIFIED EVIDENCE PROOF
+          </div>
           <pre class="text-[11px] font-mono text-slate-300 bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">${JSON.stringify(task.evidence, null, 2)}</pre>
         </div>
       ` : ''}
@@ -737,7 +760,9 @@ async function openInspector(taskId, showDrawer = true) {
       ${task.humanQuestion ? `
         <!-- Human Question -->
         <div class="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3">
-          <div class="text-[10px] font-bold tracking-wider uppercase text-purple-400 mb-1 font-mono">HUMAN QUESTION (${task.humanQuestionType || 'clarification'})</div>
+          <div class="text-[10px] font-bold tracking-wider uppercase text-purple-400 mb-1 font-mono flex items-center gap-1">
+            <i data-lucide="help-circle" class="w-3.5 h-3.5"></i> HUMAN QUESTION (${task.humanQuestionType || 'clarification'})
+          </div>
           <div class="markdown-body text-xs text-purple-200 mb-2">${renderMarkdown(task.humanQuestion)}</div>
           ${task.humanAnswer ? `
             <div class="text-xs text-emerald-300 bg-emerald-950/30 p-2 rounded border border-emerald-800/40 markdown-body">
@@ -746,7 +771,9 @@ async function openInspector(taskId, showDrawer = true) {
           ` : `
             <form onsubmit="handleDrawerAnswer(event, '${task.id}')" class="flex gap-2 mt-2">
               <input type="text" id="drawerAnswerInput" required placeholder="Type answer to resume agent..." class="input-field text-xs flex-1">
-              <button type="submit" class="btn-primary text-xs">Resume Agent</button>
+              <button type="submit" class="btn-primary text-xs flex items-center gap-1">
+                <i data-lucide="send" class="w-3 h-3"></i> Resume Agent
+              </button>
             </form>
           `}
         </div>
@@ -755,22 +782,38 @@ async function openInspector(taskId, showDrawer = true) {
       <!-- Actions Bar -->
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
         <div class="flex gap-2">
-          <button class="btn-secondary text-xs" onclick="promptMergeTask('${task.id}')">Merge into...</button>
-          <button class="btn-danger text-xs" onclick="promptDropTask('${task.id}')">Drop Issue</button>
-          <button class="btn-secondary text-xs" onclick="undoTask('${task.id}')">Undo Status</button>
-          ${task.status === 'done' || task.status === 'dropped' ? `<button class="btn-primary text-xs" onclick="reopenTask('${task.id}')">Reopen Issue</button>` : ''}
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="promptMergeTask('${task.id}')">
+            <i data-lucide="git-merge" class="w-3 h-3"></i> Merge into...
+          </button>
+          <button class="btn-danger text-xs flex items-center gap-1" onclick="promptDropTask('${task.id}')">
+            <i data-lucide="x-circle" class="w-3 h-3"></i> Drop Issue
+          </button>
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="undoTask('${task.id}')">
+            <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Undo Status
+          </button>
+          ${task.status === 'done' || task.status === 'dropped' ? `
+            <button class="btn-primary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
+              <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Issue
+            </button>
+          ` : ''}
         </div>
         ${task.status === 'done' && task.verificationState === 'agent_completed' ? `
           <div class="flex gap-2">
-            <button class="btn-danger text-xs" onclick="promptRejectTask('${task.id}')">Reject Proof</button>
-            <button class="btn-success text-xs" onclick="verifyTask('${task.id}')">✓ Verify Done</button>
+            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
+              <i data-lucide="ban" class="w-3 h-3"></i> Reject Proof
+            </button>
+            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
+              <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
+            </button>
           </div>
         ` : ''}
       </div>
 
       <!-- Activity & Notes -->
       <div class="border-t border-subtle pt-4 mt-2">
-        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-3">ACTIVITY & AUDIT NOTES (${notes.length})</div>
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 font-mono mb-3 flex items-center gap-1.5">
+          <i data-lucide="activity" class="w-3.5 h-3.5 text-slate-400"></i> ACTIVITY & AUDIT NOTES (${notes.length})
+        </div>
         
         <form onsubmit="handleAddNote(event, '${task.id}')" class="mb-3 flex gap-2">
           <input type="text" id="drawerNoteInput" required placeholder="Add a note or attempt log..." class="input-field text-xs flex-1">
@@ -782,7 +825,7 @@ async function openInspector(taskId, showDrawer = true) {
           ${notes.map((n) => `
             <div class="p-2.5 bg-surface rounded border border-subtle">
               <div class="flex items-center justify-between mb-1">
-                <span class="text-indigo-400 font-bold text-[11px]">${n.authorId} (${n.authorType})</span>
+                <span class="text-indigo-400 font-bold text-[11px] flex items-center gap-1"><i data-lucide="${n.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${n.authorId}</span>
                 <span class="text-slate-500 text-[10px]">${new Date(n.createdAt).toLocaleTimeString()}</span>
               </div>
               <div class="text-slate-300 text-xs font-sans markdown-body">${renderMarkdown(n.content)}</div>
@@ -795,6 +838,7 @@ async function openInspector(taskId, showDrawer = true) {
     if (showDrawer && drawerInspector) {
       drawerInspector.classList.remove('hidden');
     }
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to load issue details:', err);
   }
@@ -818,6 +862,7 @@ window.toggleCriteriaView = (mode) => {
     previewBox?.classList.add('hidden');
     editBox?.classList.remove('hidden');
   }
+  refreshLucideIcons();
 };
 
 // Inline Field Save Handler
@@ -875,6 +920,7 @@ window.promptAddSubtask = (parentId) => {
   const hiddenId = document.getElementById('inputSubtaskParentId');
   if (hiddenId) hiddenId.value = parentId;
   if (modalCreateSubtask) modalCreateSubtask.classList.remove('hidden');
+  refreshLucideIcons();
 };
 
 const formCreateSubtask = document.getElementById('formCreateSubtask');
@@ -925,6 +971,7 @@ window.promptMergeTask = (sourceId) => {
   }
 
   if (modalMergeTask) modalMergeTask.classList.remove('hidden');
+  refreshLucideIcons();
 };
 
 const formMergeTask = document.getElementById('formMergeTask');
@@ -1032,7 +1079,9 @@ function renderGoalsView() {
         <!-- Loose Ends List -->
         ${item.looseEnds.length > 0 ? `
           <div class="mb-3">
-            <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 mb-1 font-mono">LOOSE ENDS (${item.looseEnds.length})</div>
+            <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 mb-1 font-mono flex items-center gap-1">
+              <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i> LOOSE ENDS (${item.looseEnds.length})
+            </div>
             <div class="space-y-1 max-h-24 overflow-y-auto">
               ${item.looseEnds.map((t) => `
                 <div class="p-1.5 bg-card rounded border border-subtle text-[11px] flex items-center justify-between cursor-pointer hover:border-borderActive" onclick="openInspector('${t.id}')">
@@ -1046,11 +1095,13 @@ function renderGoalsView() {
       </div>
 
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
-        <button class="btn-secondary text-xs" onclick="filterByGoalDirect('${g.id}')">View Issues</button>
+        <button class="btn-secondary text-xs flex items-center gap-1" onclick="filterByGoalDirect('${g.id}')">
+          <i data-lucide="layers" class="w-3 h-3"></i> View Issues
+        </button>
         <div>
           ${g.status === 'active' 
-            ? `<button class="btn-danger text-xs" onclick="promptKillGoal('${g.id}')">Kill Goal</button>`
-            : `<button class="btn-success text-xs" onclick="reopenGoal('${g.id}')">Reopen Goal</button>`
+            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3 h-3"></i> Kill Goal</button>`
+            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Goal</button>`
           }
         </div>
       </div>
@@ -1058,6 +1109,7 @@ function renderGoalsView() {
 
     container.appendChild(card);
   });
+  refreshLucideIcons();
 }
 
 window.filterByGoalDirect = (goalId) => {
@@ -1086,22 +1138,27 @@ function renderHumanInbox() {
 
     card.innerHTML = `
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-mono text-purple-400 font-semibold uppercase">Question from Agent: ${task.claimedByAgent || 'Unknown'}</span>
+        <span class="text-xs font-mono text-purple-400 font-semibold uppercase flex items-center gap-1">
+          <i data-lucide="bot" class="w-3.5 h-3.5"></i> Question from Agent: ${task.claimedByAgent || 'Unknown'}
+        </span>
         <span class="text-xs font-mono text-slate-500">${task.id}</span>
       </div>
       <h3 class="text-sm font-bold text-slate-100 mb-2">${task.title}</h3>
       <div class="bg-purple-950/25 border border-purple-900/40 p-3 rounded text-xs text-purple-200 mb-3 markdown-body">
-        <div class="font-semibold mb-1">❓ ${task.humanQuestionType || 'Question'}:</div>
+        <div class="font-semibold mb-1 flex items-center gap-1"><i data-lucide="help-circle" class="w-3.5 h-3.5"></i> ${task.humanQuestionType || 'Question'}:</div>
         <div>${renderMarkdown(task.humanQuestion)}</div>
       </div>
       <form onsubmit="handleAnswerQuestion(event, '${task.id}')" class="flex gap-2">
         <input type="text" id="inbox-answer-${task.id}" required placeholder="Type answer or decision to resume agent..." class="input-field text-xs flex-1">
-        <button type="submit" class="btn-primary text-xs">Resume Agent</button>
+        <button type="submit" class="btn-primary text-xs flex items-center gap-1">
+          <i data-lucide="send" class="w-3 h-3"></i> Resume Agent
+        </button>
       </form>
     `;
 
     container.appendChild(card);
   });
+  refreshLucideIcons();
 }
 
 // Review & Proofs View
@@ -1126,7 +1183,8 @@ function renderReviewFeed() {
 
     card.innerHTML = `
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-mono font-semibold ${isCompleted ? 'text-indigo-400' : 'text-rose-400'} uppercase">
+        <span class="text-xs font-mono font-semibold ${isCompleted ? 'text-indigo-400' : 'text-rose-400'} uppercase flex items-center gap-1">
+          <i data-lucide="${isCompleted ? 'shield-check' : 'x-circle'}" class="w-3.5 h-3.5"></i>
           ${isCompleted ? 'Agent Claimed Done (Awaiting Verification)' : 'Dropped Task'}
         </span>
         <span class="text-xs font-mono text-slate-500">${task.id}</span>
@@ -1135,7 +1193,7 @@ function renderReviewFeed() {
       
       ${task.evidence ? `
         <div class="bg-card p-3 rounded border border-subtle text-xs font-mono text-slate-300 mb-3">
-          <div class="text-slate-500 text-[10px] mb-1 font-bold uppercase">SUBMITTED EVIDENCE</div>
+          <div class="text-slate-500 text-[10px] mb-1 font-bold uppercase flex items-center gap-1"><i data-lucide="file-check" class="w-3 h-3"></i> SUBMITTED EVIDENCE</div>
           <div>Commands: ${task.evidence.commandsRun?.join(', ') || 'N/A'}</div>
           <div>Proof: ${task.evidence.testProof || task.evidence.outputSnippet || 'Provided'}</div>
         </div>
@@ -1145,16 +1203,23 @@ function renderReviewFeed() {
 
       <div class="flex items-center justify-end gap-2 border-t border-subtle pt-3">
         ${isCompleted ? `
-          <button class="btn-danger text-xs" onclick="promptRejectTask('${task.id}')">Reject with Reason</button>
-          <button class="btn-success text-xs" onclick="verifyTask('${task.id}')">✓ Verify Done</button>
+          <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
+            <i data-lucide="ban" class="w-3 h-3"></i> Reject with Reason
+          </button>
+          <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
+            <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
+          </button>
         ` : `
-          <button class="btn-secondary text-xs" onclick="reopenTask('${task.id}')">Reopen Issue</button>
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
+            <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Issue
+          </button>
         `}
       </div>
     `;
 
     container.appendChild(card);
   });
+  refreshLucideIcons();
 }
 
 // Decisions View
@@ -1187,12 +1252,13 @@ function renderDecisionsView() {
       </div>
       <div class="flex items-center justify-between border-t border-subtle pt-2">
         <div class="flex items-center gap-1.5">${tagsHtml}</div>
-        ${dec.status === 'accepted' ? `<button class="btn-secondary text-[11px] py-0.5 px-2" onclick="promptSupersedeDecision('${dec.id}', '${dec.title.replace(/'/g, "\\'")}')">🔄 Supersede</button>` : ''}
+        ${dec.status === 'accepted' ? `<button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptSupersedeDecision('${dec.id}', '${dec.title.replace(/'/g, "\\'")}')"><i data-lucide="refresh-cw" class="w-3 h-3"></i> Supersede</button>` : ''}
       </div>
     `;
 
     container.appendChild(card);
   });
+  refreshLucideIcons();
 }
 
 // Supersede Decision Modal
@@ -1202,6 +1268,7 @@ window.promptSupersedeDecision = (oldId, oldTitle) => {
   if (hiddenOldId) hiddenOldId.value = oldId;
   if (labelOldTitle) labelOldTitle.textContent = oldTitle;
   if (modalSupersedeDecision) modalSupersedeDecision.classList.remove('hidden');
+  refreshLucideIcons();
 };
 
 const formSupersedeDecision = document.getElementById('formSupersedeDecision');
@@ -1252,7 +1319,7 @@ function renderActivityFeed() {
       <span class="text-slate-500 text-[10px] whitespace-nowrap">${new Date(note.createdAt).toLocaleTimeString()}</span>
       <div class="flex-1">
         <div class="flex items-center gap-2 mb-1">
-          <span class="text-indigo-400 font-bold">${note.authorId} (${note.authorType})</span>
+          <span class="text-indigo-400 font-bold flex items-center gap-1"><i data-lucide="${note.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${note.authorId} (${note.authorType})</span>
           <span class="text-slate-500 font-mono text-[10px]">task:${note.taskId}</span>
         </div>
         <div class="text-slate-300 text-xs markdown-body">${renderMarkdown(note.content)}</div>
@@ -1260,6 +1327,7 @@ function renderActivityFeed() {
     `;
     container.appendChild(row);
   });
+  refreshLucideIcons();
 }
 
 // Session Resume
@@ -1295,11 +1363,14 @@ async function renderResumeView() {
               <span class="text-xs font-mono text-emerald-400 font-semibold">[READY] ${sum.unblockedReadyTasks[0].id}</span>
               <div class="text-sm font-bold text-slate-100">${sum.unblockedReadyTasks[0].title}</div>
             </div>
-            <button class="btn-primary text-xs" onclick="openInspector('${sum.unblockedReadyTasks[0].id}')">Inspect Issue</button>
+            <button class="btn-primary text-xs flex items-center gap-1" onclick="openInspector('${sum.unblockedReadyTasks[0].id}')">
+              <i data-lucide="eye" class="w-3.5 h-3.5"></i> Inspect Issue
+            </button>
           </div>
         ` : `<div class="text-xs text-slate-500">No ready unblocked tasks found. Check goals or add tasks.</div>`}
       </div>
     `;
+    refreshLucideIcons();
   } catch (err) {
     console.error('Failed to load session resume:', err);
   }
@@ -1317,6 +1388,7 @@ function openCommandPalette() {
     renderPaletteResults('');
     paletteInput.focus();
   }
+  refreshLucideIcons();
 }
 
 function closeCommandPalette() {
@@ -1342,19 +1414,19 @@ function renderPaletteResults(query) {
   const q = query.trim().toLowerCase();
 
   const actions = [
-    { title: 'Create New Issue', icon: '+', action: () => { closeCommandPalette(); if (modalCreateTask) modalCreateTask.classList.remove('hidden'); } },
-    { title: 'Create New Goal', icon: '🎯', action: () => { closeCommandPalette(); if (modalCreateGoal) modalCreateGoal.classList.remove('hidden'); } },
-    { title: 'Record Architectural Decision', icon: '🏛️', action: () => { closeCommandPalette(); if (modalCreateDecision) modalCreateDecision.classList.remove('hidden'); } },
-    { title: 'Switch to All Issues', icon: '⚡', action: () => { closeCommandPalette(); switchView('tasks'); } },
-    { title: 'Switch to Human Inbox', icon: '🙋', action: () => { closeCommandPalette(); switchView('human'); } },
-    { title: 'Export Markdown Project Summary', icon: '↓', action: () => { closeCommandPalette(); exportProject(); } },
+    { title: 'Create New Issue', icon: 'plus-circle', action: () => { closeCommandPalette(); if (modalCreateTask) modalCreateTask.classList.remove('hidden'); } },
+    { title: 'Create New Goal', icon: 'target', action: () => { closeCommandPalette(); if (modalCreateGoal) modalCreateGoal.classList.remove('hidden'); } },
+    { title: 'Record Architectural Decision', icon: 'landmark', action: () => { closeCommandPalette(); if (modalCreateDecision) modalCreateDecision.classList.remove('hidden'); } },
+    { title: 'Switch to All Issues', icon: 'check-square', action: () => { closeCommandPalette(); switchView('tasks'); } },
+    { title: 'Switch to Human Inbox', icon: 'help-circle', action: () => { closeCommandPalette(); switchView('human'); } },
+    { title: 'Export Markdown Project Summary', icon: 'download', action: () => { closeCommandPalette(); exportProject(); } },
   ];
 
   const matchedActions = actions.filter((a) => a.title.toLowerCase().includes(q));
   matchedActions.forEach((a) => {
     const item = document.createElement('div');
     item.className = 'palette-item';
-    item.innerHTML = `<div class="flex items-center gap-2"><span>${a.icon}</span><span>${a.title}</span></div><kbd class="kbd-key text-[9px]">Action</kbd>`;
+    item.innerHTML = `<div class="flex items-center gap-2"><i data-lucide="${a.icon}" class="w-3.5 h-3.5 text-indigo-400"></i><span>${a.title}</span></div><kbd class="kbd-key text-[9px]">Action</kbd>`;
     item.onclick = a.action;
     paletteResults.appendChild(item);
   });
@@ -1373,6 +1445,7 @@ function renderPaletteResults(query) {
   });
 
   updatePaletteHighlight();
+  refreshLucideIcons();
 }
 
 function updatePaletteHighlight() {
@@ -1426,6 +1499,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
       if (modalCreateTask) modalCreateTask.classList.remove('hidden');
+      refreshLucideIcons();
     }
     if (e.key === '1') switchView('tasks');
     if (e.key === '2') switchView('goals');
@@ -1438,13 +1512,13 @@ window.addEventListener('keydown', (e) => {
 
 // Modal Triggers
 const btnHeaderNewTask = document.getElementById('btnHeaderNewTask');
-if (btnHeaderNewTask) btnHeaderNewTask.onclick = () => modalCreateTask?.classList.remove('hidden');
+if (btnHeaderNewTask) btnHeaderNewTask.onclick = () => { modalCreateTask?.classList.remove('hidden'); refreshLucideIcons(); };
 
 const btnCreateGoal = document.getElementById('btnCreateGoal');
-if (btnCreateGoal) btnCreateGoal.onclick = () => modalCreateGoal?.classList.remove('hidden');
+if (btnCreateGoal) btnCreateGoal.onclick = () => { modalCreateGoal?.classList.remove('hidden'); refreshLucideIcons(); };
 
 const btnCreateDecision = document.getElementById('btnCreateDecision');
-if (btnCreateDecision) btnCreateDecision.onclick = () => modalCreateDecision?.classList.remove('hidden');
+if (btnCreateDecision) btnCreateDecision.onclick = () => { modalCreateDecision?.classList.remove('hidden'); refreshLucideIcons(); };
 
 document.querySelectorAll('.modal-close').forEach((btn) => {
   btn.onclick = () => {
