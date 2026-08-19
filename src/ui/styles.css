@@ -97,11 +97,6 @@ code, pre, .font-mono {
   transition: width 0.2s ease;
 }
 
-#sidebar.collapsed {
-  width: 56px;
-  min-width: 56px;
-}
-
 .sidebar-header {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border-subtle);
@@ -138,15 +133,6 @@ code, pre, .font-mono {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.sidebar-section-title {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
-  padding: 12px 10px 4px 10px;
 }
 
 .nav-item {
@@ -211,17 +197,6 @@ code, pre, .font-mono {
   background: rgba(244, 63, 94, 0.15);
   color: #fb7185;
   border-color: rgba(244, 63, 94, 0.3);
-}
-
-/* Sidebar Footer */
-.sidebar-footer {
-  padding: 12px;
-  border-top: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 /* Main Workspace View */
@@ -408,12 +383,6 @@ code, pre, .font-mono {
   font-size: 12px;
 }
 
-.filter-group {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .filter-select {
   background: transparent;
   border: 1px solid var(--border-subtle);
@@ -444,9 +413,7 @@ code, pre, .font-mono {
 .list-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 1200px;
-  margin: 0 auto;
+  gap: 14px;
 }
 
 .list-group {
@@ -466,7 +433,6 @@ code, pre, .font-mono {
   font-size: 11.5px;
   font-weight: 600;
   color: var(--text-secondary);
-  cursor: pointer;
   user-select: none;
 }
 
@@ -738,7 +704,7 @@ code, pre, .font-mono {
   color: var(--text-secondary);
 }
 
-.palette-item:hover, .palette-item.selected {
+.palette-item:hover, .palette-item.active-item {
   background: var(--bg-surface-hover);
   color: var(--text-primary);
 }
@@ -858,6 +824,34 @@ code, pre, .font-mono {
 }
 .input-field:focus, .select-field:focus {
   border-color: var(--accent-primary);
+}
+
+/* Toast Notifications */
+.toast-msg {
+  background: var(--bg-modal);
+  border: 1px solid var(--border-default);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  animation: toastIn 0.2s ease-out;
+  pointer-events: auto;
+  color: var(--text-primary);
+}
+
+.toast-msg.success {
+  border-color: rgba(16, 185, 129, 0.4);
+}
+.toast-msg.error {
+  border-color: rgba(244, 63, 94, 0.4);
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .hidden {

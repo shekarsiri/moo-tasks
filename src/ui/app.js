@@ -12,6 +12,7 @@ const state = {
   filterAgent: '',
   filterSearch: '',
   selectedTaskId: null,
+  paletteSelectedIndex: 0,
 };
 
 // DOM References
@@ -45,9 +46,32 @@ const paletteResults = document.getElementById('paletteResults');
 const drawerInspector = document.getElementById('drawerInspector');
 const drawerBody = document.getElementById('drawerBody');
 const modalCreateTask = document.getElementById('modalCreateTask');
+const modalCreateSubtask = document.getElementById('modalCreateSubtask');
 const modalCreateGoal = document.getElementById('modalCreateGoal');
 const modalCreateDecision = document.getElementById('modalCreateDecision');
 const modalReasonPrompt = document.getElementById('modalReasonPrompt');
+const toastContainer = document.getElementById('toastContainer');
+
+// Toast Notification System
+function showToast(message, type = 'info') {
+  if (!toastContainer) return;
+  const toast = document.createElement('div');
+  toast.className = `toast-msg ${type}`;
+  
+  let icon = 'ℹ️';
+  if (type === 'success') icon = '✅';
+  if (type === 'error') icon = '⚠️';
+
+  toast.innerHTML = `<span>${icon}</span><span class="font-medium">${message}</span>`;
+  toastContainer.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(8px)';
+    toast.style.transition = 'all 0.2s ease-out';
+    setTimeout(() => toast.remove(), 200);
+  }, 3500);
+}
 
 // SSE Sync
 function initSSE() {
@@ -71,7 +95,7 @@ async function fetchGoals() {
     state.goals = data.goals || [];
     renderGoalFilters();
     renderGoalsView();
-    navCounterGoals.textContent = state.goals.length;
+    if (navCounterGoals) navCounterGoals.textContent = state.goals.length;
   } catch (err) {
     console.error('Failed to fetch goals:', err);
   }
@@ -99,7 +123,7 @@ async function fetchDecisions() {
     const data = await res.json();
     state.decisions = data.decisions || [];
     renderDecisionsView();
-    navCounterDecisions.textContent = state.decisions.length;
+    if (navCounterDecisions) navCounterDecisions.textContent = state.decisions.length;
   } catch (err) {
     console.error('Failed to fetch decisions:', err);
   }
@@ -149,24 +173,24 @@ function switchView(viewName) {
     resume: 'Session Resume',
   };
 
-  activeViewTitle.textContent = titles[viewName] || 'Workspace';
-  tasksViewSwitcher.classList.toggle('hidden', viewName !== 'tasks');
-  filterToolbar.classList.toggle('hidden', viewName !== 'tasks');
+  if (activeViewTitle) activeViewTitle.textContent = titles[viewName] || 'Workspace';
+  if (tasksViewSwitcher) tasksViewSwitcher.classList.toggle('hidden', viewName !== 'tasks');
+  if (filterToolbar) filterToolbar.classList.toggle('hidden', viewName !== 'tasks');
 
   if (viewName === 'resume') renderResumeView();
   if (viewName === 'activity') fetchActivity();
 }
 
 // View Mode (List vs Board)
-btnViewList.onclick = () => setViewMode('list');
-btnViewBoard.onclick = () => setViewMode('board');
+if (btnViewList) btnViewList.onclick = () => setViewMode('list');
+if (btnViewBoard) btnViewBoard.onclick = () => setViewMode('board');
 
 function setViewMode(mode) {
   state.viewMode = mode;
-  btnViewList.classList.toggle('active', mode === 'list');
-  btnViewBoard.classList.toggle('active', mode === 'board');
-  tasksListView.classList.toggle('hidden', mode !== 'list');
-  tasksBoardView.classList.toggle('hidden', mode !== 'board');
+  if (btnViewList) btnViewList.classList.toggle('active', mode === 'list');
+  if (btnViewBoard) btnViewBoard.classList.toggle('active', mode === 'board');
+  if (tasksListView) tasksListView.classList.toggle('hidden', mode !== 'list');
+  if (tasksBoardView) tasksBoardView.classList.toggle('hidden', mode !== 'board');
   renderTasks();
 }
 
@@ -196,28 +220,37 @@ function getFilteredTasks() {
   return list;
 }
 
-filterGoal.onchange = (e) => {
-  state.filterGoal = e.target.value;
-  renderTasks();
-};
-filterPriority.onchange = (e) => {
-  state.filterPriority = e.target.value;
-  renderTasks();
-};
-filterAgent.onchange = (e) => {
-  state.filterAgent = e.target.value;
-  renderTasks();
-};
-filterSearch.oninput = (e) => {
-  state.filterSearch = e.target.value;
-  renderTasks();
-};
+if (filterGoal) {
+  filterGoal.onchange = (e) => {
+    state.filterGoal = e.target.value;
+    renderTasks();
+  };
+}
+if (filterPriority) {
+  filterPriority.onchange = (e) => {
+    state.filterPriority = e.target.value;
+    renderTasks();
+  };
+}
+if (filterAgent) {
+  filterAgent.onchange = (e) => {
+    state.filterAgent = e.target.value;
+    renderTasks();
+  };
+}
+if (filterSearch) {
+  filterSearch.oninput = (e) => {
+    state.filterSearch = e.target.value;
+    renderTasks();
+  };
+}
 
 function renderGoalFilters() {
+  if (!filterGoal) return;
   const cur = filterGoal.value;
   filterGoal.innerHTML = '<option value="">All Goals</option>';
   const inputTaskGoal = document.getElementById('inputTaskGoal');
-  inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
+  if (inputTaskGoal) inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
 
   state.goals.forEach((item) => {
     const g = item.goal;
@@ -226,15 +259,18 @@ function renderGoalFilters() {
     opt.textContent = `${g.title}`;
     filterGoal.appendChild(opt);
 
-    const opt2 = document.createElement('option');
-    opt2.value = g.id;
-    opt2.textContent = g.title;
-    inputTaskGoal.appendChild(opt2);
+    if (inputTaskGoal) {
+      const opt2 = document.createElement('option');
+      opt2.value = g.id;
+      opt2.textContent = g.title;
+      inputTaskGoal.appendChild(opt2);
+    }
   });
   filterGoal.value = cur;
 }
 
 function updateAssigneeFilter() {
+  if (!filterAgent) return;
   const assignees = Array.from(new Set(state.tasks.map((t) => t.claimedByAgent).filter(Boolean)));
   const cur = filterAgent.value;
   filterAgent.innerHTML = '<option value="">All Assignees</option>';
@@ -249,17 +285,21 @@ function updateAssigneeFilter() {
 
 function updateSidebarCounters() {
   const activeTasks = state.tasks.filter((t) => !t.isArchived);
-  navCounterTotal.textContent = activeTasks.length;
+  if (navCounterTotal) navCounterTotal.textContent = activeTasks.length;
 
   const humanWaiting = state.tasks.filter((t) => t.status === 'waiting-on-human' && !t.isArchived);
-  navCounterHuman.textContent = humanWaiting.length;
-  navCounterHuman.classList.toggle('hidden', humanWaiting.length === 0);
+  if (navCounterHuman) {
+    navCounterHuman.textContent = humanWaiting.length;
+    navCounterHuman.classList.toggle('hidden', humanWaiting.length === 0);
+  }
 
   const reviewTasks = state.tasks.filter(
     (t) => (t.status === 'done' && t.verificationState === 'agent_completed') || t.status === 'dropped'
   );
-  navCounterReview.textContent = reviewTasks.length;
-  navCounterReview.classList.toggle('hidden', reviewTasks.length === 0);
+  if (navCounterReview) {
+    navCounterReview.textContent = reviewTasks.length;
+    navCounterReview.classList.toggle('hidden', reviewTasks.length === 0);
+  }
 }
 
 // Priority Icon Helper
@@ -291,7 +331,7 @@ const statusConfig = {
 // Render Tasks (List & Board)
 function renderTasks() {
   const filtered = getFilteredTasks();
-  displayCountLabel.textContent = `${filtered.length} issues`;
+  if (displayCountLabel) displayCountLabel.textContent = `${filtered.length} issues`;
 
   if (state.viewMode === 'list') {
     renderListView(filtered);
@@ -302,6 +342,7 @@ function renderTasks() {
 
 // Mode 1: List View
 function renderListView(tasks) {
+  if (!tasksListView) return;
   tasksListView.innerHTML = '';
 
   const groups = [
@@ -377,6 +418,7 @@ function renderListView(tasks) {
 
 // Mode 2: Board View
 function renderBoardView(tasks) {
+  if (!tasksBoardView) return;
   tasksBoardView.innerHTML = '';
 
   const columns = [
@@ -443,18 +485,25 @@ async function openInspector(taskId, showDrawer = true) {
     const data = await res.json();
     const task = data.task;
     const subtasks = data.subtasks || [];
+    const dependencies = data.dependencies || [];
+    const dependents = data.dependents || [];
     const notes = data.notes || [];
 
     const cfg = statusConfig[task.status] || { label: task.status, class: 'todo' };
-    document.getElementById('drawerTaskId').textContent = task.id;
-    document.getElementById('drawerStatusDot').className = `status-dot ${cfg.class}`;
-    document.getElementById('drawerPriorityBadge').textContent = task.priority;
+    const drawerTaskId = document.getElementById('drawerTaskId');
+    const drawerStatusDot = document.getElementById('drawerStatusDot');
+    const drawerPriorityBadge = document.getElementById('drawerPriorityBadge');
+
+    if (drawerTaskId) drawerTaskId.textContent = task.id;
+    if (drawerStatusDot) drawerStatusDot.className = `status-dot ${cfg.class}`;
+    if (drawerPriorityBadge) drawerPriorityBadge.textContent = task.priority;
 
     const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
 
+    if (!drawerBody) return;
     drawerBody.innerHTML = `
       <div>
-        <h1 class="text-lg font-bold text-slate-100 mb-2">${task.title}</h1>
+        <h1 class="text-base font-bold text-slate-100 mb-2">${task.title}</h1>
       </div>
 
       <!-- Properties Grid -->
@@ -463,7 +512,7 @@ async function openInspector(taskId, showDrawer = true) {
         <div class="property-value flex items-center gap-2">
           <span class="status-dot ${cfg.class}"></span>
           <span class="font-medium">${cfg.label}</span>
-          <select id="drawerStatusSelect" class="filter-select text-xs ml-auto" onchange="changeTaskStatus('${task.id}', this.value)">
+          <select id="drawerStatusSelect" class="filter-select text-xs ml-auto" onchange="handleStatusChangePrompt('${task.id}', this.value)">
             <option value="todo" ${task.status === 'todo' ? 'selected' : ''}>Todo</option>
             <option value="doing" ${task.status === 'doing' ? 'selected' : ''}>In Progress</option>
             <option value="blocked-on-dependency" ${task.status === 'blocked-on-dependency' ? 'selected' : ''}>Blocked (Dependency)</option>
@@ -509,6 +558,56 @@ async function openInspector(taskId, showDrawer = true) {
         <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 mb-1.5 font-mono">ACCEPTANCE CRITERIA</div>
         <div class="text-xs text-slate-200 whitespace-pre-wrap">${task.acceptanceCriteria || 'No criteria specified'}</div>
       </div>
+
+      <!-- Subtasks Section -->
+      ${!task.parentId ? `
+        <div class="bg-surface border border-subtle rounded-lg p-3">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">SUBTASKS (${subtasks.length})</div>
+            <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="promptAddSubtask('${task.id}')">+ Add Subtask</button>
+          </div>
+          <div class="space-y-1.5">
+            ${subtasks.length === 0 ? `<div class="text-xs text-slate-500 italic">No subtasks.</div>` : ''}
+            ${subtasks.map((s) => `
+              <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between text-xs cursor-pointer hover:border-borderActive" onclick="openInspector('${s.id}')">
+                <div class="flex items-center gap-2">
+                  <span class="status-dot ${statusConfig[s.status]?.class || 'todo'}"></span>
+                  <span class="font-mono text-slate-500 text-[10px]">${s.id}</span>
+                  <span class="text-slate-200">${s.title}</span>
+                </div>
+                <span class="font-mono text-[10px] text-slate-400 uppercase">${s.status}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : `
+        <div class="bg-surface border border-subtle rounded-lg p-2.5 text-xs text-slate-400">
+          <span>↳ Subtask of parent issue: </span>
+          <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector('${task.parentId}')">${task.parentId}</span>
+        </div>
+      `}
+
+      <!-- Dependencies & Blockers -->
+      ${(dependencies.length > 0 || dependents.length > 0) ? `
+        <div class="bg-surface border border-subtle rounded-lg p-3 space-y-2">
+          ${dependencies.length > 0 ? `
+            <div>
+              <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 mb-1 font-mono">BLOCKERS (Depends on)</div>
+              <div class="flex flex-wrap gap-1.5">
+                ${dependencies.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-amber-950/40 border border-amber-800/40 text-amber-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${d}</span>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+          ${dependents.length > 0 ? `
+            <div>
+              <div class="text-[10px] font-bold tracking-wider uppercase text-blue-400 mb-1 font-mono">BLOCKS DOWNSTREAM</div>
+              <div class="flex flex-wrap gap-1.5">
+                ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${d}</span>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
 
       ${task.evidence ? `
         <!-- Completion Proof -->
@@ -561,6 +660,7 @@ async function openInspector(taskId, showDrawer = true) {
         </form>
 
         <div class="space-y-2 max-h-60 overflow-y-auto font-mono text-xs">
+          ${notes.length === 0 ? `<div class="text-slate-600 text-xs font-sans">No activity notes yet.</div>` : ''}
           ${notes.map((n) => `
             <div class="p-2.5 bg-surface rounded border border-subtle">
               <div class="flex items-center justify-between mb-1">
@@ -574,7 +674,7 @@ async function openInspector(taskId, showDrawer = true) {
       </div>
     `;
 
-    if (showDrawer) {
+    if (showDrawer && drawerInspector) {
       drawerInspector.classList.remove('hidden');
     }
   } catch (err) {
@@ -582,24 +682,61 @@ async function openInspector(taskId, showDrawer = true) {
   }
 }
 
+// Subtask Modal
+window.promptAddSubtask = (parentId) => {
+  const hiddenId = document.getElementById('inputSubtaskParentId');
+  if (hiddenId) hiddenId.value = parentId;
+  if (modalCreateSubtask) modalCreateSubtask.classList.remove('hidden');
+};
+
+const formCreateSubtask = document.getElementById('formCreateSubtask');
+if (formCreateSubtask) {
+  formCreateSubtask.onsubmit = async (e) => {
+    e.preventDefault();
+    const parentId = document.getElementById('inputSubtaskParentId').value;
+    const title = document.getElementById('inputSubtaskTitle').value;
+    const acceptanceCriteria = document.getElementById('inputSubtaskAC').value;
+
+    const res = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parentId, title, acceptanceCriteria }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Failed to create subtask', 'error');
+      return;
+    }
+
+    showToast('Subtask created successfully', 'success');
+    if (modalCreateSubtask) modalCreateSubtask.classList.add('hidden');
+    formCreateSubtask.reset();
+    refreshAll();
+  };
+}
+
 // Drawer Closers
 document.querySelectorAll('.drawer-close').forEach((btn) => {
   btn.onclick = () => {
-    drawerInspector.classList.add('hidden');
+    if (drawerInspector) drawerInspector.classList.add('hidden');
     state.selectedTaskId = null;
   };
 });
 
-drawerInspector.onclick = (e) => {
-  if (e.target === drawerInspector) {
-    drawerInspector.classList.add('hidden');
-    state.selectedTaskId = null;
-  }
-};
+if (drawerInspector) {
+  drawerInspector.onclick = (e) => {
+    if (e.target === drawerInspector) {
+      drawerInspector.classList.add('hidden');
+      state.selectedTaskId = null;
+    }
+  };
+}
 
 // Goals View
 function renderGoalsView() {
   const container = document.getElementById('goalsViewContainer');
+  if (!container) return;
   container.innerHTML = '';
 
   if (state.goals.length === 0) {
@@ -652,6 +789,21 @@ function renderGoalsView() {
             <div class="font-bold text-emerald-400">${item.completedTasks}</div>
           </div>
         </div>
+
+        <!-- Loose Ends List -->
+        ${item.looseEnds.length > 0 ? `
+          <div class="mb-3">
+            <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 mb-1 font-mono">LOOSE ENDS (${item.looseEnds.length})</div>
+            <div class="space-y-1 max-h-24 overflow-y-auto">
+              ${item.looseEnds.map((t) => `
+                <div class="p-1.5 bg-card rounded border border-subtle text-[11px] flex items-center justify-between cursor-pointer hover:border-borderActive" onclick="openInspector('${t.id}')">
+                  <span class="truncate max-w-[220px] text-slate-300">${t.title}</span>
+                  <span class="font-mono text-[9px] text-amber-400 uppercase">[${t.status}]</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
       </div>
 
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
@@ -671,7 +823,7 @@ function renderGoalsView() {
 
 window.filterByGoalDirect = (goalId) => {
   state.filterGoal = goalId;
-  filterGoal.value = goalId;
+  if (filterGoal) filterGoal.value = goalId;
   switchView('tasks');
   renderTasks();
 };
@@ -679,6 +831,7 @@ window.filterByGoalDirect = (goalId) => {
 // Human Attention View
 function renderHumanInbox() {
   const container = document.getElementById('humanInboxList');
+  if (!container) return;
   const waitingTasks = state.tasks.filter((t) => t.status === 'waiting-on-human' && !t.isArchived);
 
   container.innerHTML = '';
@@ -715,6 +868,7 @@ function renderHumanInbox() {
 // Review & Proofs View
 function renderReviewFeed() {
   const container = document.getElementById('reviewFeedList');
+  if (!container) return;
   const reviewTasks = state.tasks.filter(
     (t) => (t.status === 'done' && t.verificationState === 'agent_completed') || t.status === 'dropped'
   );
@@ -767,6 +921,7 @@ function renderReviewFeed() {
 // Decisions View
 function renderDecisionsView() {
   const container = document.getElementById('decisionsList');
+  if (!container) return;
   container.innerHTML = '';
 
   if (state.decisions.length === 0) {
@@ -801,6 +956,7 @@ function renderDecisionsView() {
 // Activity Feed
 function renderActivityFeed() {
   const container = document.getElementById('activityStream');
+  if (!container) return;
   container.innerHTML = '';
 
   if (state.activity.length === 0) {
@@ -828,6 +984,7 @@ function renderActivityFeed() {
 // Session Resume
 async function renderResumeView() {
   const container = document.getElementById('sessionResumeDashboard');
+  if (!container) return;
   try {
     const res = await fetch('/api/resume');
     const data = await res.json();
@@ -869,35 +1026,44 @@ async function renderResumeView() {
 
 // Command Palette (Cmd+K)
 const btnOpenPalette = document.getElementById('btnOpenPalette');
-btnOpenPalette.onclick = () => openCommandPalette();
+if (btnOpenPalette) btnOpenPalette.onclick = () => openCommandPalette();
 
 function openCommandPalette() {
+  if (!commandPalette) return;
   commandPalette.classList.remove('hidden');
-  paletteInput.value = '';
-  renderPaletteResults('');
-  paletteInput.focus();
+  if (paletteInput) {
+    paletteInput.value = '';
+    renderPaletteResults('');
+    paletteInput.focus();
+  }
 }
 
 function closeCommandPalette() {
-  commandPalette.classList.add('hidden');
+  if (commandPalette) commandPalette.classList.add('hidden');
 }
 
-commandPalette.onclick = (e) => {
-  if (e.target === commandPalette) closeCommandPalette();
-};
+if (commandPalette) {
+  commandPalette.onclick = (e) => {
+    if (e.target === commandPalette) closeCommandPalette();
+  };
+}
 
-paletteInput.oninput = (e) => {
-  renderPaletteResults(e.target.value);
-};
+if (paletteInput) {
+  paletteInput.oninput = (e) => {
+    renderPaletteResults(e.target.value);
+  };
+}
 
 function renderPaletteResults(query) {
+  if (!paletteResults) return;
   paletteResults.innerHTML = '';
+  state.paletteSelectedIndex = 0;
   const q = query.trim().toLowerCase();
 
   const actions = [
-    { title: 'Create New Issue', icon: '+', action: () => { closeCommandPalette(); modalCreateTask.classList.remove('hidden'); } },
-    { title: 'Create New Goal', icon: '🎯', action: () => { closeCommandPalette(); modalCreateGoal.classList.remove('hidden'); } },
-    { title: 'Record Architectural Decision', icon: '🏛️', action: () => { closeCommandPalette(); modalCreateDecision.classList.remove('hidden'); } },
+    { title: 'Create New Issue', icon: '+', action: () => { closeCommandPalette(); if (modalCreateTask) modalCreateTask.classList.remove('hidden'); } },
+    { title: 'Create New Goal', icon: '🎯', action: () => { closeCommandPalette(); if (modalCreateGoal) modalCreateGoal.classList.remove('hidden'); } },
+    { title: 'Record Architectural Decision', icon: '🏛️', action: () => { closeCommandPalette(); if (modalCreateDecision) modalCreateDecision.classList.remove('hidden'); } },
     { title: 'Switch to All Issues', icon: '⚡', action: () => { closeCommandPalette(); switchView('tasks'); } },
     { title: 'Switch to Human Inbox', icon: '🙋', action: () => { closeCommandPalette(); switchView('human'); } },
     { title: 'Export Markdown Project Summary', icon: '↓', action: () => { closeCommandPalette(); exportProject(); } },
@@ -913,7 +1079,7 @@ function renderPaletteResults(query) {
   });
 
   // Search Tasks
-  const matchedTasks = state.tasks.filter((t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)).slice(0, 5);
+  const matchedTasks = state.tasks.filter((t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)).slice(0, 6);
   matchedTasks.forEach((t) => {
     const item = document.createElement('div');
     item.className = 'palette-item';
@@ -924,21 +1090,53 @@ function renderPaletteResults(query) {
     };
     paletteResults.appendChild(item);
   });
+
+  updatePaletteHighlight();
+}
+
+function updatePaletteHighlight() {
+  const items = paletteResults.querySelectorAll('.palette-item');
+  items.forEach((item, index) => {
+    item.classList.toggle('active-item', index === state.paletteSelectedIndex);
+  });
 }
 
 // Global Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
-  const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
 
-  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault();
     openCommandPalette();
     return;
   }
 
+  if (commandPalette && !commandPalette.classList.contains('hidden')) {
+    const items = paletteResults.querySelectorAll('.palette-item');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      state.paletteSelectedIndex = (state.paletteSelectedIndex + 1) % Math.max(1, items.length);
+      updatePaletteHighlight();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      state.paletteSelectedIndex = (state.paletteSelectedIndex - 1 + items.length) % Math.max(1, items.length);
+      updatePaletteHighlight();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (items[state.paletteSelectedIndex]) {
+        items[state.paletteSelectedIndex].click();
+      }
+      return;
+    }
+  }
+
   if (e.key === 'Escape') {
     closeCommandPalette();
-    drawerInspector.classList.add('hidden');
+    if (drawerInspector) drawerInspector.classList.add('hidden');
     document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
     return;
   }
@@ -946,7 +1144,7 @@ window.addEventListener('keydown', (e) => {
   if (!isInput) {
     if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
-      modalCreateTask.classList.remove('hidden');
+      if (modalCreateTask) modalCreateTask.classList.remove('hidden');
     }
     if (e.key === '1') switchView('tasks');
     if (e.key === '2') switchView('goals');
@@ -958,9 +1156,14 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Modal Triggers
-document.getElementById('btnHeaderNewTask').onclick = () => modalCreateTask.classList.remove('hidden');
-document.getElementById('btnCreateGoal').onclick = () => modalCreateGoal.classList.remove('hidden');
-document.getElementById('btnCreateDecision').onclick = () => modalCreateDecision.classList.remove('hidden');
+const btnHeaderNewTask = document.getElementById('btnHeaderNewTask');
+if (btnHeaderNewTask) btnHeaderNewTask.onclick = () => modalCreateTask?.classList.remove('hidden');
+
+const btnCreateGoal = document.getElementById('btnCreateGoal');
+if (btnCreateGoal) btnCreateGoal.onclick = () => modalCreateGoal?.classList.remove('hidden');
+
+const btnCreateDecision = document.getElementById('btnCreateDecision');
+if (btnCreateDecision) btnCreateDecision.onclick = () => modalCreateDecision?.classList.remove('hidden');
 
 document.querySelectorAll('.modal-close').forEach((btn) => {
   btn.onclick = () => {
@@ -969,72 +1172,104 @@ document.querySelectorAll('.modal-close').forEach((btn) => {
 });
 
 // Form Submissions
-document.getElementById('formCreateTask').onsubmit = async (e) => {
-  e.preventDefault();
-  const title = document.getElementById('inputTaskTitle').value;
-  const goalId = document.getElementById('inputTaskGoal').value || undefined;
-  const priority = document.getElementById('inputTaskPriority').value;
-  const acceptanceCriteria = document.getElementById('inputTaskAC').value;
-  const filesInput = document.getElementById('inputTaskFiles').value;
-  const isDeferred = document.getElementById('inputTaskDeferred').checked;
+const formCreateTask = document.getElementById('formCreateTask');
+if (formCreateTask) {
+  formCreateTask.onsubmit = async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('inputTaskTitle').value;
+    const goalId = document.getElementById('inputTaskGoal').value || undefined;
+    const priority = document.getElementById('inputTaskPriority').value;
+    const acceptanceCriteria = document.getElementById('inputTaskAC').value;
+    const filesInput = document.getElementById('inputTaskFiles').value;
+    const isDeferred = document.getElementById('inputTaskDeferred').checked;
 
-  const declaredFiles = filesInput ? filesInput.split(',').map((f) => f.trim()).filter(Boolean) : [];
+    const declaredFiles = filesInput ? filesInput.split(',').map((f) => f.trim()).filter(Boolean) : [];
 
-  await fetch('/api/tasks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, goalId, priority, acceptanceCriteria, declaredFiles, isDeferred }),
-  });
+    const res = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, goalId, priority, acceptanceCriteria, declaredFiles, isDeferred }),
+    });
 
-  modalCreateTask.classList.add('hidden');
-  document.getElementById('formCreateTask').reset();
-  refreshAll();
-};
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Failed to create issue', 'error');
+      return;
+    }
 
-document.getElementById('formCreateGoal').onsubmit = async (e) => {
-  e.preventDefault();
-  const title = document.getElementById('inputGoalTitle').value;
-  const verbatimPrompt = document.getElementById('inputGoalVerbatim').value;
-  const maxOpenTasksCap = parseInt(document.getElementById('inputGoalCap').value) || 10;
+    showToast('Issue created successfully', 'success');
+    modalCreateTask.classList.add('hidden');
+    formCreateTask.reset();
+    refreshAll();
+  };
+}
 
-  await fetch('/api/goals', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, verbatimPrompt, maxOpenTasksCap }),
-  });
+const formCreateGoal = document.getElementById('formCreateGoal');
+if (formCreateGoal) {
+  formCreateGoal.onsubmit = async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('inputGoalTitle').value;
+    const verbatimPrompt = document.getElementById('inputGoalVerbatim').value;
+    const maxOpenTasksCap = parseInt(document.getElementById('inputGoalCap').value) || 10;
 
-  modalCreateGoal.classList.add('hidden');
-  document.getElementById('formCreateGoal').reset();
-  refreshAll();
-};
+    await fetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, verbatimPrompt, maxOpenTasksCap }),
+    });
 
-document.getElementById('formCreateDecision').onsubmit = async (e) => {
-  e.preventDefault();
-  const title = document.getElementById('inputDecTitle').value;
-  const context = document.getElementById('inputDecContext').value;
-  const choice = document.getElementById('inputDecChoice').value;
-  const rationale = document.getElementById('inputDecRationale').value;
-  const tagsInput = document.getElementById('inputDecTags').value;
-  const tags = tagsInput ? tagsInput.split(',').map((t) => t.trim()).filter(Boolean) : [];
+    showToast('Goal created successfully', 'success');
+    modalCreateGoal.classList.add('hidden');
+    formCreateGoal.reset();
+    refreshAll();
+  };
+}
 
-  await fetch('/api/decisions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, context, choice, rationale, tags }),
-  });
+const formCreateDecision = document.getElementById('formCreateDecision');
+if (formCreateDecision) {
+  formCreateDecision.onsubmit = async (e) => {
+    e.preventDefault();
+    const title = document.getElementById('inputDecTitle').value;
+    const context = document.getElementById('inputDecContext').value;
+    const choice = document.getElementById('inputDecChoice').value;
+    const rationale = document.getElementById('inputDecRationale').value;
+    const tagsInput = document.getElementById('inputDecTags').value;
+    const tags = tagsInput ? tagsInput.split(',').map((t) => t.trim()).filter(Boolean) : [];
 
-  modalCreateDecision.classList.add('hidden');
-  document.getElementById('formCreateDecision').reset();
-  fetchDecisions();
-};
+    await fetch('/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, context, choice, rationale, tags }),
+    });
 
-// Interactive Actions
-window.changeTaskStatus = async (taskId, newStatus) => {
-  await fetch(`/api/tasks/${taskId}/status`, {
+    showToast('Architectural decision recorded', 'success');
+    modalCreateDecision.classList.add('hidden');
+    formCreateDecision.reset();
+    fetchDecisions();
+  };
+}
+
+// Status Change Handler with Validation
+window.handleStatusChangePrompt = async (taskId, newStatus) => {
+  if (newStatus === 'dropped') {
+    promptDropTask(taskId);
+    return;
+  }
+
+  const res = await fetch(`/api/tasks/${taskId}/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: newStatus, authorId: 'human' }),
   });
+
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    showToast(data.error || 'Failed to change status', 'error');
+    openInspector(taskId, false);
+    return;
+  }
+
+  showToast(`Status updated to ${newStatus}`, 'success');
   refreshAll();
 };
 
@@ -1048,6 +1283,7 @@ window.handleAnswerQuestion = async (e, taskId) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answer: input.value, humanId: 'human-operator' }),
   });
+  showToast('Answer submitted, agent unblocked', 'success');
   refreshAll();
 };
 
@@ -1061,6 +1297,7 @@ window.handleDrawerAnswer = async (e, taskId) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ answer: input.value, humanId: 'human-operator' }),
   });
+  showToast('Answer submitted, agent unblocked', 'success');
   refreshAll();
 };
 
@@ -1075,6 +1312,7 @@ window.handleAddNote = async (e, taskId) => {
     body: JSON.stringify({ content: input.value, noteType: 'general' }),
   });
   input.value = '';
+  showToast('Note appended', 'info');
   openInspector(taskId, false);
 };
 
@@ -1084,6 +1322,7 @@ window.verifyTask = async (taskId) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ notes: 'Verified in UI' }),
   });
+  showToast('Task verified done', 'success');
   refreshAll();
 };
 
@@ -1094,17 +1333,19 @@ window.promptRejectTask = (taskId) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     });
+    showToast('Task rejected with feedback', 'info');
     refreshAll();
   });
 };
 
 window.promptDropTask = (taskId) => {
-  showReasonModal('Drop Issue', async (reason) => {
+  showReasonModal('Drop Issue (Mandatory Reason)', async (reason) => {
     await fetch(`/api/tasks/${taskId}/drop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     });
+    showToast('Issue dropped', 'info');
     refreshAll();
   });
 };
@@ -1115,15 +1356,22 @@ window.reopenTask = async (taskId) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason: 'Reopened from UI' }),
   });
+  showToast('Issue reopened', 'success');
   refreshAll();
 };
 
 window.undoTask = async (taskId) => {
-  await fetch(`/api/tasks/${taskId}/undo`, {
+  const res = await fetch(`/api/tasks/${taskId}/undo`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    showToast(data.error || 'No state to undo', 'error');
+    return;
+  }
+  showToast('Status undone to previous state', 'info');
   refreshAll();
 };
 
@@ -1134,6 +1382,7 @@ window.promptKillGoal = (goalId) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason }),
     });
+    showToast('Goal killed and child tasks dropped', 'info');
     refreshAll();
   });
 };
@@ -1144,23 +1393,27 @@ window.reopenGoal = async (goalId) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
+  showToast('Goal and tasks reopened', 'success');
   refreshAll();
 };
 
 function showReasonModal(title, callback) {
-  document.getElementById('modalReasonTitle').textContent = title;
+  const titleEl = document.getElementById('modalReasonTitle');
+  if (titleEl) titleEl.textContent = title;
   const promptModal = document.getElementById('modalReasonPrompt');
   const form = document.getElementById('formReasonPrompt');
   const input = document.getElementById('inputReasonText');
-  input.value = '';
-  promptModal.classList.remove('hidden');
+  if (input) input.value = '';
+  if (promptModal) promptModal.classList.remove('hidden');
 
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    const reason = input.value;
-    promptModal.classList.add('hidden');
-    await callback(reason);
-  };
+  if (form) {
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const reason = input.value;
+      promptModal.classList.add('hidden');
+      await callback(reason);
+    };
+  }
 }
 
 // Export
@@ -1173,9 +1426,11 @@ async function exportProject() {
   a.href = url;
   a.download = `moo-tasks-export-${new Date().toISOString().slice(0, 10)}.md`;
   a.click();
+  showToast('Exported markdown project summary', 'success');
 }
 
-document.getElementById('btnHeaderExport').onclick = exportProject;
+const btnHeaderExport = document.getElementById('btnHeaderExport');
+if (btnHeaderExport) btnHeaderExport.onclick = exportProject;
 
 // Start Engine
 initSSE();

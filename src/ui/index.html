@@ -1,32 +1,69 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Moo Tasks — Agentic Task Orchestration & Visibilty</title>
+  <title>Moo Tasks — Agentic Task Orchestration & Visibility</title>
+  
+  <!-- Tailwind CSS Engine & Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            app: '#08090a',
+            sidebar: '#0d0e12',
+            surface: '#12141a',
+            surfaceHover: '#181b22',
+            card: '#13151b',
+            cardHover: '#191c24',
+            modal: '#0f1117',
+            borderSubtle: '#1c1f26',
+            borderDefault: '#252933',
+            borderActive: '#383e4d',
+            accent: {
+              DEFAULT: '#5e6ad2',
+              hover: '#6f7ce8',
+              subtle: 'rgba(94, 106, 210, 0.12)',
+            }
+          },
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+            mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  
   <link rel="stylesheet" href="/styles.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
-<body>
-  <div id="appLayout">
+<body class="bg-app text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex">
+  
+  <!-- Main Layout -->
+  <div id="appLayout" class="flex w-screen h-screen overflow-hidden">
+    
     <!-- Left Sidebar -->
-    <aside id="sidebar">
+    <aside id="sidebar" class="w-60 min-w-[240px] bg-sidebar border-r border-borderSubtle flex flex-col h-full z-20 transition-all duration-200">
       <!-- Workspace Brand -->
-      <div class="sidebar-header">
-        <div class="workspace-badge">
-          <div class="workspace-icon">🐮</div>
+      <div class="sidebar-header p-3.5 border-b border-borderSubtle flex items-center justify-between">
+        <div class="flex items-center gap-2.5 font-bold text-[13px] text-slate-100">
+          <div class="w-6 h-6 rounded-md bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-xs shadow-md shadow-indigo-600/30">🐮</div>
           <div>
-            <div>Moo Tasks</div>
+            <div class="leading-tight">Moo Tasks</div>
             <div class="text-[10px] text-slate-500 font-mono font-normal">v1.0.0 • Local Engine</div>
           </div>
         </div>
       </div>
 
       <!-- Navigation List -->
-      <div class="sidebar-nav">
-        <div class="sidebar-section-title">Views</div>
+      <div class="sidebar-nav p-2 flex-1 overflow-y-auto flex flex-col gap-0.5">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2.5 pt-3 pb-1">Views</div>
         
         <div class="nav-item active" data-view="tasks">
           <div class="nav-item-content">
@@ -60,7 +97,7 @@
           <span class="nav-counter alert hidden" id="navCounterReview">0</span>
         </div>
 
-        <div class="sidebar-section-title">Knowledge & Sync</div>
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2.5 pt-4 pb-1">Knowledge & Sync</div>
 
         <div class="nav-item" data-view="decisions">
           <div class="nav-item-content">
@@ -86,7 +123,7 @@
       </div>
 
       <!-- Sidebar Footer -->
-      <div class="sidebar-footer">
+      <div class="sidebar-footer p-3 border-t border-borderSubtle flex items-center justify-between text-xs text-slate-500">
         <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
           <span>Live Sync</span>
@@ -98,26 +135,26 @@
       </div>
     </aside>
 
-    <!-- Main Content Area -->
-    <main id="mainWorkspace">
-      <!-- Top Header -->
-      <header class="top-header">
-        <div class="breadcrumb-area">
+    <!-- Main Workspace View -->
+    <main id="mainWorkspace" class="flex-1 flex flex-col h-full overflow-hidden bg-app">
+      <!-- Top Action Header -->
+      <header class="top-header h-12 min-h-[48px] border-b border-borderSubtle bg-app flex items-center justify-between px-4 gap-3">
+        <div class="breadcrumb-area flex items-center gap-2 text-[12.5px] font-medium text-slate-400">
           <span>Workspace</span>
           <span class="text-slate-600">/</span>
-          <span class="breadcrumb-active" id="activeViewTitle">All Issues</span>
+          <span class="breadcrumb-active text-slate-100 font-semibold" id="activeViewTitle">All Issues</span>
         </div>
 
         <div class="flex items-center gap-3">
           <!-- Command Palette Trigger -->
-          <div class="search-trigger" id="btnOpenPalette">
-            <span class="text-slate-500">🔍</span>
-            <span class="flex-1">Search or jump to...</span>
+          <div class="search-trigger cursor-pointer flex items-center gap-2 bg-surface border border-borderDefault hover:border-borderActive rounded-md px-2.5 py-1 text-slate-400 text-xs transition" id="btnOpenPalette">
+            <span class="text-slate-500 text-xs">🔍</span>
+            <span class="flex-1 text-[11.5px]">Search or jump to...</span>
             <kbd class="kbd-key">⌘K</kbd>
           </div>
 
-          <!-- View Switcher (Only visible in tasks view) -->
-          <div class="view-switcher" id="tasksViewSwitcher">
+          <!-- View Switcher (List vs Board) -->
+          <div class="view-switcher flex bg-surface border border-borderDefault rounded-md p-0.5 gap-0.5" id="tasksViewSwitcher">
             <button class="view-btn active" data-mode="list" id="btnViewList">
               <span>☰</span> List
             </button>
@@ -137,8 +174,8 @@
       </header>
 
       <!-- Filter Toolbar -->
-      <div class="filter-toolbar" id="filterToolbar">
-        <div class="filter-group">
+      <div class="filter-toolbar h-10 min-h-[40px] border-b border-borderSubtle bg-app flex items-center justify-between px-4 text-xs" id="filterToolbar">
+        <div class="filter-group flex items-center gap-2">
           <select id="filterGoal" class="filter-select">
             <option value="">All Goals</option>
           </select>
@@ -164,72 +201,72 @@
       </div>
 
       <!-- Viewport Area -->
-      <div class="content-viewport">
-        <!-- Tab 1: All Issues (Tasks) -->
+      <div class="content-viewport flex-1 overflow-y-auto p-4 relative">
+        <!-- View 1: All Issues (Tasks) -->
         <section id="pane-tasks" class="view-pane active">
           <!-- Mode A: List View -->
-          <div id="tasksListView" class="list-container"></div>
+          <div id="tasksListView" class="list-container flex flex-col gap-4 max-w-6xl mx-auto"></div>
           <!-- Mode B: Board View -->
           <div id="tasksBoardView" class="board-container hidden"></div>
         </section>
 
-        <!-- Tab 2: Goals & Roadmap -->
+        <!-- View 2: Goals & Roadmap -->
         <section id="pane-goals" class="view-pane hidden">
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
             <div>
               <h2 class="text-base font-semibold text-slate-100">Project Goals & Loose Ends</h2>
               <p class="text-xs text-slate-400">Verbatim human prompts and tracking against task caps.</p>
             </div>
             <button class="btn-primary text-xs" id="btnCreateGoal">+ Create Goal</button>
           </div>
-          <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-5xl"></div>
+          <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
         </section>
 
-        <!-- Tab 3: Human Inbox -->
+        <!-- View 3: Human Inbox -->
         <section id="pane-human" class="view-pane hidden">
-          <div class="mb-4">
+          <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-purple-400">🙋 Human Attention Queue</h2>
             <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering immediately unblocks the waiting agent.</p>
           </div>
-          <div id="humanInboxList" class="space-y-3 max-w-3xl"></div>
+          <div id="humanInboxList" class="space-y-3 max-w-4xl mx-auto"></div>
         </section>
 
-        <!-- Tab 4: Review & Proofs -->
+        <!-- View 4: Review & Proofs -->
         <section id="pane-review" class="view-pane hidden">
-          <div class="mb-4">
+          <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100">🔍 Review & Proof Verification</h2>
             <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks or review dropped tasks.</p>
           </div>
-          <div id="reviewFeedList" class="space-y-3.5 max-w-3xl"></div>
+          <div id="reviewFeedList" class="space-y-3.5 max-w-4xl mx-auto"></div>
         </section>
 
-        <!-- Tab 5: Decisions (ADR) -->
+        <!-- View 5: Decisions (ADR) -->
         <section id="pane-decisions" class="view-pane hidden">
-          <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
             <div>
               <h2 class="text-base font-semibold text-slate-100">🏛️ Settled Architectural Decisions</h2>
               <p class="text-xs text-slate-400">Firm decisions consulted by agents prior to task planning.</p>
             </div>
             <button class="btn-primary text-xs" id="btnCreateDecision">+ Record Decision</button>
           </div>
-          <div id="decisionsList" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-5xl"></div>
+          <div id="decisionsList" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
         </section>
 
-        <!-- Tab 6: Activity Feed -->
+        <!-- View 6: Activity Feed -->
         <section id="pane-activity" class="view-pane hidden">
-          <div class="mb-4">
+          <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100">📡 Live Activity Feed</h2>
           </div>
-          <div id="activityStream" class="space-y-2 max-w-3xl font-mono text-xs"></div>
+          <div id="activityStream" class="space-y-2 max-w-4xl mx-auto font-mono text-xs"></div>
         </section>
 
-        <!-- Tab 7: Session Resume -->
+        <!-- View 7: Session Resume -->
         <section id="pane-resume" class="view-pane hidden">
-          <div class="mb-4">
+          <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100">🧭 Where Did I Leave Off</h2>
             <p class="text-xs text-slate-400">Instant session continuity snapshot.</p>
           </div>
-          <div id="sessionResumeDashboard" class="max-w-4xl space-y-4"></div>
+          <div id="sessionResumeDashboard" class="max-w-4xl mx-auto space-y-4"></div>
         </section>
       </div>
     </main>
@@ -246,7 +283,7 @@
       <div class="palette-results" id="paletteResults"></div>
       <div class="palette-footer">
         <span>Navigation: <kbd class="kbd-key">↑</kbd> <kbd class="kbd-key">↓</kbd> Select: <kbd class="kbd-key">↵</kbd></span>
-        <span class="text-slate-500 font-mono text-[10px]">Moo Tasks Quick Engine</span>
+        <span class="text-slate-500 font-mono text-[10px]">Moo Tasks Engine</span>
       </div>
     </div>
   </div>
@@ -311,9 +348,34 @@
           <input type="checkbox" id="inputTaskDeferred">
           <label for="inputTaskDeferred" class="text-slate-300">Defer to backlog pile</label>
         </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
           <button type="submit" class="btn-primary">Create Issue</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Create Subtask -->
+  <div id="modalCreateSubtask" class="modal-backdrop hidden">
+    <div class="modal-card max-w-md">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">➕ Add Subtask</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <form id="formCreateSubtask" class="space-y-3 text-xs">
+        <input type="hidden" id="inputSubtaskParentId">
+        <div>
+          <label class="block text-slate-400 mb-1">Subtask Title</label>
+          <input type="text" id="inputSubtaskTitle" required class="input-field" placeholder="Subtask title...">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Acceptance Criteria</label>
+          <textarea id="inputSubtaskAC" required rows="2" class="input-field" placeholder="Criteria for subtask..."></textarea>
+        </div>
+        <div class="flex justify-end gap-2 pt-2 border-t border-borderSubtle">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Add Subtask</button>
         </div>
       </form>
     </div>
@@ -336,10 +398,10 @@
           <textarea id="inputGoalVerbatim" required rows="4" class="input-field" placeholder="Paste verbatim original prompt here..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Open Tasks Cap</label>
+          <label class="block text-slate-400 mb-1">Open Tasks Cap (Max open items)</label>
           <input type="number" id="inputGoalCap" value="10" min="1" max="50" class="input-field w-24">
         </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
           <button type="submit" class="btn-primary">Create Goal</button>
         </div>
@@ -375,7 +437,7 @@
           <label class="block text-slate-400 mb-1">Tags (Comma-separated)</label>
           <input type="text" id="inputDecTags" class="input-field" placeholder="storage, database">
         </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-slate-800">
+        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
           <button type="submit" class="btn-primary">Save Decision</button>
         </div>
@@ -396,6 +458,9 @@
       </form>
     </div>
   </div>
+
+  <!-- Interactive Toast Notification Container -->
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-[120] flex flex-col gap-2 pointer-events-none"></div>
 
   <script src="/app.js"></script>
 </body>
