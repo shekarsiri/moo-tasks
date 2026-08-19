@@ -1,7 +1,22 @@
+# Dependencies
 node_modules
 dist
+
+# Moo Tasks Persistence
 .moo/tasks.db
 .moo/tasks.db-wal
 .moo/tasks.db-shm
 .moo/tasks.db-journal
+
+# Local IDE & Agent Configurations
+.gemini/
+.cursor/
+.vscode/
+.idea/
+
+# OS & Logs
 .DS_Store
+*.log
+coverage/
+.env
+.env.local
