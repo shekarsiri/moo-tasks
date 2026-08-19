@@ -72,6 +72,35 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     }
   }
 
+  // High-Precision Cross-Process SQLite WAL Synchronization Engine (PRAGMA data_version)
+  let lastDataVersion: number | null = null;
+  try {
+    lastDataVersion = container.db.pragma('data_version', { simple: true }) as number;
+  } catch {}
+
+  const dataVersionPollInterval = setInterval(() => {
+    try {
+      const currentVersion = container.db.pragma('data_version', { simple: true }) as number;
+      if (lastDataVersion !== null && currentVersion !== lastDataVersion) {
+        lastDataVersion = currentVersion;
+        broadcast('tasks_updated', {
+          source: 'sqlite_data_version_change',
+          version: currentVersion,
+          timestamp: Date.now(),
+        });
+        broadcast('goals_updated', {
+          source: 'sqlite_data_version_change',
+          version: currentVersion,
+          timestamp: Date.now(),
+        });
+      } else {
+        lastDataVersion = currentVersion;
+      }
+    } catch {
+      // ignore
+    }
+  }, 250);
+
   // Periodic lease cleanup & background broadcast
   const leaseCleanupInterval = setInterval(() => {
     try {
@@ -97,6 +126,7 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
 
   app.addHook('onClose', (instance, done) => {
     if (watcher) watcher.close();
+    clearInterval(dataVersionPollInterval);
     clearInterval(leaseCleanupInterval);
     clearInterval(heartbeatInterval);
     done();

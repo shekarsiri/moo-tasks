@@ -339,16 +339,17 @@ window.addEventListener('online', () => {
   initSSE();
 });
 
-// Periodic fallback polling (every 6s if offline/reconnecting, or every 20s as heartbeat check)
+// Active Multi-Device Background Sync (every 2.5s when visible)
 setInterval(() => {
   if (document.visibilityState === 'visible') {
+    fetchTasks();
     if (!sseInstance || sseReconnectAttempts > 0) {
       refreshAll();
-    } else if (Date.now() - lastPingReceivedAt > 25000) {
+    } else if (Date.now() - lastPingReceivedAt > 20000) {
       initSSE();
     }
   }
-}, 6000);
+}, 2500);
 
 // API Fetching
 async function fetchProjectInfo() {
