@@ -130,6 +130,22 @@ function initSSE() {
 }
 
 // API Fetching
+async function fetchProjectInfo() {
+  try {
+    const res = await fetch('/api/project');
+    const data = await res.json();
+    if (data.projectName) {
+      const bc = document.getElementById('breadcrumbWorkspaceName');
+      if (bc) bc.textContent = data.projectName;
+      const lbl = document.getElementById('sidebarProjectLabel');
+      if (lbl) lbl.textContent = `${data.projectName} • Local Engine`;
+      document.title = `${data.projectName} — Moo Tasks`;
+    }
+  } catch (err) {
+    // ignore
+  }
+}
+
 async function fetchGoals() {
   try {
     const res = await fetch('/api/goals');
@@ -187,7 +203,7 @@ async function fetchActivity() {
 }
 
 async function refreshAll() {
-  await Promise.all([fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
+  await Promise.all([fetchProjectInfo(), fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
   if (state.selectedTaskId) {
     openInspector(state.selectedTaskId, false);
   }

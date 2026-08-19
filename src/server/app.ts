@@ -319,6 +319,15 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     return { success: true, note };
   });
 
+  // Project Info
+  app.get('/api/project', async (req, reply) => {
+    return {
+      success: true,
+      projectName: path.basename(container.projectPath),
+      projectPath: container.projectPath,
+    };
+  });
+
   // Resume & Export
   app.get('/api/resume', async (req, reply) => {
     const summary = container.sessionService.whereDidILeaveOff(container.projectPath);

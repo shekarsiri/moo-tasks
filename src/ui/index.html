@@ -78,7 +78,7 @@
           <img src="/logo.png" alt="Moo Tasks Logo" class="w-7 h-7 rounded-lg shadow-md shadow-indigo-600/30 object-cover" />
           <div>
             <div class="leading-tight font-semibold">Moo Tasks</div>
-            <div class="text-[10px] text-slate-500 font-mono font-normal">v1.0.0 • Local Engine</div>
+            <div class="text-[10px] text-slate-500 font-mono font-normal" id="sidebarProjectLabel">v1.0.0 • Local Engine</div>
           </div>
         </div>
       </div>
@@ -162,7 +162,7 @@
       <!-- Top Action Header -->
       <header class="top-header h-12 min-h-[48px] border-b border-borderSubtle bg-app flex items-center justify-between px-4 gap-3">
         <div class="breadcrumb-area flex items-center gap-2 text-[12.5px] font-medium text-slate-400">
-          <span>Workspace</span>
+          <span id="breadcrumbWorkspaceName">Workspace</span>
           <span class="text-slate-600">/</span>
           <span class="breadcrumb-active text-slate-100 font-semibold" id="activeViewTitle">All Issues</span>
         </div>
