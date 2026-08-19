@@ -37,23 +37,36 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* Global Reset & Border Fallback */
 *, ::before, ::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  border-color: var(--border-subtle);
+  border-color: #1c1f26;
 }
 
-.border-subtle {
-  border-color: var(--border-subtle) !important;
+[class*="border"],
+.border,
+.border-t,
+.border-b,
+.border-l,
+.border-r {
+  border-color: #1c1f26;
 }
 
-.border-default {
-  border-color: var(--border-default) !important;
+.border-subtle,
+.border-borderSubtle {
+  border-color: #1c1f26 !important;
 }
 
-.border-active {
-  border-color: var(--border-active) !important;
+.border-default,
+.border-borderDefault {
+  border-color: #252933 !important;
+}
+
+.border-active,
+.border-borderActive {
+  border-color: #383e4d !important;
 }
 
 body {
