@@ -1,6 +1,8 @@
-# 🐮 Moo Tasks
-
 <div align="center">
+
+<img src="./assets/moo-tasks-logo.png" alt="Moo Tasks Logo" width="110" style="border-radius: 22px; margin-bottom: 12px;" />
+
+# 🐮 Moo Tasks
 
 [![CI](https://github.com/shekarsiri/moo-tasks/actions/workflows/ci.yml/badge.svg)](https://github.com/shekarsiri/moo-tasks/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
