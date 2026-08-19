@@ -9,6 +9,17 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "scripts",
+    "src/ui",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc && node scripts/build-ui.js",
     "build:backend": "tsc",
@@ -19,13 +30,18 @@
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "agentic-workflow",
+    "ai-agent",
     "claude-code",
+    "cursor",
+    "windsurf",
     "antigravity",
     "task-management",
-    "human-in-the-loop"
+    "human-in-the-loop",
+    "sqlite-wal"
   ],
-  "author": "",
+  "author": "Moo Tasks Contributors",
   "license": "MIT",
   "dependencies": {
     "@fastify/cors": "^9.0.1",
