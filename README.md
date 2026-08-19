@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![CI](https://github.com/your-username/moo-tasks/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/moo-tasks/actions)
+[![CI](https://github.com/shekarsiri/moo-tasks/actions/workflows/ci.yml/badge.svg)](https://github.com/shekarsiri/moo-tasks/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Node: >=18.0.0](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org)
 [![MCP Ready](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)

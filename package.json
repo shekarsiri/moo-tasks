@@ -9,6 +9,14 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shekarsiri/moo-tasks.git"
+  },
+  "homepage": "https://github.com/shekarsiri/moo-tasks#readme",
+  "bugs": {
+    "url": "https://github.com/shekarsiri/moo-tasks/issues"
+  },
   "files": [
     "dist",
     "scripts",
