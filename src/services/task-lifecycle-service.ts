@@ -159,19 +159,57 @@ export class TaskLifecycleService {
 
   updateTask(
     taskId: string,
-    updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'acceptanceCriteria' | 'declaredFiles'>>
+    updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'acceptanceCriteria' | 'declaredFiles' | 'goalId' | 'isDeferred'>>
   ): Task {
     const task = this.getTask(taskId);
     const now = new Date().toISOString();
+
+    if (updates.goalId !== undefined && updates.goalId !== task.goalId) {
+      if (updates.goalId) {
+        this.goalService.checkGoalCap(updates.goalId);
+      }
+      task.goalId = updates.goalId;
+    }
 
     if (updates.title !== undefined) task.title = updates.title.trim();
     if (updates.description !== undefined) task.description = updates.description.trim();
     if (updates.priority !== undefined) task.priority = updates.priority;
     if (updates.acceptanceCriteria !== undefined) task.acceptanceCriteria = updates.acceptanceCriteria.trim();
     if (updates.declaredFiles !== undefined) task.declaredFiles = updates.declaredFiles;
+    if (updates.isDeferred !== undefined) task.isDeferred = Boolean(updates.isDeferred);
 
     task.updatedAt = now;
     return this.taskRepo.update(task);
+  }
+
+  addDependency(taskId: string, dependsOnTaskId: string): void {
+    if (taskId === dependsOnTaskId) {
+      throw new Error('A task cannot depend on itself');
+    }
+    const target = this.getTask(dependsOnTaskId);
+    const existingDeps = this.taskRepo.getAllDependencies();
+    DependencyGraph.validateNoCycles(existingDeps, taskId, [dependsOnTaskId]);
+    this.taskRepo.addDependency(taskId, dependsOnTaskId);
+
+    // If blocker is not done, update task status to blocked-on-dependency
+    const task = this.getTask(taskId);
+    if (target.status !== 'done' && task.status === 'todo') {
+      this.transitionStatus(taskId, 'blocked-on-dependency', 'system', 'system', `Blocked on ${dependsOnTaskId}`);
+    }
+  }
+
+  removeDependency(taskId: string, dependsOnTaskId: string): void {
+    this.taskRepo.removeDependency(taskId, dependsOnTaskId);
+    // If task was blocked, check if it is now unblocked
+    const task = this.getTask(taskId);
+    if (task.status === 'blocked-on-dependency') {
+      const allTasks = this.taskRepo.list();
+      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+      const allDeps = this.taskRepo.getAllDependencies();
+      if (DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap)) {
+        this.transitionStatus(taskId, 'todo', 'system', 'system', `Auto-unblocked: Dependency ${dependsOnTaskId} removed`);
+      }
+    }
   }
 
   transitionStatus(

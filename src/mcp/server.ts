@@ -134,6 +134,48 @@ export function setupMcpServer(container: ServiceContainer): Server {
           },
         },
         {
+          name: 'moo_update_task',
+          description: 'Update task properties: title, description, priority, acceptance criteria, declared files, goal, or deferred state.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID to update' },
+              title: { type: 'string', description: 'Updated title' },
+              description: { type: 'string', description: 'Updated description' },
+              acceptanceCriteria: { type: 'string', description: 'Updated acceptance criteria' },
+              priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+              goalId: { type: 'string', description: 'Re-link to different goal (or null to unlink)' },
+              declaredFiles: { type: 'array', items: { type: 'string' } },
+              isDeferred: { type: 'boolean' },
+            },
+            required: ['taskId'],
+          },
+        },
+        {
+          name: 'moo_link_dependencies',
+          description: 'Link one or more prerequisite blocker tasks to a task with cycle validation.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task that will be blocked' },
+              dependsOnTaskIds: { type: 'array', items: { type: 'string' }, description: 'Prerequisite blocker task IDs' },
+            },
+            required: ['taskId', 'dependsOnTaskIds'],
+          },
+        },
+        {
+          name: 'moo_unlink_dependencies',
+          description: 'Unlink a prerequisite blocker task from a task.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID' },
+              dependsOnTaskId: { type: 'string', description: 'Blocker task ID to remove' },
+            },
+            required: ['taskId', 'dependsOnTaskId'],
+          },
+        },
+        {
           name: 'moo_get_next_task',
           description: 'Auto-surface the next unblocked, highest-priority task ready for execution from the active ready queue.',
           inputSchema: {
@@ -364,7 +406,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
           },
         },
 
-        // 8. Lifecycle Corrections & Undo
+        // 8. Lifecycle Corrections & Bulk Actions
         {
           name: 'moo_drop_task',
           description: 'Drop a task with a mandatory reason (no approval step required).',
@@ -401,6 +443,32 @@ export function setupMcpServer(container: ServiceContainer): Server {
               authorId: { type: 'string' },
             },
             required: ['taskId'],
+          },
+        },
+        {
+          name: 'moo_bulk_drop_tasks',
+          description: 'Drop multiple tasks in a single operation with a shared mandatory reason.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskIds: { type: 'array', items: { type: 'string' }, description: 'Array of task IDs to drop' },
+              reason: { type: 'string', description: 'Mandatory reason for dropping the tasks' },
+              authorId: { type: 'string' },
+            },
+            required: ['taskIds', 'reason'],
+          },
+        },
+        {
+          name: 'moo_bulk_reopen_tasks',
+          description: 'Reopen multiple done or dropped tasks back into the todo queue.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskIds: { type: 'array', items: { type: 'string' }, description: 'Array of task IDs to reopen' },
+              reason: { type: 'string' },
+              authorId: { type: 'string' },
+            },
+            required: ['taskIds'],
           },
         },
 
@@ -519,13 +587,28 @@ export function setupMcpServer(container: ServiceContainer): Server {
             container.projectPath,
             parsed.maxOpenTasksCap
           );
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, goal }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    goal,
+                    hint: `Goal created. Call moo_create_task(goalId: '${goal.id}', ...) to add tasks.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_list_goals': {
           const status = (args as any).status;
           const goals = container.goalService.listGoals(container.projectPath, status);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, goals }, null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, total: goals.length, goals }, null, 2) }] };
         }
 
         case 'moo_get_goal_status': {
@@ -549,19 +632,135 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // Tasks
         case 'moo_create_task': {
           const res = container.taskLifecycleService.createTask(args as any, (args as any).authorId || 'agent', 'agent');
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...res }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    ...res,
+                    hint: `Task created (${res.task.id}). Call moo_claim_task(taskId: '${res.task.id}', agentId: '...', sessionId: '...') before modifying codebase.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_create_tasks_batch': {
           const { tasks } = args as any;
           const results = container.taskLifecycleService.createBatch(tasks, 'agent', 'agent');
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, createdCount: results.length, tasks: results }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    createdCount: results.length,
+                    tasks: results,
+                    hint: `Batch created ${results.length} tasks. Use moo_get_next_task() to pick the highest priority unblocked task.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case 'moo_update_task': {
+          const { taskId, ...updates } = args as any;
+          const updated = container.taskLifecycleService.updateTask(taskId, updates);
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task: updated }, null, 2) }] };
+        }
+
+        case 'moo_link_dependencies': {
+          const { taskId, dependsOnTaskIds } = args as any;
+          for (const depId of dependsOnTaskIds) {
+            container.taskLifecycleService.addDependency(taskId, depId);
+          }
+          const task = container.taskLifecycleService.getTask(taskId);
+          const currentDeps = container.taskRepo.getDependencies(taskId);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, taskId, dependencies: currentDeps, status: task.status }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'moo_unlink_dependencies': {
+          const { taskId, dependsOnTaskId } = args as any;
+          container.taskLifecycleService.removeDependency(taskId, dependsOnTaskId);
+          const task = container.taskLifecycleService.getTask(taskId);
+          const currentDeps = container.taskRepo.getDependencies(taskId);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, taskId, dependencies: currentDeps, status: task.status }, null, 2),
+              },
+            ],
+          };
         }
 
         case 'moo_get_next_task': {
           const { goalId } = args as any;
           const next = container.taskLifecycleService.getNextUnblockedTask(goalId);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, nextTask: next }, null, 2) }] };
+          if (next) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      success: true,
+                      nextTask: next,
+                      hint: `Call moo_claim_task(taskId: '${next.id}', agentId: '...', sessionId: '...') to claim and start work.`,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          // Diagnostic context when queue has no unblocked items
+          const allTasks = container.taskRepo.list(goalId ? { goalId } : {});
+          const blockedCount = allTasks.filter((t) => t.status === 'blocked-on-dependency').length;
+          const doingCount = allTasks.filter((t) => t.status === 'doing').length;
+          const waitingHumanCount = allTasks.filter((t) => t.status === 'waiting-on-human').length;
+          const doneCount = allTasks.filter((t) => t.status === 'done').length;
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    nextTask: null,
+                    diagnostics: {
+                      message: 'No unblocked todo tasks available in the ready queue.',
+                      activeDoingTasks: doingCount,
+                      blockedOnDependencies: blockedCount,
+                      waitingOnHuman: waitingHumanCount,
+                      completedTasks: doneCount,
+                    },
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_get_task': {
@@ -593,7 +792,22 @@ export function setupMcpServer(container: ServiceContainer): Server {
             leaseDurationSeconds,
             declaredFiles,
           });
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, ...res }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    ...res,
+                    hint: `Task claimed exclusively until ${res.task.leaseExpiresAt}. Modify code, then call moo_complete_task(taskId: '${taskId}', agentId: '${agentId}', evidence: { commandsRun, testProof, ... }) to complete.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_heartbeat_task': {
@@ -618,7 +832,22 @@ export function setupMcpServer(container: ServiceContainer): Server {
         case 'moo_complete_task': {
           const { taskId, agentId, evidence, notes } = args as any;
           const task = container.verificationService.completeTask(taskId, agentId, evidence, notes);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    task,
+                    hint: `Task completed and proof logged. Call moo_get_next_task() to continue next ready task.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_verify_task': {
@@ -637,7 +866,22 @@ export function setupMcpServer(container: ServiceContainer): Server {
         case 'moo_ask_human': {
           const { taskId, agentId, question, questionType } = args as any;
           const task = container.humanCollabService.askHuman(taskId, agentId, question, questionType);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    task,
+                    hint: `Task transitioned to waiting-on-human. The human operator will see the question in their attention inbox.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         case 'moo_get_human_inbox': {
@@ -676,7 +920,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         case 'moo_list_task_notes': {
           const { taskId } = args as any;
           const notes = container.noteRepo.listByTaskId(taskId);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, notes }, null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, total: notes.length, notes }, null, 2) }] };
         }
 
         // Lifecycle & Undo
@@ -698,6 +942,18 @@ export function setupMcpServer(container: ServiceContainer): Server {
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
         }
 
+        case 'moo_bulk_drop_tasks': {
+          const { taskIds, reason, authorId } = args as any;
+          const droppedCount = container.taskLifecycleService.bulkDrop(taskIds, reason, authorId || 'agent', 'agent');
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, droppedCount, taskIds }, null, 2) }] };
+        }
+
+        case 'moo_bulk_reopen_tasks': {
+          const { taskIds, reason, authorId } = args as any;
+          const reopenedCount = container.taskLifecycleService.bulkReopen(taskIds, reason || 'Bulk reopen', authorId || 'agent', 'agent');
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, reopenedCount, taskIds }, null, 2) }] };
+        }
+
         // Decisions
         case 'moo_record_decision': {
           const { title, context, choice, rationale, tags, authorId } = args as any;
@@ -716,7 +972,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         case 'moo_list_decisions': {
           const { status, tag } = args as any;
           const decisions = container.decisionService.listDecisions(container.projectPath, status, tag);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, decisions }, null, 2) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, total: decisions.length, decisions }, null, 2) }] };
         }
 
         case 'moo_supersede_decision': {
