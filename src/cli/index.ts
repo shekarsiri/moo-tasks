@@ -4,6 +4,7 @@ import { startServerCommand } from './commands/start.js';
 import { mcpCommand } from './commands/mcp.js';
 import { initCommand } from './commands/init.js';
 import { installCommand } from './commands/install.js';
+import { runCommand } from './commands/run.js';
 
 const program = new Command();
 
@@ -11,6 +12,16 @@ program
   .name('moo-tasks')
   .description('Agentic Task Orchestration & Management Engine with MCP and Web UI')
   .version('1.0.0');
+
+program
+  .command('run <prompt>')
+  .description('Record user prompt as Goal and create claimed task with compact context for coding agents')
+  .option('-t, --title <title>', 'Descriptive goal title')
+  .option('-p, --priority <priority>', 'Task priority (low, medium, high, critical)', 'high')
+  .option('-a, --agent <agentId>', 'Agent identifier', 'cli-agent')
+  .option('-f, --files <files>', 'Comma-separated declared files')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(runCommand);
 
 program
   .command('start')

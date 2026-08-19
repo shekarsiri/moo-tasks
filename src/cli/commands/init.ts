@@ -3,46 +3,57 @@ import path from 'path';
 import picocolors from 'picocolors';
 import { createServiceContainer } from '../../services/index.js';
 
-export const AGENTS_MD_CONTENT = `# Agent Guidelines & Workflow Protocol (Moo Tasks)
+export const AGENTS_MD_CONTENT = `# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
 
-All autonomous coding agents (Claude Code, Cursor, Windsurf, Antigravity, Copilot, Aider, etc.) working in this repository MUST use **Moo Tasks** (\`.moo/tasks.db\` / MCP tools) to plan, claim, execute, and verify all tasks.
+> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server (\`.moo/tasks.db\`).
+> For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
 
 ---
 
-## 🎯 Mandatory 6-Step Workflow Protocol
+## ⚡ 1-Call Fast-Path for Rapid Coding (Recommended)
 
-### 1. Session Start & Context Pickup
-- Always start by checking session continuity and settled architectural decisions:
-  - Call \`moo_session_resume()\` to surface abandoned in-flight tasks, human inbox items, and the unblocked ready queue.
-  - Call \`moo_list_decisions(status: 'accepted')\` so settled architectural choices stay settled.
+When the user asks you to implement a feature or fix an issue, use **\`moo_quick_start\`** to atomically create and claim the task in a single step:
 
-### 2. Goal Anchoring (Prevent Scope Drift)
-- Anchor the human user's overarching request with \`moo_create_goal(title, verbatimPrompt)\`.
-- Always store the user's EXACT verbatim prompt to maintain fidelity and prevent drift.
+\`\`\`json
+{
+  "title": "Implement feature X",
+  "acceptanceCriteria": "Clear, testable markdown definition of done",
+  "priority": "high",
+  "declaredFiles": ["src/feature.ts"]
+}
+\`\`\`
 
-### 3. Planning & Pre-Work Acceptance Criteria
-- Break down the goal into small, atomic tasks before modifying code:
+---
+
+## 🎯 Full Mandatory 6-Step Workflow Protocol
+
+### 1. Goal Anchoring (Prevent Scope Drift)
+- Always anchor the human user's overarching request with \`moo_create_goal(title, verbatimPrompt, description)\`.
+- Store the user's EXACT verbatim prompt to maintain fidelity.
+
+### 2. Task Planning & Acceptance Criteria
+- Break down the goal into small, atomic tasks:
   - Call \`moo_create_task\` or \`moo_create_tasks_batch\`.
-  - ALWAYS write clear, testable \`acceptanceCriteria\` in Markdown BEFORE touching code.
+  - ALWAYS write testable \`acceptanceCriteria\` in Markdown BEFORE touching code.
   - Declare \`declaredFiles\` and prerequisite \`dependsOnTaskIds\` (DAG cycle prevention is enforced).
   - Open tasks cap (max 10 open items per goal) is strictly enforced to prevent over-planning.
 
-### 4. Exclusive Claim & Ownership
+### 3. Exclusive Claim & Ownership
 - Claim a task exclusively before starting implementation:
-  - Call \`moo_claim_task(taskId, agentId, sessionId, declaredFiles)\`.
-  - This acquires a lease and checks for file collisions with other concurrent agents.
+  - Call \`moo_claim_task(taskId, agentId, sessionId, declaredFiles)\` or use \`moo_quick_start\`.
+  - This acquires a lease and protects against file collisions with concurrent agents.
 
-### 5. Implementation & Discovered Work
-- If working on long tasks, periodically call \`moo_heartbeat_task(taskId, agentId)\`.
-- If an unexpected blocker or prerequisite is discovered, call \`moo_capture_discovered_work\` or \`moo_link_dependencies\`.
-- If user input, approval, or credentials are required, call \`moo_ask_human(taskId, agentId, question)\` to unblock yourself safely.
+### 4. Mid-Task Progress Checkpoints
+- During implementation loops or long refactors, log progress:
+  - Call \`moo_checkpoint(taskId, note: "Added fixtures, mock APIs ready", heartbeat: true)\`.
+  - This automatically renews your lease so other agents don't reclaim your task.
 
-### 6. Verified Completion (Mandatory Proof)
+### 5. Verified Completion (Mandatory Proof)
 - When implementation is complete and tests pass, close the task:
   - Call \`moo_complete_task(taskId, agentId, evidence: { commandsRun, outputSnippet, filesModified, testProof })\`.
   - Tasks without verifiable proof cannot be marked done.
 
-### 7. Architectural Decisions (ADR)
+### 6. Architectural Decisions (ADR)
 - Whenever choosing a library, database, pattern, or system design trade-off:
   - Call \`moo_record_decision(title, context, choice, rationale, tags)\` so subsequent agents never re-debate established decisions.
 `;
