@@ -33,6 +33,31 @@ describe('Moo Tasks Core Domain & Services', () => {
       expect(status.isFullyCovered).toBe(false);
     });
 
+    it('creates and updates goal rich markdown description PRD spec', () => {
+      const goal = container.goalService.createGoal(
+        'Design Architecture',
+        'User prompt',
+        '/test/project',
+        5,
+        '# Architectural Spec\n\n- Component A\n- Component B'
+      );
+
+      expect(goal.description).toBe('# Architectural Spec\n\n- Component A\n- Component B');
+
+      const updated = container.goalService.updateGoal(goal.id, {
+        title: 'Updated Architecture Design',
+        description: '# Updated PRD\n\nFull specification breakdown.',
+        maxOpenTasksCap: 8,
+      });
+
+      expect(updated.title).toBe('Updated Architecture Design');
+      expect(updated.description).toBe('# Updated PRD\n\nFull specification breakdown.');
+      expect(updated.maxOpenTasksCap).toBe(8);
+
+      const fetched = container.goalService.getGoal(goal.id);
+      expect(fetched.description).toBe('# Updated PRD\n\nFull specification breakdown.');
+    });
+
     it('enforces open task cap on goal to prevent over-planning', () => {
       const goal = container.goalService.createGoal(
         'Refactor Database',

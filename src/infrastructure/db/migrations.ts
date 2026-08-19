@@ -12,6 +12,7 @@ export class DatabaseMigrator {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         verbatim_prompt TEXT NOT NULL,
+        description TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         max_open_tasks_cap INTEGER NOT NULL DEFAULT 10,
         project_path TEXT NOT NULL,
@@ -139,5 +140,12 @@ export class DatabaseMigrator {
       CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_path);
       CREATE INDEX IF NOT EXISTS idx_status_history_task ON status_history(task_id);
     `);
+
+    // Dynamic column additions for existing installations
+    try {
+      db.exec(`ALTER TABLE goals ADD COLUMN description TEXT;`);
+    } catch {
+      // column already exists
+    }
   }
 }

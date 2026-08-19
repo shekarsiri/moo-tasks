@@ -10,6 +10,7 @@ export class SqliteGoalRepository implements IGoalRepository {
       id: row.id,
       title: row.title,
       verbatimPrompt: row.verbatim_prompt,
+      description: row.description || undefined,
       status: row.status as GoalStatus,
       maxOpenTasksCap: row.max_open_tasks_cap,
       projectPath: row.project_path,
@@ -23,15 +24,16 @@ export class SqliteGoalRepository implements IGoalRepository {
   create(goal: Goal): Goal {
     const stmt = this.db.prepare(`
       INSERT INTO goals (
-        id, title, verbatim_prompt, status, max_open_tasks_cap, project_path,
+        id, title, verbatim_prompt, description, status, max_open_tasks_cap, project_path,
         created_at, updated_at, completed_at, dropped_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       goal.id,
       goal.title,
       goal.verbatimPrompt,
+      goal.description || null,
       goal.status,
       goal.maxOpenTasksCap,
       goal.projectPath,
@@ -69,6 +71,7 @@ export class SqliteGoalRepository implements IGoalRepository {
       UPDATE goals SET
         title = ?,
         verbatim_prompt = ?,
+        description = ?,
         status = ?,
         max_open_tasks_cap = ?,
         updated_at = ?,
@@ -80,6 +83,7 @@ export class SqliteGoalRepository implements IGoalRepository {
     stmt.run(
       goal.title,
       goal.verbatimPrompt,
+      goal.description || null,
       goal.status,
       goal.maxOpenTasksCap,
       goal.updatedAt,

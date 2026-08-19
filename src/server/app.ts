@@ -143,6 +143,28 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     return { success: true, goal };
   });
 
+  app.get('/api/goals/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const goal = container.goalService.getGoal(id);
+    const summary = container.goalService.getGoalStatus(id);
+    const tasks = container.taskRepo.listByGoalId(id).filter((t) => !t.isArchived);
+    return { success: true, goal, summary, tasks };
+  });
+
+  app.put('/api/goals/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const { title, description, verbatimPrompt, maxOpenTasksCap, status } = req.body as any;
+    const goal = container.goalService.updateGoal(id, {
+      title,
+      description,
+      verbatimPrompt,
+      maxOpenTasksCap,
+      status,
+    });
+    broadcast('goals_updated', { goal, action: 'updated' });
+    return { success: true, goal };
+  });
+
   app.get('/api/goals/:id/status', async (req, reply) => {
     const { id } = req.params as any;
     const summary = container.goalService.getGoalStatus(id);

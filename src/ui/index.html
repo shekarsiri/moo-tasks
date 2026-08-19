@@ -240,18 +240,26 @@
 
         <!-- View 2: Goals & Roadmap -->
         <section id="pane-goals" class="view-pane hidden">
-          <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
-            <div>
-              <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
-                <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Project Goals & Loose Ends
-              </h2>
-              <p class="text-xs text-slate-400">Verbatim human prompts and tracking against task caps.</p>
+          <!-- Overview Mode -->
+          <div id="goalsOverviewView">
+            <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
+              <div>
+                <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
+                  <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Project Goals & Product Roadmap
+                </h2>
+                <p class="text-xs text-slate-400">Verbatim human prompts, full specifications, and live coverage tracking against caps.</p>
+              </div>
+              <button class="btn-primary text-xs" id="btnCreateGoal">
+                <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Goal
+              </button>
             </div>
-            <button class="btn-primary text-xs" id="btnCreateGoal">
-              <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Goal
-            </button>
+            <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
           </div>
-          <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
+
+          <!-- Goal Details & Spec Editor Mode -->
+          <div id="goalDetailsView" class="hidden max-w-5xl mx-auto space-y-4">
+            <div id="goalDetailsContent"></div>
+          </div>
         </section>
 
         <!-- View 3: Human Inbox -->

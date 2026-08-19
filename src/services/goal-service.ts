@@ -18,13 +18,15 @@ export class GoalService {
     title: string,
     verbatimPrompt: string,
     projectPath: string,
-    maxOpenTasksCap: number = 10
+    maxOpenTasksCap: number = 10,
+    description?: string
   ): Goal {
     const now = new Date().toISOString();
     const goal: Goal = {
       id: `goal-${crypto.randomUUID().slice(0, 8)}`,
       title: title.trim(),
       verbatimPrompt: verbatimPrompt.trim(),
+      description: description ? description.trim() : undefined,
       status: 'active',
       maxOpenTasksCap: maxOpenTasksCap > 0 ? maxOpenTasksCap : 10,
       projectPath,
@@ -33,6 +35,33 @@ export class GoalService {
     };
 
     return this.goalRepo.create(goal);
+  }
+
+  updateGoal(
+    goalId: string,
+    updates: {
+      title?: string;
+      description?: string;
+      verbatimPrompt?: string;
+      maxOpenTasksCap?: number;
+      status?: GoalStatus;
+    }
+  ): Goal {
+    const goal = this.getGoal(goalId);
+    if (updates.title !== undefined) goal.title = updates.title.trim();
+    if (updates.description !== undefined) goal.description = updates.description.trim();
+    if (updates.verbatimPrompt !== undefined) goal.verbatimPrompt = updates.verbatimPrompt.trim();
+    if (updates.maxOpenTasksCap !== undefined && updates.maxOpenTasksCap > 0) {
+      goal.maxOpenTasksCap = updates.maxOpenTasksCap;
+    }
+    if (updates.status !== undefined) {
+      goal.status = updates.status;
+      if (updates.status === 'completed') {
+        goal.completedAt = new Date().toISOString();
+      }
+    }
+    goal.updatedAt = new Date().toISOString();
+    return this.goalRepo.update(goal);
   }
 
   getGoal(goalId: string): Goal {

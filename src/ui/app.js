@@ -1274,13 +1274,18 @@ function renderGoalsView() {
       </div>
 
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
-        <button class="btn-secondary text-xs flex items-center gap-1" onclick="filterByGoalDirect('${g.id}')">
-          <i data-lucide="layers" class="w-3 h-3"></i> View Issues
-        </button>
+        <div class="flex items-center gap-2">
+          <button class="btn-primary text-xs flex items-center gap-1" onclick="viewGoalDetails('${g.id}')">
+            <i data-lucide="file-text" class="w-3 h-3"></i> Details & Spec
+          </button>
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="filterByGoalDirect('${g.id}')">
+            <i data-lucide="layers" class="w-3 h-3"></i> View Issues
+          </button>
+        </div>
         <div>
           ${g.status === 'active' 
-            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3 h-3"></i> Kill Goal</button>`
-            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Goal</button>`
+            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3 h-3"></i> Kill</button>`
+            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen</button>`
           }
         </div>
       </div>
@@ -1289,6 +1294,278 @@ function renderGoalsView() {
     container.appendChild(card);
   });
   refreshLucideIcons();
+}
+
+window.viewGoalDetails = (goalId) => {
+  window.location.hash = `#/goals/${goalId}`;
+};
+
+window.closeGoalDetails = () => {
+  window.location.hash = '#/goals';
+};
+
+window.openCreateTaskForGoal = (goalId) => {
+  if (modalCreateTask) {
+    modalCreateTask.classList.remove('hidden');
+    const select = document.getElementById('inputTaskGoal');
+    if (select) select.value = goalId;
+    const titleInput = document.getElementById('inputTaskTitle');
+    if (titleInput) titleInput.focus();
+    refreshLucideIcons();
+  }
+};
+
+window.handleSaveGoalField = async (goalId, field, value) => {
+  const payload = { [field]: value };
+  const res = await fetch(`/api/goals/${goalId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.ok) {
+    showToast(`Updated goal ${field}`, 'success');
+    renderGoalDetails(goalId);
+    fetchGoals();
+  } else {
+    showToast(`Failed to update goal ${field}`, 'error');
+  }
+};
+
+window.handleSaveGoalSpec = async (goalId) => {
+  const textarea = document.getElementById('goalSpecTextarea');
+  if (!textarea) return;
+  const description = textarea.value;
+
+  const res = await fetch(`/api/goals/${goalId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ description }),
+  });
+
+  if (res.ok) {
+    showToast('Saved goal specification', 'success');
+    renderGoalDetails(goalId);
+    fetchGoals();
+  } else {
+    showToast('Failed to save specification', 'error');
+  }
+};
+
+window.toggleGoalSpecTab = (mode) => {
+  const previewBtn = document.getElementById('btnGoalSpecPreview');
+  const editBtn = document.getElementById('btnGoalSpecEdit');
+  const previewBox = document.getElementById('goalSpecPreviewBox');
+  const editBox = document.getElementById('goalSpecEditBox');
+
+  if (mode === 'preview') {
+    previewBtn?.classList.add('active');
+    editBtn?.classList.remove('active');
+    previewBox?.classList.remove('hidden');
+    editBox?.classList.add('hidden');
+  } else {
+    previewBtn?.classList.remove('active');
+    editBtn?.classList.add('active');
+    previewBox?.classList.add('hidden');
+    editBox?.classList.remove('hidden');
+  }
+  refreshLucideIcons();
+};
+
+async function renderGoalDetails(goalId) {
+  const container = document.getElementById('goalDetailsContent');
+  if (!container) return;
+
+  try {
+    const res = await fetch(`/api/goals/${goalId}`);
+    const data = await res.json();
+    if (!res.ok || !data.goal) {
+      container.innerHTML = `<div class="p-8 text-center text-slate-500">Goal not found. <button onclick="closeGoalDetails()" class="text-indigo-400 underline">Back to Goals</button></div>`;
+      return;
+    }
+
+    const g = data.goal;
+    const summary = data.summary;
+    const tasks = data.tasks || [];
+    const pct = summary.totalTasks > 0 ? Math.round((summary.completedTasks / summary.totalTasks) * 100) : 0;
+    const isDropped = g.status === 'dropped';
+    const isCompleted = g.status === 'completed';
+
+    container.innerHTML = `
+      <!-- Goal Details Header -->
+      <div class="flex items-center justify-between border-b border-subtle pb-3 mb-4">
+        <div class="flex items-center gap-3">
+          <button onclick="closeGoalDetails()" class="btn-secondary text-xs flex items-center gap-1.5">
+            <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> All Goals
+          </button>
+          <div class="flex items-center gap-2">
+            <span class="font-mono text-xs text-slate-500">${g.id}</span>
+            <span class="font-mono text-xs ${isDropped ? 'text-rose-400 bg-rose-950/30' : isCompleted ? 'text-emerald-400 bg-emerald-950/30' : 'text-indigo-400 bg-indigo-950/30'} px-2 py-0.5 rounded border border-subtle uppercase font-semibold">
+              ${g.status}
+            </span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button class="btn-secondary text-xs flex items-center gap-1.5" onclick="filterByGoalDirect('${g.id}')">
+            <i data-lucide="kanban" class="w-3.5 h-3.5"></i> View in Board
+          </button>
+          <button class="btn-primary text-xs flex items-center gap-1.5" onclick="openCreateTaskForGoal('${g.id}')">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Issue
+          </button>
+          ${g.status === 'active'
+            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3.5 h-3.5"></i> Kill Goal</button>`
+            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Goal</button>`
+          }
+        </div>
+      </div>
+
+      <!-- Goal Title & Controls -->
+      <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
+        <div class="space-y-1">
+          <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Goal Title</label>
+          <input type="text" value="${g.title.replace(/"/g, '&quot;')}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveGoalField('${g.id}', 'title', this.value)">
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+          <div>
+            <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Status</label>
+            <select class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField('${g.id}', 'status', this.value)">
+              <option value="active" ${g.status === 'active' ? 'selected' : ''}>Active</option>
+              <option value="completed" ${g.status === 'completed' ? 'selected' : ''}>Completed</option>
+              <option value="dropped" ${g.status === 'dropped' ? 'selected' : ''}>Dropped</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Open Tasks Cap</label>
+            <input type="number" min="1" max="50" value="${g.maxOpenTasksCap}" class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField('${g.id}', 'maxOpenTasksCap', Number(this.value))">
+          </div>
+
+          <div>
+            <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Created / Updated</label>
+            <div class="text-xs font-mono text-slate-400 mt-2">
+              ${formatRelativeTime(g.createdAt)} (${g.createdAt.slice(0, 10)})
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Progress Banner -->
+        <div class="pt-2">
+          <div class="flex justify-between text-xs font-mono text-slate-400 mb-1.5">
+            <span>Coverage (${summary.completedTasks} / ${summary.totalTasks} issues completed)</span>
+            <span class="font-bold ${pct === 100 ? 'text-emerald-400' : 'text-indigo-400'}">${pct}% Covered</span>
+          </div>
+          <div class="w-full h-2 bg-slate-900 rounded-full overflow-hidden">
+            <div class="h-full ${pct === 100 ? 'bg-emerald-500' : 'bg-indigo-500'} rounded-full transition-all duration-300" style="width: ${pct}%"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-4 gap-2 text-center text-xs font-mono pt-1">
+          <div class="bg-card p-2 rounded border border-subtle">
+            <div class="text-slate-500 text-[10px]">Open Tasks</div>
+            <div class="font-bold ${summary.hasReachedCap ? 'text-rose-400' : 'text-slate-200'}">${summary.openTasks} / ${g.maxOpenTasksCap}</div>
+          </div>
+          <div class="bg-card p-2 rounded border border-subtle">
+            <div class="text-slate-500 text-[10px]">Loose Ends</div>
+            <div class="font-bold text-amber-400">${summary.looseEnds.length}</div>
+          </div>
+          <div class="bg-card p-2 rounded border border-subtle">
+            <div class="text-slate-500 text-[10px]">Completed</div>
+            <div class="font-bold text-emerald-400">${summary.completedTasks}</div>
+          </div>
+          <div class="bg-card p-2 rounded border border-subtle">
+            <div class="text-slate-500 text-[10px]">Total Issues</div>
+            <div class="font-bold text-slate-200">${summary.totalTasks}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Specification & PRD Section (Rich Markdown with Tabs) -->
+      <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
+        <div class="flex items-center justify-between border-b border-subtle pb-2">
+          <div class="flex items-center gap-2">
+            <i data-lucide="file-text" class="w-4 h-4 text-indigo-400"></i>
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Full Specification & Task Definition (PRD)</span>
+          </div>
+          <div class="tab-pill-group">
+            <button type="button" class="tab-pill active" id="btnGoalSpecPreview" onclick="toggleGoalSpecTab('preview')">
+              <i data-lucide="eye" class="w-3 h-3"></i> Preview
+            </button>
+            <button type="button" class="tab-pill" id="btnGoalSpecEdit" onclick="toggleGoalSpecTab('edit')">
+              <i data-lucide="edit-3" class="w-3 h-3"></i> Edit Spec
+            </button>
+          </div>
+        </div>
+
+        <div id="goalSpecPreviewBox" class="bg-card p-4 rounded-lg border border-subtle min-h-[120px] text-xs text-slate-300 markdown-body leading-relaxed">
+          ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">No detailed specification written yet. Click <strong>Edit Spec</strong> to write user stories, architectural plans, and full definition of done in Markdown (or have your AI coding agent update it with <code>moo_update_goal</code>).</div>'}
+        </div>
+
+        <div id="goalSpecEditBox" class="hidden space-y-2">
+          <textarea id="goalSpecTextarea" class="input-field w-full font-mono text-xs h-48 leading-relaxed resize-y" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
+          <div class="flex justify-end gap-2">
+            <button type="button" class="btn-primary text-xs flex items-center gap-1.5" onclick="handleSaveGoalSpec('${g.id}')">
+              <i data-lucide="save" class="w-3.5 h-3.5"></i> Save Specification
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Verbatim Human Request Card -->
+      <div class="bg-surface border border-subtle rounded-lg p-4 space-y-2">
+        <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 font-mono">
+          <i data-lucide="message-square" class="w-3.5 h-3.5 text-indigo-400"></i> Original Verbatim Human Request
+        </div>
+        <div class="bg-card p-3.5 rounded-lg border border-subtle text-xs text-slate-200 markdown-body">
+          ${renderMarkdown(g.verbatimPrompt)}
+        </div>
+      </div>
+
+      <!-- Child Tasks & Tracking Breakdown -->
+      <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
+        <div class="flex items-center justify-between border-b border-subtle pb-2">
+          <div class="flex items-center gap-2">
+            <i data-lucide="check-square" class="w-4 h-4 text-indigo-400"></i>
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Linked Issues & Execution Breakdown (${tasks.length})</span>
+          </div>
+          <button class="btn-primary text-xs flex items-center gap-1" onclick="openCreateTaskForGoal('${g.id}')">
+            <i data-lucide="plus" class="w-3 h-3"></i> Add Issue
+          </button>
+        </div>
+
+        ${tasks.length === 0 ? `
+          <div class="text-center py-8 text-slate-500 text-xs">
+            No issues created under this goal yet. Click "+ Add Issue" or have coding agents call <code>moo_create_task</code>.
+          </div>
+        ` : `
+          <div class="space-y-1.5 max-h-96 overflow-y-auto">
+            ${tasks.map((t) => {
+              const cfg = statusConfig[t.status] || { label: t.status, class: 'todo' };
+              return `
+                <div class="p-2.5 bg-card hover:bg-cardHover rounded-md border border-subtle flex items-center justify-between cursor-pointer transition" onclick="openInspector('${t.id}')">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <span class="status-dot ${cfg.class}"></span>
+                    <span class="font-mono text-[11px] text-slate-500 shrink-0">${t.id}</span>
+                    <span class="text-xs text-slate-200 font-medium truncate">${t.title}</span>
+                  </div>
+                  <div class="flex items-center gap-2 shrink-0">
+                    ${t.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${t.claimedByAgent}</span>` : ''}
+                    ${getPriorityIcon(t.priority)}
+                    <span class="font-mono text-[10px] text-slate-400 bg-surface px-1.5 py-0.5 rounded border border-subtle">${cfg.label}</span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `}
+      </div>
+    `;
+
+    refreshLucideIcons();
+  } catch (err) {
+    container.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">Error loading goal details: ${err.message}</div>`;
+  }
 }
 
 window.filterByGoalDirect = (goalId) => {
@@ -2042,9 +2319,35 @@ function handleRouteFromHash() {
     switchView(viewToOpen, false);
   }
 
-  if (targetId) {
-    openInspector(targetId, true, false);
-  } else if (state.selectedTaskId) {
+  if (primaryView === 'tasks') {
+    const goalsOverview = document.getElementById('goalsOverviewView');
+    const goalDetails = document.getElementById('goalDetailsView');
+    if (goalsOverview) goalsOverview.classList.remove('hidden');
+    if (goalDetails) goalDetails.classList.add('hidden');
+
+    if (targetId) {
+      openInspector(targetId, true, false);
+    } else if (state.selectedTaskId) {
+      if (drawerInspector) drawerInspector.classList.add('hidden');
+      state.selectedTaskId = null;
+    }
+  } else if (primaryView === 'goals') {
+    if (drawerInspector) drawerInspector.classList.add('hidden');
+    state.selectedTaskId = null;
+
+    const goalsOverview = document.getElementById('goalsOverviewView');
+    const goalDetails = document.getElementById('goalDetailsView');
+
+    if (targetId) {
+      if (goalsOverview) goalsOverview.classList.add('hidden');
+      if (goalDetails) goalDetails.classList.remove('hidden');
+      renderGoalDetails(targetId);
+    } else {
+      if (goalsOverview) goalsOverview.classList.remove('hidden');
+      if (goalDetails) goalDetails.classList.add('hidden');
+      renderGoalsView();
+    }
+  } else {
     if (drawerInspector) drawerInspector.classList.add('hidden');
     state.selectedTaskId = null;
   }

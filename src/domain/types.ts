@@ -48,6 +48,7 @@ export interface Goal {
   id: string;
   title: string;
   verbatimPrompt: string;
+  description?: string;
   status: GoalStatus;
   maxOpenTasksCap: number;
   projectPath: string;

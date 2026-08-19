@@ -31,9 +31,37 @@ export function setupMcpServer(container: ServiceContainer): Server {
             properties: {
               title: { type: 'string', description: 'Brief descriptive title for the goal' },
               verbatimPrompt: { type: 'string', description: 'Verbatim text of the human user request' },
+              description: { type: 'string', description: 'Full rich Markdown specification, PRD, architectural breakdown, and plan' },
               maxOpenTasksCap: { type: 'number', description: 'Maximum open tasks allowed under this goal (default: 10)' },
             },
             required: ['title', 'verbatimPrompt'],
+          },
+        },
+        {
+          name: 'moo_get_goal',
+          description: 'Get full details of a goal including rich markdown PRD/spec, status metrics, and all child tasks.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              goalId: { type: 'string', description: 'Goal ID (e.g. goal-abc12345)' },
+            },
+            required: ['goalId'],
+          },
+        },
+        {
+          name: 'moo_update_goal',
+          description: 'Update goal details: rich markdown PRD/specification, title, verbatim prompt, max open tasks cap, or status.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              goalId: { type: 'string', description: 'Goal ID to update' },
+              title: { type: 'string', description: 'Updated goal title' },
+              description: { type: 'string', description: 'Updated full rich Markdown PRD, architectural design, and task definition' },
+              verbatimPrompt: { type: 'string', description: 'Updated verbatim human prompt' },
+              maxOpenTasksCap: { type: 'number', description: 'Updated open tasks cap' },
+              status: { type: 'string', enum: ['active', 'completed', 'dropped'] },
+            },
+            required: ['goalId'],
           },
         },
         {
@@ -621,6 +649,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
           const schema = z.object({
             title: z.string(),
             verbatimPrompt: z.string(),
+            description: z.string().optional(),
             maxOpenTasksCap: z.number().optional(),
           });
           const parsed = schema.parse(args);
@@ -628,7 +657,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
             parsed.title,
             parsed.verbatimPrompt,
             container.projectPath,
-            parsed.maxOpenTasksCap
+            parsed.maxOpenTasksCap,
+            parsed.description
           );
           return {
             content: [
@@ -643,6 +673,40 @@ export function setupMcpServer(container: ServiceContainer): Server {
                   null,
                   2
                 ),
+              },
+            ],
+          };
+        }
+
+        case 'moo_get_goal': {
+          const { goalId } = args as any;
+          const goal = container.goalService.getGoal(goalId);
+          const summary = container.goalService.getGoalStatus(goalId);
+          const tasks = container.taskRepo.listByGoalId(goalId).filter((t) => !t.isArchived);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, goal, summary, tasks }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'moo_update_goal': {
+          const { goalId, title, description, verbatimPrompt, maxOpenTasksCap, status } = args as any;
+          const goal = container.goalService.updateGoal(goalId, {
+            title,
+            description,
+            verbatimPrompt,
+            maxOpenTasksCap,
+            status,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, goal, hint: 'Goal updated.' }, null, 2),
               },
             ],
           };
