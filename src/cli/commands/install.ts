@@ -11,7 +11,7 @@ export async function installCommand(target: string) {
     args: ['moo-tasks', 'mcp'],
   };
 
-  console.log(`\n${picocolors.bold(picocolors.blue('🐮 Moo Tasks Plugin Installer'))}\n`);
+  console.log(`\n${picocolors.bold(picocolors.blue('🐮 Moo Tasks Multi-Agent MCP Installer'))}\n`);
 
   // 1. Claude Code
   if (normalized === 'claude' || normalized === 'all') {
@@ -28,17 +28,65 @@ export async function installCommand(target: string) {
       config.mcpServers = config.mcpServers || {};
       config.mcpServers['moo-tasks'] = mcpConfigEntry;
       fs.writeFileSync(claudeConfigPath, JSON.stringify(config, null, 2));
-      console.log(`${picocolors.green('✔')} Configured Claude Code MCP: ${picocolors.cyan(claudeConfigPath)}`);
+      console.log(`${picocolors.green('✔')} Configured Claude Code: ${picocolors.cyan(claudeConfigPath)}`);
     } catch (err: any) {
       console.log(`${picocolors.yellow('!')} Claude Code config update skipped: ${err.message}`);
     }
   }
 
-  // 2. Antigravity / Gemini CLI
+  // 2. Cursor (.cursor/mcp.json)
+  if (normalized === 'cursor' || normalized === 'all') {
+    try {
+      const cursorDir = path.join(process.cwd(), '.cursor');
+      if (!fs.existsSync(cursorDir)) {
+        fs.mkdirSync(cursorDir, { recursive: true });
+      }
+      const cursorMcpPath = path.join(cursorDir, 'mcp.json');
+      let config: any = {};
+      if (fs.existsSync(cursorMcpPath)) {
+        try {
+          config = JSON.parse(fs.readFileSync(cursorMcpPath, 'utf-8'));
+        } catch {
+          config = {};
+        }
+      }
+      config.mcpServers = config.mcpServers || {};
+      config.mcpServers['moo-tasks'] = mcpConfigEntry;
+      fs.writeFileSync(cursorMcpPath, JSON.stringify(config, null, 2));
+      console.log(`${picocolors.green('✔')} Configured Cursor: ${picocolors.cyan(cursorMcpPath)}`);
+    } catch (err: any) {
+      console.log(`${picocolors.yellow('!')} Cursor config update skipped: ${err.message}`);
+    }
+  }
+
+  // 3. Windsurf (~/.codeium/windsurf/mcp_config.json)
+  if (normalized === 'windsurf' || normalized === 'all') {
+    try {
+      const windsurfDir = path.join(os.homedir(), '.codeium', 'windsurf');
+      if (fs.existsSync(windsurfDir)) {
+        const windsurfMcpPath = path.join(windsurfDir, 'mcp_config.json');
+        let config: any = {};
+        if (fs.existsSync(windsurfMcpPath)) {
+          try {
+            config = JSON.parse(fs.readFileSync(windsurfMcpPath, 'utf-8'));
+          } catch {
+            config = {};
+          }
+        }
+        config.mcpServers = config.mcpServers || {};
+        config.mcpServers['moo-tasks'] = mcpConfigEntry;
+        fs.writeFileSync(windsurfMcpPath, JSON.stringify(config, null, 2));
+        console.log(`${picocolors.green('✔')} Configured Windsurf: ${picocolors.cyan(windsurfMcpPath)}`);
+      }
+    } catch (err: any) {
+      console.log(`${picocolors.yellow('!')} Windsurf config update skipped: ${err.message}`);
+    }
+  }
+
+  // 4. Antigravity / Gemini CLI (.gemini/settings.json)
   if (normalized === 'antigravity' || normalized === 'agy' || normalized === 'all') {
     try {
-      const projectRoot = process.cwd();
-      const geminiDir = path.join(projectRoot, '.gemini');
+      const geminiDir = path.join(process.cwd(), '.gemini');
       if (!fs.existsSync(geminiDir)) {
         fs.mkdirSync(geminiDir, { recursive: true });
       }
@@ -54,22 +102,22 @@ export async function installCommand(target: string) {
       config.mcpServers = config.mcpServers || {};
       config.mcpServers['moo-tasks'] = mcpConfigEntry;
       fs.writeFileSync(mcpSettingsPath, JSON.stringify(config, null, 2));
-      console.log(`${picocolors.green('✔')} Configured Antigravity MCP: ${picocolors.cyan(mcpSettingsPath)}`);
+      console.log(`${picocolors.green('✔')} Configured Antigravity: ${picocolors.cyan(mcpSettingsPath)}`);
     } catch (err: any) {
       console.log(`${picocolors.yellow('!')} Antigravity config update skipped: ${err.message}`);
     }
   }
 
-  // 3. Codex / Generic MCP Config
-  if (normalized === 'codex' || normalized === 'all') {
+  // 5. Generic MCP Snippet
+  if (normalized === 'codex' || normalized === 'generic' || normalized === 'all') {
     const codexSnippet = {
       mcpServers: {
         'moo-tasks': mcpConfigEntry,
       },
     };
-    console.log(`\n${picocolors.bold(picocolors.white('Codex / Generic MCP Configuration:'))}`);
+    console.log(`\n${picocolors.bold(picocolors.white('Universal MCP Configuration Snippet:'))}`);
     console.log(picocolors.cyan(JSON.stringify(codexSnippet, null, 2)));
   }
 
-  console.log(`\n${picocolors.green('✔ Installation completed.')}\n`);
+  console.log(`\n${picocolors.green('✔ Installation completed successfully.')}\n`);
 }
