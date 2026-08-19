@@ -5,25 +5,43 @@ import {
   TaskNote,
   Decision,
   StatusHistoryEntry,
+  Workspace,
   TaskStatus,
+  TaskPriority,
+  TaskType,
   GoalStatus,
   DecisionStatus,
 } from '../../domain/types.js';
 
+export interface IWorkspaceRepository {
+  create(workspace: Workspace): Workspace;
+  findById(id: string): Workspace | null;
+  findByPath(rootPath: string): Workspace | null;
+  findByName(name: string): Workspace | null;
+  list(): Workspace[];
+  update(workspace: Workspace): Workspace;
+  delete(id: string): boolean;
+}
+
 export interface IGoalRepository {
   create(goal: Goal): Goal;
   findById(id: string): Goal | null;
-  list(projectPath: string, status?: GoalStatus): Goal[];
+  list(projectPath?: string, status?: GoalStatus, workspaceId?: string): Goal[];
   update(goal: Goal): Goal;
   delete(id: string): boolean;
   countOpenTasks(goalId: string): number;
 }
 
 export interface TaskFilter {
+  workspaceId?: string;
   goalId?: string;
   parentId?: string | null;
   status?: TaskStatus;
   statuses?: TaskStatus[];
+  priority?: TaskPriority;
+  type?: TaskType;
+  tag?: string;
+  tags?: string[];
   claimedByAgent?: string;
   isDeferred?: boolean;
   isArchived?: boolean;
@@ -58,7 +76,7 @@ export interface ITaskRepository {
 export interface IDecisionRepository {
   create(decision: Decision): Decision;
   findById(id: string): Decision | null;
-  list(projectPath?: string, status?: DecisionStatus, tag?: string): Decision[];
+  list(projectPath?: string, status?: DecisionStatus, tag?: string, workspaceId?: string): Decision[];
   update(decision: Decision): Decision;
   delete(id: string): boolean;
 }

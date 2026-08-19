@@ -15,6 +15,7 @@ export class SqliteDecisionRepository implements IDecisionRepository {
 
     return {
       id: row.id,
+      workspaceId: row.workspace_id || undefined,
       title: row.title,
       context: row.context,
       choice: row.choice,
@@ -33,13 +34,14 @@ export class SqliteDecisionRepository implements IDecisionRepository {
   create(decision: Decision): Decision {
     const stmt = this.db.prepare(`
       INSERT INTO decisions (
-        id, title, context, choice, rationale, status, superseded_by_id,
+        id, workspace_id, title, context, choice, rationale, status, superseded_by_id,
         tags, project_path, author_id, author_type, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       decision.id,
+      decision.workspaceId || null,
       decision.title,
       decision.context,
       decision.choice,
@@ -63,9 +65,17 @@ export class SqliteDecisionRepository implements IDecisionRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  list(projectPath?: string, status?: DecisionStatus, tag?: string): Decision[] {
-    let query = projectPath ? `SELECT * FROM decisions WHERE project_path = ?` : `SELECT * FROM decisions WHERE 1=1`;
-    const params: any[] = projectPath ? [projectPath] : [];
+  list(projectPath?: string, status?: DecisionStatus, tag?: string, workspaceId?: string): Decision[] {
+    let query = `SELECT * FROM decisions WHERE 1=1`;
+    const params: any[] = [];
+
+    if (workspaceId) {
+      query += ` AND workspace_id = ?`;
+      params.push(workspaceId);
+    } else if (projectPath) {
+      query += ` AND project_path = ?`;
+      params.push(projectPath);
+    }
 
     if (status) {
       query += ` AND status = ?`;
@@ -86,6 +96,7 @@ export class SqliteDecisionRepository implements IDecisionRepository {
   update(decision: Decision): Decision {
     const stmt = this.db.prepare(`
       UPDATE decisions SET
+        workspace_id = ?,
         title = ?,
         context = ?,
         choice = ?,
@@ -98,6 +109,7 @@ export class SqliteDecisionRepository implements IDecisionRepository {
     `);
 
     stmt.run(
+      decision.workspaceId || null,
       decision.title,
       decision.context,
       decision.choice,

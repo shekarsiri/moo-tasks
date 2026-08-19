@@ -19,11 +19,13 @@ export class GoalService {
     verbatimPrompt: string,
     projectPath: string,
     maxOpenTasksCap: number = 10,
-    description?: string
+    description?: string,
+    workspaceId?: string
   ): Goal {
     const now = new Date().toISOString();
     const goal: Goal = {
       id: `goal-${crypto.randomUUID().slice(0, 8)}`,
+      workspaceId,
       title: title.trim(),
       verbatimPrompt: verbatimPrompt.trim(),
       description: description ? description.trim() : undefined,
@@ -45,9 +47,11 @@ export class GoalService {
       verbatimPrompt?: string;
       maxOpenTasksCap?: number;
       status?: GoalStatus;
+      workspaceId?: string;
     }
   ): Goal {
     const goal = this.getGoal(goalId);
+    if (updates.workspaceId !== undefined) goal.workspaceId = updates.workspaceId;
     if (updates.title !== undefined) goal.title = updates.title.trim();
     if (updates.description !== undefined) goal.description = updates.description.trim();
     if (updates.verbatimPrompt !== undefined) goal.verbatimPrompt = updates.verbatimPrompt.trim();
@@ -72,8 +76,8 @@ export class GoalService {
     return goal;
   }
 
-  listGoals(projectPath: string, status?: GoalStatus): Goal[] {
-    return this.goalRepo.list(projectPath, status);
+  listGoals(projectPath?: string, status?: GoalStatus, workspaceId?: string): Goal[] {
+    return this.goalRepo.list(projectPath, status, workspaceId);
   }
 
   getGoalStatus(goalId: string): GoalStatusSummary {

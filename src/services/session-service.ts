@@ -27,6 +27,15 @@ export interface FileContextSummary {
   }>;
 }
 
+export interface StallWarning {
+  taskId: string;
+  taskTitle: string;
+  claimedByAgent?: string;
+  warningType: 'thrashing' | 'lease_stalled' | 'excessive_reopens' | 'missing_heartbeat';
+  message: string;
+  suggestedAction: string;
+}
+
 export class SessionService {
   constructor(
     private taskRepo: ITaskRepository,
@@ -35,6 +44,54 @@ export class SessionService {
     private taskLifecycleService: TaskLifecycleService,
     private noteRepo?: INoteRepository
   ) {}
+
+  detectAgentStallsAndThrashing(projectPath?: string): StallWarning[] {
+    const activeTasks = this.taskRepo.list({ isArchived: false });
+    const warnings: StallWarning[] = [];
+    const now = Date.now();
+
+    for (const t of activeTasks) {
+      // 1. Thrashing: Attempt count >= 2
+      if (t.attemptCount >= 2 && t.status !== 'done' && t.status !== 'dropped') {
+        warnings.push({
+          taskId: t.id,
+          taskTitle: t.title,
+          claimedByAgent: t.claimedByAgent,
+          warningType: 'thrashing',
+          message: `Task has failed ${t.attemptCount} consecutive automated attempts. Repeated code thrashing detected.`,
+          suggestedAction: 'Decompose task into smaller subtasks or escalate to human for architectural clarification.',
+        });
+      }
+
+      // 2. Excessive Reopens: Reopen count >= 2
+      if (t.reopenCount >= 2) {
+        warnings.push({
+          taskId: t.id,
+          taskTitle: t.title,
+          claimedByAgent: t.claimedByAgent,
+          warningType: 'excessive_reopens',
+          message: `Task has been reopened ${t.reopenCount} times after previous closure. Verification criteria may be underspecified.`,
+          suggestedAction: 'Review acceptance criteria and verify test cases before re-claiming.',
+        });
+      }
+
+      // 3. Lease Stalled / Expired in 'doing' state
+      if (t.status === 'doing') {
+        if (t.leaseExpiresAt && new Date(t.leaseExpiresAt).getTime() < now) {
+          warnings.push({
+            taskId: t.id,
+            taskTitle: t.title,
+            claimedByAgent: t.claimedByAgent,
+            warningType: 'lease_stalled',
+            message: `Active task claim lease expired at ${t.leaseExpiresAt}. Agent may have crashed or stalled silently.`,
+            suggestedAction: 'Release task or call moo_checkpoint to renew heartbeat.',
+          });
+        }
+      }
+    }
+
+    return warnings;
+  }
 
   whereDidILeaveOff(projectPath: string, agentId?: string): SessionResumeSummary {
     // 1. Abandoned or in-flight doing tasks
@@ -74,8 +131,32 @@ export class SessionService {
     };
   }
 
-  getCompactContext(projectPath: string, agentId?: string): string {
+  getCompactContext(
+    projectPath: string,
+    agentId?: string,
+    verbosity: 'ultra-dense' | 'standard' | 'full' = 'standard'
+  ): string {
     const summary = this.whereDidILeaveOff(projectPath, agentId);
+
+    if (verbosity === 'ultra-dense') {
+      const parts: string[] = ['[MOO CONTEXT]'];
+      if (summary.activeGoals && summary.activeGoals.length > 0) {
+        parts.push(`Goal: [${summary.activeGoals[0].id}] ${summary.activeGoals[0].title}`);
+      }
+      const myDoing = agentId
+        ? summary.abandonedDoingTasks.find((t) => t.claimedByAgent === agentId)
+        : summary.abandonedDoingTasks[0];
+      if (myDoing) {
+        parts.push(`Task: [${myDoing.id}] ${myDoing.title} (${myDoing.acceptanceCriteria})`);
+      } else if (summary.unblockedReadyTasks.length > 0) {
+        parts.push(`Ready: [${summary.unblockedReadyTasks[0].id}] ${summary.unblockedReadyTasks[0].title}`);
+      }
+      if (summary.settledDecisions.length > 0) {
+        parts.push(`ADRs: ${summary.settledDecisions.slice(0, 2).map((d) => `${d.title}->${d.choice}`).join('; ')}`);
+      }
+      return parts.join(' | ');
+    }
+
     const lines: string[] = ['# 🐮 MOO TASKS CONTEXT'];
 
     // 1. Active Goal
@@ -84,7 +165,11 @@ export class SessionService {
       lines.push('\n## 🎯 ACTIVE GOAL');
       lines.push(`- **[${topGoal.id}]**: ${topGoal.title}`);
       if (topGoal.verbatimPrompt) {
-        lines.push(`- *Prompt*: "${topGoal.verbatimPrompt.slice(0, 180)}"`);
+        const sliceLen = verbosity === 'full' ? 500 : 180;
+        lines.push(`- *Prompt*: "${topGoal.verbatimPrompt.slice(0, sliceLen)}"`);
+      }
+      if (verbosity === 'full' && topGoal.description) {
+        lines.push(`- *PRD*: ${topGoal.description.slice(0, 300)}...`);
       }
     }
 
@@ -103,6 +188,9 @@ export class SessionService {
       if (myDoing.leaseExpiresAt) {
         lines.push(`- *Lease Expires*: ${myDoing.leaseExpiresAt}`);
       }
+      if (verbosity === 'full' && myDoing.description) {
+        lines.push(`- *Description*: ${myDoing.description}`);
+      }
     } else {
       // Top unblocked
       const nextTask = summary.unblockedReadyTasks[0];
@@ -116,7 +204,7 @@ export class SessionService {
     // 3. Waiting on Human Alerts
     if (summary.waitingOnHumanTasks && summary.waitingOnHumanTasks.length > 0) {
       lines.push('\n## 🙋 WAITING ON HUMAN');
-      summary.waitingOnHumanTasks.slice(0, 3).forEach((t) => {
+      summary.waitingOnHumanTasks.slice(0, verbosity === 'full' ? 10 : 3).forEach((t) => {
         lines.push(`- **[${t.id}]**: ${t.title}`);
       });
     }
@@ -124,8 +212,8 @@ export class SessionService {
     // 4. Settled Decisions
     if (summary.settledDecisions && summary.settledDecisions.length > 0) {
       lines.push('\n## 🏛️ SETTLED DECISIONS (ADR)');
-      summary.settledDecisions.slice(0, 3).forEach((d) => {
-        lines.push(`- **${d.title}**: ${d.choice} (*${d.rationale.slice(0, 80)}*)`);
+      summary.settledDecisions.slice(0, verbosity === 'full' ? 10 : 3).forEach((d) => {
+        lines.push(`- **${d.title}**: ${d.choice} (*${d.rationale.slice(0, 120)}*)`);
       });
     }
 
@@ -140,6 +228,15 @@ export class SessionService {
     if (locks.length > 0) {
       lines.push('\n## 🔒 ACTIVE FILE LOCKS');
       lines.push(...locks);
+    }
+
+    // 6. Stall & Thrash Early Warnings
+    const stallWarnings = this.detectAgentStallsAndThrashing(projectPath);
+    if (stallWarnings.length > 0) {
+      lines.push('\n## ⚠️ AGENT STALL & THRASH WARNINGS');
+      stallWarnings.slice(0, 3).forEach((w) => {
+        lines.push(`- **[${w.taskId}]** ${w.message} (*Action*: ${w.suggestedAction})`);
+      });
     }
 
     return lines.join('\n');

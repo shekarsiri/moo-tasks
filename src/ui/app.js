@@ -1,20 +1,56 @@
 // Moo Tasks Ultra-Modern Frontend Engine
 
+const defaultDisplayProperties = {
+  id: true,
+  status: true,
+  assignee: true,
+  priority: true,
+  project: false,
+  dueDate: false,
+  milestone: false,
+  labels: true,
+  links: false,
+  timeInStatus: false,
+  created: false,
+  updated: false,
+};
+
+let savedProps = defaultDisplayProperties;
+try {
+  const parsed = JSON.parse(localStorage.getItem('moo_display_properties'));
+  if (parsed && typeof parsed === 'object') savedProps = { ...defaultDisplayProperties, ...parsed };
+} catch {}
+
 const state = {
   goals: [],
   tasks: [],
   decisions: [],
   activity: [],
   currentView: 'tasks',
-  viewMode: 'list', // 'list' | 'board'
+  viewMode: localStorage.getItem('moo_view_mode') || 'list', // 'list' | 'board'
   filterGoal: '',
   filterPriority: '',
+  filterType: '',
+  filterTag: '',
   filterAgent: '',
-  filterSort: 'default', // 'default' | 'priority-desc' | 'updated-desc' | 'thrash-desc'
+  filterSort: localStorage.getItem('moo_view_ordering') || 'default',
   filterSearch: '',
+  filterPreset: 'all', // 'active' | 'backlog' | 'all'
+  viewGrouping: localStorage.getItem('moo_view_grouping') || 'status', // 'status' | 'priority' | 'agent' | 'type' | 'goal' | 'none'
+  viewSubGrouping: localStorage.getItem('moo_view_subgrouping') || 'none',
+  viewOrdering: localStorage.getItem('moo_view_ordering') || 'priority',
+  viewOrderCompletedByRecency: localStorage.getItem('moo_view_recency') === 'true',
+  viewCompletedIssues: localStorage.getItem('moo_view_completed') || 'all',
+  viewShowSubIssues: localStorage.getItem('moo_view_show_subissues') !== 'false',
+  viewNestedSubIssues: localStorage.getItem('moo_view_nested_subissues') === 'true',
+  viewShowEmptyGroups: localStorage.getItem('moo_view_empty_groups') === 'true',
+  displayProperties: savedProps,
   selectedTaskId: null,
   selectedTaskIds: new Set(),
   collapsedColumns: new Set(JSON.parse(localStorage.getItem('moo_collapsed_columns') || '[]')),
+  collapsedGroups: new Set(),
+  currentIssueTab: 'assigned',
+  projectShortCode: 'MO',
   keyboardFocusedIndex: -1,
   paletteSelectedIndex: 0,
 };
@@ -108,7 +144,12 @@ function renderMarkdown(text) {
   if (!text) return '';
   if (window.marked && typeof window.marked.parse === 'function') {
     try {
-      return window.marked.parse(text, { breaks: true, gfm: true });
+      let html = window.marked.parse(text, { breaks: true, gfm: true });
+      // Enable interactive checkboxes (marked renders them as disabled by default)
+      html = html.replace(/<input\s+type="checkbox"\s+disabled(?:\s+checked)?/g, (match) => {
+        return match.replace(' disabled', '');
+      });
+      return html;
     } catch {
       // fallback
     }
@@ -203,16 +244,41 @@ const activeViewTitle = document.getElementById('activeViewTitle');
 const tasksViewSwitcher = document.getElementById('tasksViewSwitcher');
 const btnViewList = document.getElementById('btnViewList');
 const btnViewBoard = document.getElementById('btnViewBoard');
+const btnViewGraph = document.getElementById('btnViewGraph');
 const tasksListView = document.getElementById('tasksListView');
 const tasksBoardView = document.getElementById('tasksBoardView');
+const tasksGraphView = document.getElementById('tasksGraphView');
 const filterToolbar = document.getElementById('filterToolbar');
 
-const filterGoal = document.getElementById('filterGoal');
-const filterPriority = document.getElementById('filterPriority');
-const filterAgent = document.getElementById('filterAgent');
-const filterSort = document.getElementById('filterSort');
+// Linear Filter & Sort References
+const btnFilterMenu = document.getElementById('btnFilterMenu');
+const filterPopover = document.getElementById('filterPopover');
+const filterPopoverRoot = document.getElementById('filterPopoverRoot');
+const filterPopoverSub = document.getElementById('filterPopoverSub');
+const btnFilterSubBack = document.getElementById('btnFilterSubBack');
+const filterSubTitle = document.getElementById('filterSubTitle');
+const filterSubSearch = document.getElementById('filterSubSearch');
+const filterSubOptionsList = document.getElementById('filterSubOptionsList');
+const activeFilterChips = document.getElementById('activeFilterChips');
+const btnClearAllFilters = document.getElementById('btnClearAllFilters');
+const filterActiveBadge = document.getElementById('filterActiveBadge');
+
+const btnSortMenu = document.getElementById('btnSortMenu');
+const sortPopover = document.getElementById('sortPopover');
+const sortMenuLabel = document.getElementById('sortMenuLabel');
+
 const filterSearch = document.getElementById('filterSearch');
 const displayCountLabel = document.getElementById('displayCountLabel');
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 // Batch Actions & Shortcuts References
 const batchActionBar = document.getElementById('batchActionBar');
@@ -354,6 +420,9 @@ function initSSE() {
   eventSource.addEventListener('goals_updated', () => refreshAll());
   eventSource.addEventListener('decisions_updated', () => fetchDecisions());
   eventSource.addEventListener('activity_updated', () => fetchActivity());
+  eventSource.addEventListener('workspaces_updated', () => refreshAll());
+  eventSource.addEventListener('workspaces_switched', () => refreshAll());
+  eventSource.addEventListener('project_updated', () => refreshAll());
 
   eventSource.onerror = () => {
     try {
@@ -420,21 +489,201 @@ setInterval(() => {
 }, 1000);
 
 // API Fetching
+function getProjectShortCode(projectName) {
+  if (!projectName) return 'MO';
+  const clean = projectName.trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '');
+  const parts = clean.split(/[-_\s.]+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const code = parts.map((p) => p[0]).join('').slice(0, 3).toUpperCase();
+    if (code.length >= 2) return code;
+  }
+  const letters = clean.replace(/[^a-zA-Z]/g, '');
+  if (letters.length >= 2) {
+    return letters.slice(0, 2).toUpperCase();
+  }
+  return (clean.slice(0, 2) || 'MO').toUpperCase();
+}
+
+function updateWorkspaceNameInUI(name) {
+  if (!name) return;
+  const wsLbl = document.getElementById('workspaceNameLabel');
+  if (wsLbl) wsLbl.textContent = name;
+  const breadcrumbLbl = document.getElementById('headerWorkspaceBreadcrumb');
+  if (breadcrumbLbl) breadcrumbLbl.textContent = name;
+  const teamLbl = document.getElementById('teamProjectNameLabel');
+  if (teamLbl) teamLbl.textContent = name;
+  document.title = `${name} — My issues`;
+}
+
 async function fetchProjectInfo() {
   try {
     const res = await fetch('/api/project');
     const data = await res.json();
     if (data.projectName) {
-      const bc = document.getElementById('breadcrumbWorkspaceName');
-      if (bc) bc.textContent = data.projectName;
-      const lbl = document.getElementById('sidebarProjectLabel');
-      if (lbl) lbl.textContent = `${data.projectName} • Local Engine`;
-      document.title = `${data.projectName} — Moo Tasks`;
+      state.projectShortCode = getProjectShortCode(data.projectName);
+      updateWorkspaceNameInUI(data.projectName);
+    }
+    if (data.workspace) {
+      state.activeWorkspace = data.workspace;
+      updateWorkspaceNameInUI(data.workspace.name);
     }
   } catch (err) {
     // ignore
   }
 }
+
+async function fetchWorkspaces() {
+  try {
+    const res = await fetch('/api/workspaces');
+    const data = await res.json();
+    state.workspaces = data.workspaces || [];
+    state.activeWorkspace = data.activeWorkspace || state.activeWorkspace;
+    renderWorkspacesDropdown();
+  } catch (err) {
+    console.error('Failed to fetch workspaces:', err);
+  }
+}
+
+function renderWorkspacesDropdown() {
+  const container = document.getElementById('workspaceListContainer');
+  if (!container) return;
+
+  if (state.workspaces.length === 0) {
+    container.innerHTML = `<div class="text-xs text-slate-500 px-2 py-2">No workspaces found</div>`;
+    return;
+  }
+
+  container.innerHTML = state.workspaces
+    .map((ws) => {
+      const isActive = ws.id === state.activeWorkspace?.id;
+      return `
+        <div class="workspace-item group flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-xs transition-colors ${
+          isActive
+            ? 'bg-surfaceHover text-cyan-400 font-semibold'
+            : 'text-slate-300 hover:bg-surfaceHover hover:text-white'
+        }" onclick="switchWorkspace('${ws.id}')" title="${escapeHtml(ws.rootPath)}">
+          <div class="flex items-center gap-2 min-w-0 truncate">
+            <span class="w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-cyan-400' : 'bg-slate-600'}"></span>
+            <span class="truncate">${escapeHtml(ws.name)}</span>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0 ml-2">
+            <span class="text-[10px] text-slate-500 font-mono">${ws.openTasks || 0} open</span>
+            <div class="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity">
+              <button class="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50" onclick="editWorkspace(event, '${ws.id}')" title="Rename display name">
+                <i data-lucide="pencil" class="w-3 h-3"></i>
+              </button>
+              <button class="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-slate-700/50" onclick="deleteWorkspace(event, '${ws.id}')" title="Unregister workspace">
+                <i data-lucide="trash-2" class="w-3 h-3"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+  refreshLucideIcons();
+}
+
+window.editWorkspace = (e, workspaceId) => {
+  if (e) {
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  const ws = state.workspaces.find((w) => w.id === workspaceId) || state.activeWorkspace;
+  if (!ws) return;
+
+  const modal = document.getElementById('modalEditWorkspace');
+  const inputId = document.getElementById('inputEditWorkspaceId');
+  const inputName = document.getElementById('inputEditWorkspaceName');
+  const inputPath = document.getElementById('inputEditWorkspacePath');
+  const inputRemote = document.getElementById('inputEditWorkspaceRemote');
+
+  if (inputId) inputId.value = ws.id;
+  if (inputName) inputName.value = ws.name || '';
+  if (inputPath) inputPath.value = ws.rootPath || '';
+  if (inputRemote) inputRemote.value = ws.gitRemote || '';
+
+  const wsDropdown = document.getElementById('workspaceDropdownMenu');
+  if (wsDropdown) wsDropdown.classList.add('hidden');
+
+  if (modal) {
+    modal.classList.remove('hidden');
+    refreshLucideIcons();
+    setTimeout(() => inputName?.focus(), 50);
+  }
+};
+
+window.openRegisterWorkspaceModal = (e) => {
+  if (e) {
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  const modal = document.getElementById('modalRegisterWorkspace');
+  const inputPath = document.getElementById('inputRegisterWorkspacePath');
+  const inputName = document.getElementById('inputRegisterWorkspaceName');
+  if (inputPath) inputPath.value = '';
+  if (inputName) inputName.value = '';
+
+  const wsDropdown = document.getElementById('workspaceDropdownMenu');
+  if (wsDropdown) wsDropdown.classList.add('hidden');
+
+  if (modal) {
+    modal.classList.remove('hidden');
+    refreshLucideIcons();
+    setTimeout(() => inputPath?.focus(), 50);
+  }
+};
+
+window.deleteWorkspace = async (e, workspaceId) => {
+  if (e) {
+    e.stopPropagation();
+    e.preventDefault();
+  }
+  const ws = state.workspaces.find((w) => w.id === workspaceId);
+  const name = ws ? ws.name : workspaceId;
+  const ok = confirm(`Are you sure you want to unregister workspace "${name}"?\n(Tasks and data will remain safe in global database).`);
+  if (!ok) return;
+
+  try {
+    const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Unregistered workspace "${name}"`, 'info');
+      await fetchWorkspaces();
+      if (state.activeWorkspace?.id === workspaceId && state.workspaces.length > 0) {
+        await switchWorkspace(state.workspaces[0].id);
+      } else {
+        await refreshAll();
+      }
+    } else {
+      showToast('Failed to delete workspace', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+};
+
+window.switchWorkspace = async (workspaceId) => {
+  try {
+    const res = await fetch('/api/workspaces/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      state.activeWorkspace = data.activeWorkspace;
+      const wsDropdown = document.getElementById('workspaceDropdownMenu');
+      if (wsDropdown) wsDropdown.classList.add('hidden');
+      await refreshAll();
+      showToast(`Switched to workspace: ${data.activeWorkspace.name}`, 'success');
+    }
+  } catch (err) {
+    showToast(`Failed to switch workspace: ${err.message}`, 'error');
+  }
+};
 
 async function fetchGoals() {
   try {
@@ -470,6 +719,7 @@ async function fetchTasks() {
     renderReviewFeed();
     renderResumeView();
     updateAssigneeFilter();
+    updateTagFilter();
     updateSidebarCounters();
     refreshLucideIcons();
   } catch (err) {
@@ -503,7 +753,7 @@ async function fetchActivity() {
 }
 
 async function refreshAll() {
-  await Promise.all([fetchProjectInfo(), fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
+  await Promise.all([fetchProjectInfo(), fetchWorkspaces(), fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
   if (state.selectedTaskId) {
     const activeEl = document.activeElement;
     const isTyping =
@@ -537,11 +787,52 @@ window.toggleMobileSidebar = (open) => {
   }
 };
 
+// Workspace Dropdown Toggle & Register Handlers
+const wsDropdownBtn = document.getElementById('workspaceDropdownBtn');
+const wsDropdownMenu = document.getElementById('workspaceDropdownMenu');
+if (wsDropdownBtn && wsDropdownMenu) {
+  wsDropdownBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    wsDropdownMenu.classList.toggle('hidden');
+    fetchWorkspaces();
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if (
+    wsDropdownMenu &&
+    !wsDropdownMenu.contains(e.target) &&
+    e.target !== wsDropdownBtn &&
+    !wsDropdownBtn?.contains(e.target)
+  ) {
+    wsDropdownMenu.classList.add('hidden');
+  }
+});
+
+const btnRegisterWorkspace = document.getElementById('btnRegisterWorkspace');
+if (btnRegisterWorkspace) {
+  btnRegisterWorkspace.addEventListener('click', (e) => {
+    window.openRegisterWorkspaceModal(e);
+  });
+}
+
+// Sidebar workspace name label quick edit on double click
+const workspaceNameLabel = document.getElementById('workspaceNameLabel');
+if (workspaceNameLabel) {
+  workspaceNameLabel.addEventListener('dblclick', (e) => {
+    if (state.activeWorkspace) {
+      window.editWorkspace(e, state.activeWorkspace.id);
+    }
+  });
+}
+
 // Sidebar Navigation
 navItems.forEach((btn) => {
   btn.addEventListener('click', () => {
     const view = btn.getAttribute('data-view');
-    switchView(view);
+    const mode = btn.getAttribute('data-mode');
+    if (view) switchView(view);
+    if (mode) setViewMode(mode);
   });
 });
 
@@ -593,16 +884,19 @@ function switchView(viewName, updateHash = true) {
   refreshLucideIcons();
 }
 
-// View Mode (List vs Board)
+// View Mode (List vs Board vs Graph)
 if (btnViewList) btnViewList.onclick = () => setViewMode('list');
 if (btnViewBoard) btnViewBoard.onclick = () => setViewMode('board');
+if (btnViewGraph) btnViewGraph.onclick = () => setViewMode('graph');
 
 function setViewMode(mode) {
   state.viewMode = mode;
   if (btnViewList) btnViewList.classList.toggle('active', mode === 'list');
   if (btnViewBoard) btnViewBoard.classList.toggle('active', mode === 'board');
+  if (btnViewGraph) btnViewGraph.classList.toggle('active', mode === 'graph');
   if (tasksListView) tasksListView.classList.toggle('hidden', mode !== 'list');
   if (tasksBoardView) tasksBoardView.classList.toggle('hidden', mode !== 'board');
+  if (tasksGraphView) tasksGraphView.classList.toggle('hidden', mode !== 'graph');
   renderTasks();
 }
 
@@ -610,14 +904,51 @@ function setViewMode(mode) {
 function getFilteredTasks() {
   let list = state.tasks.filter((t) => !t.isArchived);
 
+  // 1. Preset Filter (Active / Backlog / All)
+  if (state.filterPreset === 'active') {
+    list = list.filter((t) => t.status !== 'done' && !t.isDeferred);
+  } else if (state.filterPreset === 'backlog') {
+    list = list.filter((t) => t.isDeferred || t.status === 'backlog');
+  }
+
+  // 2. Completed issues filter
+  if (state.viewCompletedIssues === 'hide') {
+    list = list.filter((t) => t.status !== 'done');
+  } else if (state.viewCompletedIssues === 'past_day') {
+    list = list.filter((t) => {
+      if (t.status !== 'done') return true;
+      const tTime = new Date(t.lastStateChangeAt || t.createdAt || 0).getTime();
+      return Date.now() - tTime <= 24 * 3600 * 1000;
+    });
+  } else if (state.viewCompletedIssues === 'past_week') {
+    list = list.filter((t) => {
+      if (t.status !== 'done') return true;
+      const tTime = new Date(t.lastStateChangeAt || t.createdAt || 0).getTime();
+      return Date.now() - tTime <= 7 * 24 * 3600 * 1000;
+    });
+  } else if (state.viewCompletedIssues === 'past_month') {
+    list = list.filter((t) => {
+      if (t.status !== 'done') return true;
+      const tTime = new Date(t.lastStateChangeAt || t.createdAt || 0).getTime();
+      return Date.now() - tTime <= 30 * 24 * 3600 * 1000;
+    });
+  }
+
+  // 3. Goal / Dimension Filters
   if (state.filterGoal === '__orphans__') {
     list = list.filter((t) => !t.goalId);
   } else if (state.filterGoal) {
     list = list.filter((t) => t.goalId === state.filterGoal);
   }
 
+  if (state.filterType) {
+    list = list.filter((t) => (t.type || 'feature') === state.filterType);
+  }
   if (state.filterPriority) {
     list = list.filter((t) => t.priority === state.filterPriority);
+  }
+  if (state.filterTag) {
+    list = list.filter((t) => (t.tags || []).includes(state.filterTag));
   }
   if (state.filterAgent) {
     list = list.filter((t) => t.claimedByAgent === state.filterAgent);
@@ -628,47 +959,582 @@ function getFilteredTasks() {
       (t) =>
         t.title.toLowerCase().includes(q) ||
         t.id.toLowerCase().includes(q) ||
+        (t.type && t.type.toLowerCase().includes(q)) ||
+        (t.tags && t.tags.some((tag) => tag.toLowerCase().includes(q))) ||
         (t.description && t.description.toLowerCase().includes(q))
     );
   }
 
-  // Custom Sorting Options
-  const priorityRank = { critical: 4, high: 3, medium: 2, low: 1 };
-  if (state.filterSort === 'priority-desc') {
-    list.sort((a, b) => (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0));
-  } else if (state.filterSort === 'updated-desc') {
+  // 4. Ordering
+  const priorityRank = { critical: 5, urgent: 5, high: 4, medium: 3, low: 2, none: 1 };
+  const statusRank = { doing: 5, todo: 4, 'waiting-on-human': 3, 'blocked-on-dependency': 2, backlog: 1, done: 0, dropped: -1 };
+  
+  const ordering = state.viewOrdering || state.filterSort || 'priority';
+
+  if (ordering === 'priority' || ordering === 'priority-desc') {
+    list.sort((a, b) => (priorityRank[b.priority] || 1) - (priorityRank[a.priority] || 1));
+  } else if (ordering === 'status') {
+    list.sort((a, b) => (statusRank[b.status] || 0) - (statusRank[a.status] || 0));
+  } else if (ordering === 'title') {
+    list.sort((a, b) => a.title.localeCompare(b.title));
+  } else if (ordering === 'updated' || ordering === 'updated-desc') {
     list.sort((a, b) => new Date(b.lastStateChangeAt || 0).getTime() - new Date(a.lastStateChangeAt || 0).getTime());
-  } else if (state.filterSort === 'thrash-desc') {
+  } else if (ordering === 'created') {
+    list.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  } else if (ordering === 'thrash' || ordering === 'thrash-desc') {
     list.sort((a, b) => ((b.attemptCount || 0) + (b.reopenCount || 0) * 2) - ((a.attemptCount || 0) + (a.reopenCount || 0) * 2));
+  }
+
+  // 5. Order completed by recency
+  if (state.viewOrderCompletedByRecency) {
+    list.sort((a, b) => {
+      if (a.status === 'done' && b.status === 'done') {
+        return new Date(b.lastStateChangeAt || b.createdAt || 0).getTime() - new Date(a.lastStateChangeAt || a.createdAt || 0).getTime();
+      }
+      return 0;
+    });
   }
 
   return list;
 }
 
-if (filterGoal) {
-  filterGoal.onchange = (e) => {
-    state.filterGoal = e.target.value;
+// Linear Filter & Sort State Controllers
+function getActiveFilterCount() {
+  let count = 0;
+  if (state.filterGoal) count++;
+  if (state.filterType) count++;
+  if (state.filterPriority) count++;
+  if (state.filterTag) count++;
+  if (state.filterAgent) count++;
+  return count;
+}
+
+function renderActiveFilterChips() {
+  if (!activeFilterChips) return;
+  activeFilterChips.innerHTML = '';
+
+  const count = getActiveFilterCount();
+  if (filterActiveBadge) {
+    if (count > 0) {
+      filterActiveBadge.textContent = count;
+      filterActiveBadge.classList.remove('hidden');
+    } else {
+      filterActiveBadge.classList.add('hidden');
+    }
+  }
+
+  const container = document.getElementById('activeFilterChipsContainer');
+  if (container) {
+    container.classList.toggle('hidden', count === 0);
+  }
+
+  // 1. Goal Chip
+  if (state.filterGoal) {
+    let goalVal = state.filterGoal;
+    if (state.filterGoal === '__orphans__') {
+      goalVal = 'Scope Drift';
+    } else {
+      const found = state.goals.find((g) => g.goal.id === state.filterGoal);
+      if (found) goalVal = found.goal.title;
+    }
+    createFilterChip(
+      'Goal',
+      `<i data-lucide="target" class="w-3 h-3 text-indigo-400"></i>`,
+      goalVal,
+      `<i data-lucide="compass" class="w-3 h-3 text-slate-400"></i>`,
+      () => {
+        state.filterGoal = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
+  // 2. Type Chip
+  if (state.filterType) {
+    const typeNames = {
+      feature: 'Feature',
+      bug: 'Bug',
+      refactor: 'Refactor',
+      test: 'Test',
+      docs: 'Docs',
+      chore: 'Chore',
+      spike: 'Spike',
+      security: 'Security',
+    };
+    createFilterChip(
+      'Type',
+      `<i data-lucide="sparkles" class="w-3 h-3 text-amber-400"></i>`,
+      typeNames[state.filterType] || state.filterType,
+      `<span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>`,
+      () => {
+        state.filterType = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
+  // 3. Priority Chip
+  if (state.filterPriority) {
+    const pCapital = state.filterPriority.charAt(0).toUpperCase() + state.filterPriority.slice(1);
+    createFilterChip(
+      'Priority',
+      `<i data-lucide="flag" class="w-3 h-3 text-rose-400"></i>`,
+      pCapital,
+      `<span class="priority-signal ${state.filterPriority}"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span></span>`,
+      () => {
+        state.filterPriority = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
+  // 4. Tag Chip
+  if (state.filterTag) {
+    createFilterChip(
+      'Tag',
+      `<i data-lucide="tag" class="w-3 h-3 text-emerald-400"></i>`,
+      `#${state.filterTag}`,
+      `<span class="w-2 h-2 rounded-full bg-emerald-400 inline-block"></span>`,
+      () => {
+        state.filterTag = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
+  // 5. Assignee Chip
+  if (state.filterAgent) {
+    createFilterChip(
+      'Assignee',
+      `<i data-lucide="bot" class="w-3 h-3 text-blue-400"></i>`,
+      state.filterAgent,
+      `<i data-lucide="user" class="w-3 h-3 text-slate-300"></i>`,
+      () => {
+        state.filterAgent = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
+  refreshLucideIcons();
+}
+
+function createFilterChip(dimLabel, dimIconHtml, valLabel, valIconHtml, onRemove) {
+  const chip = document.createElement('div');
+  chip.className = 'filter-chip';
+  chip.innerHTML = `
+    <span class="filter-chip-dimension">${dimIconHtml || ''} <span>${escapeHtml(dimLabel)}</span></span>
+    <span class="filter-chip-operator">is</span>
+    <span class="filter-chip-value">${valIconHtml || ''} <span>${escapeHtml(valLabel)}</span></span>
+    <button type="button" class="filter-chip-remove" title="Remove filter" aria-label="Remove filter">
+      <i data-lucide="x" class="w-3 h-3"></i>
+    </button>
+  `;
+  chip.querySelector('.filter-chip-remove').onclick = (e) => {
+    e.stopPropagation();
+    onRemove();
+  };
+  activeFilterChips.appendChild(chip);
+}
+
+if (btnClearAllFilters) {
+  btnClearAllFilters.onclick = () => {
+    state.filterGoal = '';
+    state.filterType = '';
+    state.filterPriority = '';
+    state.filterTag = '';
+    state.filterAgent = '';
+    renderActiveFilterChips();
     renderTasks();
   };
 }
-if (filterPriority) {
-  filterPriority.onchange = (e) => {
-    state.filterPriority = e.target.value;
-    renderTasks();
+
+let currentFilterDimension = null;
+
+function openFilterPopover() {
+  if (!filterPopover) return;
+  filterPopover.classList.remove('hidden');
+  btnFilterMenu?.setAttribute('aria-expanded', 'true');
+  btnFilterMenu?.classList.add('active');
+  showFilterPopoverRoot();
+  if (sortPopover) closeSortPopover();
+}
+
+function closeFilterPopover() {
+  if (!filterPopover) return;
+  filterPopover.classList.add('hidden');
+  btnFilterMenu?.setAttribute('aria-expanded', 'false');
+  btnFilterMenu?.classList.remove('active');
+  currentFilterDimension = null;
+}
+
+function toggleFilterPopover() {
+  if (filterPopover?.classList.contains('hidden')) {
+    openFilterPopover();
+  } else {
+    closeFilterPopover();
+  }
+}
+
+if (btnFilterMenu) {
+  btnFilterMenu.onclick = (e) => {
+    e.stopPropagation();
+    toggleFilterPopover();
   };
 }
-if (filterAgent) {
-  filterAgent.onchange = (e) => {
-    state.filterAgent = e.target.value;
-    renderTasks();
+
+function showFilterPopoverRoot() {
+  if (!filterPopoverRoot || !filterPopoverSub) return;
+  filterPopoverRoot.classList.remove('hidden');
+  filterPopoverSub.classList.add('hidden');
+  currentFilterDimension = null;
+}
+
+function showFilterDimensionSubmenu(dimension) {
+  if (!filterPopoverRoot || !filterPopoverSub || !filterSubOptionsList) return;
+  currentFilterDimension = dimension;
+  filterPopoverRoot.classList.add('hidden');
+  filterPopoverSub.classList.remove('hidden');
+
+  const titles = {
+    goal: 'Goal',
+    type: 'Type',
+    priority: 'Priority',
+    tag: 'Tag',
+    agent: 'Assignee',
+  };
+  if (filterSubTitle) filterSubTitle.textContent = titles[dimension] || 'Back';
+  if (filterSubSearch) {
+    filterSubSearch.value = '';
+    setTimeout(() => filterSubSearch.focus(), 50);
+  }
+
+  renderSubmenuOptions(dimension, '');
+}
+
+function renderSubmenuOptions(dimension, searchQuery) {
+  if (!filterSubOptionsList) return;
+  filterSubOptionsList.innerHTML = '';
+  const query = (searchQuery || '').toLowerCase();
+
+  let options = [];
+
+  if (dimension === 'goal') {
+    options.push({ value: '__orphans__', label: 'Scope Drift (Orphans)', icon: 'target', color: 'text-amber-400' });
+    state.goals.forEach((item) => {
+      options.push({ value: item.goal.id, label: item.goal.title, icon: 'target', color: 'text-indigo-400' });
+    });
+  } else if (dimension === 'type') {
+    options = [
+      { value: 'feature', label: '✨ Feature' },
+      { value: 'bug', label: '🐛 Bug' },
+      { value: 'refactor', label: '♻️ Refactor' },
+      { value: 'test', label: '🧪 Test' },
+      { value: 'docs', label: '📚 Docs' },
+      { value: 'chore', label: '🧹 Chore' },
+      { value: 'spike', label: '🔬 Spike' },
+      { value: 'security', label: '🔒 Security' },
+    ];
+  } else if (dimension === 'priority') {
+    options = [
+      { value: 'critical', label: 'Critical', icon: 'chevrons-up', color: 'text-rose-500' },
+      { value: 'high', label: 'High', icon: 'chevron-up', color: 'text-amber-500' },
+      { value: 'medium', label: 'Medium', icon: 'equal', color: 'text-blue-400' },
+      { value: 'low', label: 'Low', icon: 'chevron-down', color: 'text-slate-500' },
+    ];
+  } else if (dimension === 'tag') {
+    const allTags = new Set();
+    state.tasks.forEach((t) => (t.tags || []).forEach((tag) => allTags.add(tag)));
+    Array.from(allTags).sort().forEach((tag) => {
+      options.push({ value: tag, label: `#${tag}` });
+    });
+  } else if (dimension === 'agent') {
+    const assignees = Array.from(new Set(state.tasks.map((t) => t.claimedByAgent).filter(Boolean)));
+    assignees.forEach((a) => {
+      options.push({ value: a, label: a, icon: 'bot', color: 'text-blue-400' });
+    });
+  }
+
+  const filteredOptions = query ? options.filter((o) => o.label.toLowerCase().includes(query)) : options;
+
+  if (filteredOptions.length === 0) {
+    filterSubOptionsList.innerHTML = `<div class="p-2 text-center text-slate-500 text-xs">No matching options</div>`;
+    return;
+  }
+
+  filteredOptions.forEach((opt) => {
+    const isSelected =
+      (dimension === 'goal' && state.filterGoal === opt.value) ||
+      (dimension === 'type' && state.filterType === opt.value) ||
+      (dimension === 'priority' && state.filterPriority === opt.value) ||
+      (dimension === 'tag' && state.filterTag === opt.value) ||
+      (dimension === 'agent' && state.filterAgent === opt.value);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition ${
+      isSelected ? 'bg-indigo-950/40 text-indigo-200 border border-indigo-500/30' : ''
+    }`;
+
+    let iconHtml = '';
+    if (opt.icon) {
+      iconHtml = `<i data-lucide="${opt.icon}" class="w-3.5 h-3.5 ${opt.color || 'text-slate-400'}"></i>`;
+    }
+
+    btn.innerHTML = `
+      <span class="flex items-center gap-2 truncate">${iconHtml}<span>${escapeHtml(opt.label)}</span></span>
+      ${isSelected ? '<i data-lucide="check" class="w-3.5 h-3.5 text-indigo-400 shrink-0"></i>' : ''}
+    `;
+
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (isSelected) {
+        if (dimension === 'goal') state.filterGoal = '';
+        if (dimension === 'type') state.filterType = '';
+        if (dimension === 'priority') state.filterPriority = '';
+        if (dimension === 'tag') state.filterTag = '';
+        if (dimension === 'agent') state.filterAgent = '';
+      } else {
+        if (dimension === 'goal') state.filterGoal = opt.value;
+        if (dimension === 'type') state.filterType = opt.value;
+        if (dimension === 'priority') state.filterPriority = opt.value;
+        if (dimension === 'tag') state.filterTag = opt.value;
+        if (dimension === 'agent') state.filterAgent = opt.value;
+      }
+      closeFilterPopover();
+      renderActiveFilterChips();
+      renderTasks();
+    };
+
+    filterSubOptionsList.appendChild(btn);
+  });
+
+  refreshLucideIcons();
+}
+
+document.querySelectorAll('#filterPopoverRoot [data-dimension]').forEach((btn) => {
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const dimension = btn.getAttribute('data-dimension');
+    showFilterDimensionSubmenu(dimension);
+  };
+});
+
+if (btnFilterSubBack) {
+  btnFilterSubBack.onclick = (e) => {
+    e.stopPropagation();
+    showFilterPopoverRoot();
   };
 }
-if (filterSort) {
-  filterSort.onchange = (e) => {
-    state.filterSort = e.target.value;
-    renderTasks();
+
+if (filterSubSearch) {
+  filterSubSearch.oninput = (e) => {
+    if (currentFilterDimension) {
+      renderSubmenuOptions(currentFilterDimension, e.target.value);
+    }
   };
 }
+
+// Sort Popover Menu Handlers
+function openSortPopover() {
+  if (!sortPopover) return;
+  sortPopover.classList.remove('hidden');
+  btnSortMenu?.setAttribute('aria-expanded', 'true');
+  btnSortMenu?.classList.add('active');
+  if (filterPopover) closeFilterPopover();
+}
+
+function closeSortPopover() {
+  if (!sortPopover) return;
+  sortPopover.classList.add('hidden');
+  btnSortMenu?.setAttribute('aria-expanded', 'false');
+  btnSortMenu?.classList.remove('active');
+}
+
+function toggleSortPopover() {
+  if (sortPopover?.classList.contains('hidden')) {
+    openSortPopover();
+  } else {
+    closeSortPopover();
+  }
+}
+
+if (btnSortMenu) {
+  btnSortMenu.onclick = (e) => {
+    e.stopPropagation();
+    toggleSortPopover();
+  };
+}
+
+function updateSortMenuUI() {
+  const selGrouping = document.getElementById('selViewGrouping');
+  const selSubGrouping = document.getElementById('selViewSubGrouping');
+  const selOrdering = document.getElementById('selViewOrdering');
+  const chkRecency = document.getElementById('chkViewRecency');
+  const selCompleted = document.getElementById('selViewCompleted');
+  const chkShowSub = document.getElementById('chkViewShowSubIssues');
+  const chkNestedSub = document.getElementById('chkViewNestedSub');
+  const chkEmptyGroups = document.getElementById('chkViewEmptyGroups');
+
+  if (selGrouping) selGrouping.value = state.viewGrouping || 'status';
+  if (selSubGrouping) selSubGrouping.value = state.viewSubGrouping || 'none';
+  if (selOrdering) selOrdering.value = state.viewOrdering || 'priority';
+  if (chkRecency) chkRecency.checked = state.viewOrderCompletedByRecency === true;
+  if (selCompleted) selCompleted.value = state.viewCompletedIssues || 'all';
+  if (chkShowSub) chkShowSub.checked = state.viewShowSubIssues !== false;
+  if (chkNestedSub) chkNestedSub.checked = state.viewNestedSubIssues === true;
+  if (chkEmptyGroups) chkEmptyGroups.checked = state.viewShowEmptyGroups === true;
+
+  document.querySelectorAll('#displayPropertiesContainer .display-prop-pill').forEach((btn) => {
+    const prop = btn.getAttribute('data-prop');
+    const isAct = state.displayProperties && state.displayProperties[prop] !== false;
+    btn.classList.toggle('active', isAct);
+  });
+
+  document.querySelectorAll('.tab-preset-btn').forEach((btn) => {
+    const preset = btn.getAttribute('data-preset');
+    btn.classList.toggle('active', preset === state.filterPreset);
+  });
+}
+
+function initViewOptionsControls() {
+  const selGrouping = document.getElementById('selViewGrouping');
+  const selSubGrouping = document.getElementById('selViewSubGrouping');
+  const selOrdering = document.getElementById('selViewOrdering');
+  const chkRecency = document.getElementById('chkViewRecency');
+  const selCompleted = document.getElementById('selViewCompleted');
+  const chkShowSub = document.getElementById('chkViewShowSubIssues');
+  const chkNestedSub = document.getElementById('chkViewNestedSub');
+  const chkEmptyGroups = document.getElementById('chkViewEmptyGroups');
+
+  if (selGrouping) {
+    selGrouping.onchange = (e) => {
+      state.viewGrouping = e.target.value;
+      localStorage.setItem('moo_view_grouping', state.viewGrouping);
+      renderTasks();
+    };
+  }
+
+  if (selSubGrouping) {
+    selSubGrouping.onchange = (e) => {
+      state.viewSubGrouping = e.target.value;
+      localStorage.setItem('moo_view_subgrouping', state.viewSubGrouping);
+      renderTasks();
+    };
+  }
+
+  if (selOrdering) {
+    selOrdering.onchange = (e) => {
+      state.viewOrdering = e.target.value;
+      state.filterSort = state.viewOrdering;
+      localStorage.setItem('moo_view_ordering', state.viewOrdering);
+      renderTasks();
+    };
+  }
+
+  if (chkRecency) {
+    chkRecency.onchange = (e) => {
+      state.viewOrderCompletedByRecency = e.target.checked;
+      localStorage.setItem('moo_view_recency', state.viewOrderCompletedByRecency ? 'true' : 'false');
+      renderTasks();
+    };
+  }
+
+  if (selCompleted) {
+    selCompleted.onchange = (e) => {
+      state.viewCompletedIssues = e.target.value;
+      localStorage.setItem('moo_view_completed', state.viewCompletedIssues);
+      renderTasks();
+    };
+  }
+
+  if (chkShowSub) {
+    chkShowSub.onchange = (e) => {
+      state.viewShowSubIssues = e.target.checked;
+      localStorage.setItem('moo_view_show_subissues', state.viewShowSubIssues ? 'true' : 'false');
+      renderTasks();
+    };
+  }
+
+  if (chkNestedSub) {
+    chkNestedSub.onchange = (e) => {
+      state.viewNestedSubIssues = e.target.checked;
+      localStorage.setItem('moo_view_nested_subissues', state.viewNestedSubIssues ? 'true' : 'false');
+      renderTasks();
+    };
+  }
+
+  if (chkEmptyGroups) {
+    chkEmptyGroups.onchange = (e) => {
+      state.viewShowEmptyGroups = e.target.checked;
+      localStorage.setItem('moo_view_empty_groups', state.viewShowEmptyGroups ? 'true' : 'false');
+      renderTasks();
+    };
+  }
+
+  // Display Properties Pills
+  document.querySelectorAll('#displayPropertiesContainer .display-prop-pill').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const prop = btn.getAttribute('data-prop');
+      state.displayProperties[prop] = !state.displayProperties[prop];
+      btn.classList.toggle('active', state.displayProperties[prop]);
+      localStorage.setItem('moo_display_properties', JSON.stringify(state.displayProperties));
+      renderTasks();
+    };
+  });
+
+  // View Mode Switcher inside View Options Popover
+  document.querySelectorAll('#viewOptModeSwitcher .view-opt-tab').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const mode = btn.getAttribute('data-mode');
+      setViewMode(mode);
+      document.querySelectorAll('#viewOptModeSwitcher .view-opt-tab').forEach((b) => b.classList.toggle('active', b.getAttribute('data-mode') === mode));
+    };
+  });
+
+  // Subheader Presets
+  document.querySelectorAll('.tab-preset-btn').forEach((btn) => {
+    btn.onclick = () => {
+      document.querySelectorAll('.tab-preset-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.filterPreset = btn.getAttribute('data-preset') || 'all';
+      renderTasks();
+    };
+  });
+
+  // Add filter chip button (+)
+  const btnAddChip = document.getElementById('btnAddFilterChip');
+  if (btnAddChip) {
+    btnAddChip.onclick = (e) => {
+      e.stopPropagation();
+      openFilterPopover();
+    };
+  }
+}
+
+initViewOptionsControls();
+
+// Close popovers when clicking outside
+document.addEventListener('click', (e) => {
+  if (filterPopover && !filterPopover.classList.contains('hidden')) {
+    if (!document.getElementById('filterMenuContainer')?.contains(e.target)) {
+      closeFilterPopover();
+    }
+  }
+  if (sortPopover && !sortPopover.classList.contains('hidden')) {
+    if (!document.getElementById('sortMenuContainer')?.contains(e.target)) {
+      closeSortPopover();
+    }
+  }
+});
+
 if (filterSearch) {
   filterSearch.oninput = (e) => {
     state.filterSearch = e.target.value;
@@ -707,14 +1573,24 @@ window.handleBatchStatusChange = async (newStatus) => {
   if (!newStatus || state.selectedTaskIds.size === 0) return;
   const taskIds = Array.from(state.selectedTaskIds);
   showToast(`Updating ${taskIds.length} issues to ${newStatus}...`, 'info');
-  for (const id of taskIds) {
-    await fetch(`/api/tasks/${id}/status`, {
+  try {
+    const res = await fetch('/api/tasks/bulk/update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus, authorId: 'human-batch' }),
+      body: JSON.stringify({
+        taskIds,
+        updates: { status: newStatus, authorId: 'human-batch' },
+      }),
     });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Updated ${taskIds.length} issues to ${newStatus}`, 'success');
+    } else {
+      showToast(`Failed to batch update: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
   }
-  showToast(`Updated ${taskIds.length} issues to ${newStatus}`, 'success');
   clearTaskSelection();
   refreshAll();
 };
@@ -723,14 +1599,24 @@ window.handleBatchPriorityChange = async (newPriority) => {
   if (!newPriority || state.selectedTaskIds.size === 0) return;
   const taskIds = Array.from(state.selectedTaskIds);
   showToast(`Setting priority for ${taskIds.length} issues...`, 'info');
-  for (const id of taskIds) {
-    await fetch(`/api/tasks/${id}`, {
-      method: 'PUT',
+  try {
+    const res = await fetch('/api/tasks/bulk/update', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ priority: newPriority }),
+      body: JSON.stringify({
+        taskIds,
+        updates: { priority: newPriority },
+      }),
     });
+    const data = await res.json();
+    if (data.success) {
+      showToast(`Updated priority for ${taskIds.length} issues`, 'success');
+    } else {
+      showToast(`Failed to batch update priority: ${data.error || 'Unknown error'}`, 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
   }
-  showToast(`Updated priority for ${taskIds.length} issues`, 'success');
   clearTaskSelection();
   refreshAll();
 };
@@ -746,42 +1632,61 @@ window.toggleBoardColumn = (colStatus) => {
 };
 
 function renderGoalFilters() {
-  if (!filterGoal) return;
-  const cur = filterGoal.value;
-  filterGoal.innerHTML = '<option value="">All Goals</option><option value="__orphans__">Scope Drift (Orphans)</option>';
   const inputTaskGoal = document.getElementById('inputTaskGoal');
-  if (inputTaskGoal) inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
-
-  state.goals.forEach((item) => {
-    const g = item.goal;
-    const opt = document.createElement('option');
-    opt.value = g.id;
-    opt.textContent = `${g.title}`;
-    filterGoal.appendChild(opt);
-
-    if (inputTaskGoal) {
-      const opt2 = document.createElement('option');
-      opt2.value = g.id;
-      opt2.textContent = g.title;
-      inputTaskGoal.appendChild(opt2);
-    }
-  });
-  filterGoal.value = cur;
+  if (inputTaskGoal) {
+    const curVal = inputTaskGoal.value;
+    inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
+    state.goals.forEach((item) => {
+      const g = item.goal;
+      const opt = document.createElement('option');
+      opt.value = g.id;
+      opt.textContent = g.title;
+      inputTaskGoal.appendChild(opt);
+    });
+    inputTaskGoal.value = curVal;
+  }
+  renderActiveFilterChips();
 }
 
 function updateAssigneeFilter() {
-  if (!filterAgent) return;
-  const assignees = Array.from(new Set(state.tasks.map((t) => t.claimedByAgent).filter(Boolean)));
-  const cur = filterAgent.value;
-  filterAgent.innerHTML = '<option value="">All Assignees</option>';
-  assignees.forEach((a) => {
-    const opt = document.createElement('option');
-    opt.value = a;
-    opt.textContent = a;
-    filterAgent.appendChild(opt);
-  });
-  filterAgent.value = cur;
+  renderActiveFilterChips();
 }
+
+function updateTagFilter() {
+  renderActiveFilterChips();
+}
+
+window.filterByTag = (tag) => {
+  state.filterTag = tag;
+  renderActiveFilterChips();
+  renderTasks();
+};
+
+function getTypeBadge(type) {
+  const t = type || 'feature';
+  switch (t) {
+    case 'feature':
+      return `<span class="type-badge type-feature" title="Feature"><i data-lucide="sparkles" class="w-3 h-3"></i><span>feat</span></span>`;
+    case 'bug':
+      return `<span class="type-badge type-bug" title="Bug"><i data-lucide="bug" class="w-3 h-3"></i><span>bug</span></span>`;
+    case 'refactor':
+      return `<span class="type-badge type-refactor" title="Refactor"><i data-lucide="refresh-cw" class="w-3 h-3"></i><span>refactor</span></span>`;
+    case 'test':
+      return `<span class="type-badge type-test" title="Test"><i data-lucide="flask-conical" class="w-3 h-3"></i><span>test</span></span>`;
+    case 'docs':
+      return `<span class="type-badge type-docs" title="Docs"><i data-lucide="book-open" class="w-3 h-3"></i><span>docs</span></span>`;
+    case 'chore':
+      return `<span class="type-badge type-chore" title="Chore"><i data-lucide="wrench" class="w-3 h-3"></i><span>chore</span></span>`;
+    case 'spike':
+      return `<span class="type-badge type-spike" title="Spike"><i data-lucide="zap" class="w-3 h-3"></i><span>spike</span></span>`;
+    case 'security':
+      return `<span class="type-badge type-security" title="Security"><i data-lucide="shield-alert" class="w-3 h-3"></i><span>sec</span></span>`;
+    default:
+      return `<span class="type-badge type-feature"><i data-lucide="tag" class="w-3 h-3"></i><span>${t}</span></span>`;
+  }
+}
+
+
 
 function updateSidebarCounters() {
   const activeTasks = state.tasks.filter((t) => !t.isArchived);
@@ -808,20 +1713,187 @@ function updateSidebarCounters() {
   }
 }
 
-// Priority Icon Helper (Lucide SVGs)
-function getPriorityIcon(priority) {
-  switch (priority) {
-    case 'critical':
-      return `<i data-lucide="chevrons-up" class="w-3.5 h-3.5 text-rose-500" title="Critical"></i>`;
-    case 'high':
-      return `<i data-lucide="chevron-up" class="w-3.5 h-3.5 text-amber-500" title="High"></i>`;
-    case 'medium':
-      return `<i data-lucide="equal" class="w-3.5 h-3.5 text-blue-400" title="Medium"></i>`;
-    case 'low':
-      return `<i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-500" title="Low"></i>`;
-    default:
-      return `<i data-lucide="minus" class="w-3.5 h-3.5 text-slate-600"></i>`;
+// Priority Signal Bar Helper (Signal strength 3-bar indicator & urgent exclamation icon)
+function getPrioritySignal(priority) {
+  const p = (priority || '').toLowerCase();
+  if (p === 'critical' || p === 'urgent') {
+    return `<div class="priority-signal urgent" title="${p === 'critical' ? 'Critical' : 'Urgent'}"><svg class="w-3.5 h-3.5 text-amber-500" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.5V8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.25" r="0.75" fill="currentColor"/></svg></div>`;
   }
+  if (p === 'high') {
+    return `<div class="priority-signal high" title="High"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span><span class="priority-signal-bar bar-3 filled"></span></div>`;
+  }
+  if (p === 'medium') {
+    return `<div class="priority-signal medium" title="Medium"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span><span class="priority-signal-bar bar-3"></span></div>`;
+  }
+  if (p === 'low') {
+    return `<div class="priority-signal low" title="Low"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2"></span><span class="priority-signal-bar bar-3"></span></div>`;
+  }
+  return `<span class="priority-none text-slate-600 font-mono text-xs tracking-tighter" title="No priority">---</span>`;
+}
+const getPriorityIcon = getPrioritySignal;
+
+// Status Icon Helper (Backlog dotted circle, Todo circle, Doing pie, Done check)
+function getStatusIcon(status, isBacklog) {
+  if (isBacklog || status === 'dropped') {
+    return `<svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"><circle cx="12" cy="12" r="9"/></svg>`;
+  }
+  if (status === 'doing') {
+    return `<svg class="w-3.5 h-3.5 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 9 9h-9z" fill="currentColor"/></svg>`;
+  }
+  if (status === 'done') {
+    return `<svg class="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
+  }
+  return `<svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>`;
+}
+
+// Colored Dot Tag Badge Helper
+function getTagDotColor(tag) {
+  const t = (tag || '').toLowerCase();
+  if (t === 'api' || t === 'bug' || t === 'security') return '#ef4444';
+  if (t === 'backend') return '#06b6d4';
+  if (t === 'feature') return '#a855f7';
+  if (t === 'melonade') return '#ec4899';
+  if (t === 'android') return '#6b7280';
+  if (t === 'frontend' || t === 'ui') return '#3b82f6';
+  return '#8b5cf6';
+}
+
+function renderTagBadges(tags) {
+  if (!tags || tags.length === 0) return '';
+  return tags
+    .map((tag) => {
+      const color = getTagDotColor(tag);
+      return `
+        <span class="tag-badge">
+          <span class="tag-badge-dot" style="background-color: ${color}"></span>
+          <span>${escapeHtml(tag)}</span>
+        </span>
+      `;
+    })
+    .join('');
+}
+const renderTagPills = renderTagBadges;
+
+// Hexagon Project Badge Helper
+function renderProjectBadge(goal) {
+  if (!goal) return '';
+  return `
+    <span class="project-badge">
+      <svg class="w-3 h-3 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polygon points="12 2 21 7 21 17 12 22 3 17 3 7 12 2"/>
+      </svg>
+      <span class="truncate max-w-[150px]">${escapeHtml(goal.title)}</span>
+    </span>
+  `;
+}
+
+// Title Formatter with Inline Code Highlight
+function formatTitleWithCode(title) {
+  if (!title) return '';
+  let escaped = escapeHtml(title);
+  escaped = escaped.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+  escaped = escaped.replace(/(tenant-id\/[a-zA-Z0-9_\-\.]+)/g, '<code class="inline-code">$1</code>');
+  return escaped;
+}
+
+// Date Formatter (e.g. Jul 28 or Nov 2025)
+function formatIssueDate(dateStr) {
+  if (!dateStr) return 'Nov 2025';
+  const d = new Date(dateStr);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const month = months[d.getMonth()] || 'Jul';
+  const day = d.getDate();
+  const year = d.getFullYear();
+  if (year < 2026) {
+    return `${month} ${year}`;
+  }
+  return `${month} ${day}`;
+}
+
+// Dynamic Agent Avatar Color Palette & Generator
+function getAgentColor(agentName) {
+  if (!agentName) return { bg: '#1c1e24', text: '#94a3b8', border: '#2e333d' };
+  const palette = [
+    { bg: '#3b82f6', text: '#ffffff', border: '#60a5fa' }, // Blue
+    { bg: '#6366f1', text: '#ffffff', border: '#818cf8' }, // Indigo
+    { bg: '#8b5cf6', text: '#ffffff', border: '#a78bfa' }, // Purple
+    { bg: '#ec4899', text: '#ffffff', border: '#f472b6' }, // Pink
+    { bg: '#10b981', text: '#ffffff', border: '#34d399' }, // Emerald
+    { bg: '#06b6d4', text: '#ffffff', border: '#22d3ee' }, // Cyan
+    { bg: '#f59e0b', text: '#ffffff', border: '#fbbf24' }, // Amber
+    { bg: '#f43f5e', text: '#ffffff', border: '#fb7185' }, // Rose
+    { bg: '#14b8a6', text: '#ffffff', border: '#2dd4bf' }, // Teal
+  ];
+  let hash = 0;
+  for (let i = 0; i < agentName.length; i++) {
+    hash = agentName.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % palette.length;
+  return palette[index];
+}
+
+// Avatar Initials Helper
+function getAvatarInitials(claimedBy) {
+  if (!claimedBy) return '';
+  const clean = claimedBy.replace(/[^a-zA-Z0-9\s-_]/g, '').trim();
+  if (!clean) return 'AG';
+  const parts = clean.split(/[\s\-_]+/);
+  if (parts.length >= 2 && parts[0] && parts[1]) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return clean.slice(0, 2).toUpperCase();
+}
+
+// Render Dynamic Assignee / Agent Avatar Component
+function renderAgentAvatar(claimedBy, size = 'md') {
+  const isSm = size === 'sm';
+  const sizeClasses = isSm ? 'w-4 h-4 text-[8.5px]' : 'w-5 h-5 text-[9.5px]';
+  if (!claimedBy) {
+    return `
+      <div class="avatar-circle avatar-unassigned ${sizeClasses}" title="Unassigned — Click to assign agent">
+        <svg class="${isSm ? 'w-2.5 h-2.5' : 'w-3 h-3'} text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="8" r="4"/>
+          <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/>
+        </svg>
+      </div>
+    `;
+  }
+  const color = getAgentColor(claimedBy);
+  const initials = getAvatarInitials(claimedBy);
+  return `
+    <div class="avatar-circle ${sizeClasses}" style="background-color: ${color.bg}; border-color: ${color.border}; color: ${color.text};" title="Assigned Agent: @${escapeHtml(claimedBy)}">
+      ${initials}
+    </div>
+  `;
+}
+
+// Issue Key Short Code Formatter (e.g. MO-101, SH-123)
+function formatIssueKey(id, task) {
+  const prefix = state.projectShortCode || 'MO';
+  const targetTask = task || (state.tasks && state.tasks.find((t) => t.id === id));
+  if (targetTask && targetTask.orderIndex) {
+    return `${prefix}-${targetTask.orderIndex}`;
+  }
+  if (!id) return `${prefix}-1`;
+  if (id.startsWith(`${prefix}-`)) return id;
+  const match = String(id).match(/^(?:[A-Za-z]{2,}-)?(\d+)$/);
+  if (match) {
+    return `${prefix}-${match[1]}`;
+  }
+  if (id.startsWith('task-')) {
+    if (state.tasks && state.tasks.length > 0) {
+      const idx = state.tasks.findIndex((t) => t.id === id);
+      if (idx !== -1) {
+        return `${prefix}-${idx + 1}`;
+      }
+    }
+    const hex = id.replace('task-', '');
+    const num = parseInt(hex.slice(0, 4), 16);
+    if (!isNaN(num)) {
+      return `${prefix}-${(num % 900) + 100}`;
+    }
+  }
+  return id;
 }
 
 // Status Name & Dot Helper
@@ -834,105 +1906,339 @@ const statusConfig = {
   dropped: { label: 'Dropped', class: 'dropped' },
 };
 
-// Render Tasks (List & Board)
+// Render Tasks (List, Board, Graph)
 function renderTasks() {
+  renderActiveFilterChips();
+  updateSortMenuUI();
   const filtered = getFilteredTasks();
   if (displayCountLabel) displayCountLabel.textContent = `${filtered.length} issues`;
 
+  // Dynamically compute the maximum key width across all tasks for perfect column alignment
+  let maxKeyLen = 4;
+  (state.tasks || []).forEach((t) => {
+    const key = formatIssueKey(t.id, t);
+    if (key && key.length > maxKeyLen) {
+      maxKeyLen = key.length;
+    }
+  });
+  document.documentElement.style.setProperty('--task-key-width', `${maxKeyLen + 0.5}ch`);
+
   if (state.viewMode === 'list') {
     renderListView(filtered);
-  } else {
+  } else if (state.viewMode === 'board') {
     renderBoardView(filtered);
+  } else if (state.viewMode === 'graph') {
+    renderGraphView(filtered);
   }
   refreshLucideIcons();
 }
 
-// Mode 1: List View
+// Group Collapse Toggle Handler
+window.toggleGroupCollapse = (groupId) => {
+  if (state.collapsedGroups.has(groupId)) {
+    state.collapsedGroups.delete(groupId);
+  } else {
+    state.collapsedGroups.add(groupId);
+  }
+  renderTasks();
+};
+
+window.grpAddHandler = (groupId) => {
+  if (modalCreateTask) {
+    modalCreateTask.classList.remove('hidden');
+    const chk = document.getElementById('inputTaskDeferred');
+    if (chk) chk.checked = groupId === 'backlog';
+    refreshLucideIcons();
+  }
+};
+
+// Sub-Issue Progress Pill Helper (e.g. ⭕ 0/8)
+function getSubissueProgressPill(task) {
+  if (state.viewShowSubIssues === false) return '';
+  const totalSubtasks = (task.dependsOnTaskIds && task.dependsOnTaskIds.length > 0) ? task.dependsOnTaskIds.length : 0;
+  if (totalSubtasks === 0) return '';
+  const doneSubtasks = task.dependsOnTaskIds.filter((id) => {
+    const dep = state.tasks.find((t) => t.id === id);
+    return dep && dep.status === 'done';
+  }).length;
+  return `
+    <span class="subissue-progress-pill ml-1.5" title="${doneSubtasks}/${totalSubtasks} subtasks completed">
+      <svg class="w-3 h-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="8"/></svg>
+      <span>${doneSubtasks}/${totalSubtasks}</span>
+    </span>
+  `;
+}
+
+// Dynamic Grouping Generator
+function getTaskGroups(tasks) {
+  const grouping = state.viewGrouping || 'status';
+  const showEmpty = state.viewShowEmptyGroups === true;
+  const groups = [];
+
+  if (grouping === 'status') {
+    const backlogTasks = tasks.filter((t) => t.isDeferred || t.status === 'backlog');
+    const nonBacklog = tasks.filter((t) => !t.isDeferred && t.status !== 'backlog');
+
+    const doingTasks = nonBacklog.filter((t) => t.status === 'doing');
+    const todoTasks = nonBacklog.filter((t) => t.status === 'todo');
+    const blockedTasks = nonBacklog.filter((t) => t.status === 'blocked-on-dependency');
+    const waitingTasks = nonBacklog.filter((t) => t.status === 'waiting-on-human');
+    const doneTasks = nonBacklog.filter((t) => t.status === 'done');
+    const droppedTasks = nonBacklog.filter((t) => t.status === 'dropped');
+
+    // In Progress
+    if (doingTasks.length > 0 || (showEmpty && state.filterPreset !== 'backlog')) {
+      groups.push({
+        id: 'doing',
+        title: 'In Progress',
+        count: doingTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 9 9h-9z" fill="currentColor"/></svg>`,
+        tasks: doingTasks,
+        showAdd: false,
+      });
+    }
+
+    // Todo
+    if (todoTasks.length > 0 || (showEmpty && state.filterPreset !== 'backlog') || (state.filterPreset === 'active' && doingTasks.length === 0 && blockedTasks.length === 0 && waitingTasks.length === 0)) {
+      groups.push({
+        id: 'todo',
+        title: 'Todo',
+        count: todoTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>`,
+        tasks: todoTasks,
+        showAdd: true,
+      });
+    }
+
+    // Blocked
+    if (blockedTasks.length > 0 || (showEmpty && state.filterPreset !== 'backlog')) {
+      groups.push({
+        id: 'blocked',
+        title: 'Blocked',
+        count: blockedTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`,
+        tasks: blockedTasks,
+        showAdd: false,
+      });
+    }
+
+    // Needs Human
+    if (waitingTasks.length > 0 || (showEmpty && state.filterPreset !== 'backlog')) {
+      groups.push({
+        id: 'waiting',
+        title: 'Needs Human',
+        count: waitingTasks.length,
+        icon: `<i data-lucide="inbox" class="w-3.5 h-3.5 text-purple-400"></i>`,
+        tasks: waitingTasks,
+        showAdd: false,
+      });
+    }
+
+    // Backlog
+    if (backlogTasks.length > 0 || showEmpty || state.filterPreset === 'backlog') {
+      groups.push({
+        id: 'backlog',
+        title: 'Backlog',
+        count: backlogTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 3"><circle cx="12" cy="12" r="9"/></svg>`,
+        tasks: backlogTasks,
+        showAdd: true,
+      });
+    }
+
+    // Done
+    if ((doneTasks.length > 0 || (showEmpty && state.filterPreset === 'all')) && state.filterPreset !== 'active' && state.filterPreset !== 'backlog') {
+      groups.push({
+        id: 'done',
+        title: 'Done',
+        count: doneTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`,
+        tasks: doneTasks,
+        showAdd: false,
+      });
+    }
+
+    // Dropped
+    if (droppedTasks.length > 0 && state.filterPreset === 'all') {
+      groups.push({
+        id: 'dropped',
+        title: 'Dropped',
+        count: droppedTasks.length,
+        icon: `<svg class="w-3.5 h-3.5 text-slate-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+        tasks: droppedTasks,
+        showAdd: false,
+      });
+    }
+  } else if (grouping === 'priority') {
+    const priorities = [
+      { id: 'critical', title: 'Critical / Urgent', icon: `<span class="priority-signal critical"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span><span class="priority-signal-bar bar-3 filled"></span></span>` },
+      { id: 'high', title: 'High Priority', icon: `<span class="priority-signal high"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span><span class="priority-signal-bar bar-3 filled"></span></span>` },
+      { id: 'medium', title: 'Medium Priority', icon: `<span class="priority-signal medium"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span><span class="priority-signal-bar bar-3"></span></span>` },
+      { id: 'low', title: 'Low Priority', icon: `<span class="priority-signal low"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2"></span><span class="priority-signal-bar bar-3"></span></span>` },
+    ];
+    priorities.forEach((p) => {
+      const pTasks = tasks.filter((t) => t.priority === p.id);
+      if (pTasks.length > 0 || showEmpty) {
+        groups.push({
+          id: `p-${p.id}`,
+          title: p.title,
+          count: pTasks.length,
+          icon: p.icon,
+          tasks: pTasks,
+          showAdd: true,
+        });
+      }
+    });
+  } else if (grouping === 'agent') {
+    const agentMap = new Map();
+    tasks.forEach((t) => {
+      const a = t.claimedByAgent || 'Unassigned';
+      if (!agentMap.has(a)) agentMap.set(a, []);
+      agentMap.get(a).push(t);
+    });
+    if (showEmpty && !agentMap.has('Unassigned')) agentMap.set('Unassigned', []);
+    agentMap.forEach((aTasks, agent) => {
+      groups.push({
+        id: `agent-${agent}`,
+        title: agent === 'Unassigned' ? 'Unassigned' : `@${agent}`,
+        count: aTasks.length,
+        icon: renderAgentAvatar(agent === 'Unassigned' ? null : agent, 'sm'),
+        tasks: aTasks,
+        showAdd: true,
+      });
+    });
+  } else if (grouping === 'type') {
+    const types = ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'];
+    types.forEach((tp) => {
+      const tTasks = tasks.filter((t) => (t.type || 'feature') === tp);
+      if (tTasks.length > 0 || showEmpty) {
+        groups.push({
+          id: `type-${tp}`,
+          title: tp.charAt(0).toUpperCase() + tp.slice(1),
+          count: tTasks.length,
+          icon: getTypeBadge(tp),
+          tasks: tTasks,
+          showAdd: true,
+        });
+      }
+    });
+  } else if (grouping === 'goal') {
+    const goalMap = new Map();
+    state.goals.forEach((g) => goalMap.set(g.goal.id, { title: g.goal.title, tasks: [] }));
+    goalMap.set('__no_goal__', { title: 'No Goal / Scope Drift', tasks: [] });
+    tasks.forEach((t) => {
+      const gid = t.goalId || '__no_goal__';
+      if (!goalMap.has(gid)) goalMap.set(gid, { title: gid, tasks: [] });
+      goalMap.get(gid).tasks.push(t);
+    });
+    goalMap.forEach((val, gid) => {
+      if (val.tasks.length > 0 || showEmpty) {
+        groups.push({
+          id: `goal-${gid}`,
+          title: val.title,
+          count: val.tasks.length,
+          icon: `<i data-lucide="target" class="w-3.5 h-3.5 text-indigo-400"></i>`,
+          tasks: val.tasks,
+          showAdd: true,
+        });
+      }
+    });
+  } else {
+    // None / Flat List
+    groups.push({
+      id: 'all',
+      title: 'All Issues',
+      count: tasks.length,
+      icon: `<i data-lucide="layers" class="w-3.5 h-3.5 text-slate-400"></i>`,
+      tasks: tasks,
+      showAdd: true,
+    });
+  }
+
+  return groups;
+}
+
+// Mode 1: List View (Exact OpenReplay Layout with View Options)
 function renderListView(tasks) {
   if (!tasksListView) return;
   tasksListView.innerHTML = '';
 
-  const groups = [
-    { status: 'doing', label: 'In Progress' },
-    { status: 'waiting-on-human', label: 'Waiting on Human' },
-    { status: 'blocked-on-dependency', label: 'Blocked on Dependency' },
-    { status: 'todo', label: 'Todo' },
-    { status: 'done', label: 'Done' },
-    { status: 'dropped', label: 'Dropped' },
-  ];
-
-  let taskGlobalIndex = 0;
+  const groups = getTaskGroups(tasks);
+  const dp = state.displayProperties || {};
 
   groups.forEach((grp) => {
-    const groupTasks = tasks.filter((t) => t.status === grp.status);
-    if (groupTasks.length === 0 && (grp.status === 'dropped' || grp.status === 'blocked-on-dependency')) {
-      return;
-    }
-
+    const isCollapsed = state.collapsedGroups && state.collapsedGroups.has(grp.id);
     const groupEl = document.createElement('div');
-    groupEl.className = 'list-group';
-
-    const cfg = statusConfig[grp.status];
+    groupEl.className = 'issue-group';
 
     groupEl.innerHTML = `
-      <div class="list-group-header">
-        <div class="list-group-title">
-          <span class="status-dot ${cfg.class}"></span>
-          <span>${grp.label}</span>
-          <span class="text-slate-500 font-mono text-[10px]">(${groupTasks.length})</span>
+      <div class="issue-group-header" onclick="toggleGroupCollapse('${grp.id}')">
+        <div class="issue-group-left">
+          <span class="issue-group-toggle">
+            <svg class="w-3 h-3 transition-transform ${isCollapsed ? '-rotate-90' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </span>
+          ${grp.icon || ''}
+          <span class="issue-group-title">${grp.title}</span>
+          <span class="issue-group-count">${grp.tasks.length}</span>
+          ${grp.dateRange ? `<span class="issue-group-date-range">${grp.dateRange}</span>` : ''}
         </div>
+        ${grp.showAdd ? `
+          <button class="issue-group-add-btn" onclick="event.stopPropagation(); grpAddHandler('${grp.id}')" title="Add issue to ${grp.title}">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        ` : ''}
       </div>
-      <div class="list-rows-container"></div>
+      <div class="issue-group-rows ${isCollapsed ? 'hidden' : ''}"></div>
     `;
 
-    const rowsContainer = groupEl.querySelector('.list-rows-container');
+    const rowsContainer = groupEl.querySelector('.issue-group-rows');
 
-    if (groupTasks.length === 0) {
+    if (grp.tasks.length === 0) {
       const emptyRow = document.createElement('div');
-      emptyRow.className = 'p-3 text-center text-xs text-slate-600';
-      emptyRow.textContent = `No issues in ${grp.label.toLowerCase()}`;
+      emptyRow.className = 'px-8 py-6 text-xs text-slate-500 flex items-center justify-between border-b border-borderSubtle/50';
+      emptyRow.innerHTML = `
+        <span class="italic">No issues in ${grp.title.toLowerCase()}</span>
+        ${grp.showAdd ? `
+          <button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface hover:bg-surfaceHover border border-borderDefault text-slate-300 text-xs transition" onclick="event.stopPropagation(); grpAddHandler('${grp.id}')">
+            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>Add issue</span>
+          </button>
+        ` : ''}
+      `;
       rowsContainer.appendChild(emptyRow);
     } else {
-      groupTasks.forEach((task) => {
-        const isCurrentFocused = state.keyboardFocusedIndex === taskGlobalIndex;
-        taskGlobalIndex++;
-
+      grp.tasks.forEach((task) => {
         const row = document.createElement('div');
-        row.className = `list-row ${isCurrentFocused ? 'keyboard-focused' : ''}`;
+        row.className = 'issue-row';
         row.setAttribute('data-id', task.id);
 
         const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
-        const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
-        const hasActiveLease = task.status === 'doing' && task.leaseExpiresAt && new Date(task.leaseExpiresAt) > new Date();
+        const isBacklog = grp.id === 'backlog' || task.isDeferred;
+
+        const showPriority = dp.priority !== false;
+        const showId = dp.id !== false;
+        const showStatus = dp.status !== false;
+        const showProject = dp.project !== false;
+        const showLabels = dp.labels !== false;
+        const showAssignee = dp.assignee !== false;
+        const showDate = dp.updated !== false || dp.created !== false;
 
         row.innerHTML = `
-          <div class="list-col-check" onclick="event.stopPropagation()">
-            <input type="checkbox" class="list-row-checkbox" ${state.selectedTaskIds.has(task.id) ? 'checked' : ''} onchange="toggleTaskSelection('${task.id}', this.checked)">
+          <div class="issue-row-left">
+            ${showPriority ? `<div class="issue-priority-icon">${getPrioritySignal(task.priority)}</div>` : ''}
+            ${showId ? `<span class="issue-key">${formatIssueKey(task.id)}</span>` : ''}
+            ${showStatus ? `<div class="issue-status-icon">${getStatusIcon(task.status, isBacklog)}</div>` : ''}
+            <div class="issue-title-container">
+              <span class="issue-title-text">${formatTitleWithCode(task.title)}</span>
+              ${showProject && goal ? `<span class="issue-breadcrumb">› ${escapeHtml(goal.title)}</span>` : ''}
+            </div>
+            ${getSubissueProgressPill(task)}
           </div>
-          <div class="list-col-id flex items-center gap-1">
-            <span>${task.id}</span>
-            ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="High Thrash/Attempts"></i>` : ''}
-          </div>
-          <div class="list-col-priority">${getPriorityIcon(task.priority)}</div>
-          <div class="list-col-title">
-            <span>${task.title}</span>
-            <span class="text-[10.5px] text-slate-500 font-mono ml-2 font-normal">(${formatRelativeTime(task.lastStateChangeAt)})</span>
-          </div>
-          ${goal ? `<div class="list-col-goal">${goal.title}</div>` : `<div class="list-col-goal border-amber-900/40 text-amber-400 bg-amber-950/20">Scope Drift</div>`}
-          <div class="list-col-agent">
-            ${task.claimedByAgent ? `<span class="flex items-center gap-1"><i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 font-sans">Unassigned</span>`}
-          </div>
-          <div class="list-col-status">
-            ${hasActiveLease ? `
-              <span class="lease-countdown-badge mr-2" data-lease-expires="${task.leaseExpiresAt}" title="Active agent lease">
-                <span class="lease-pulse-dot"></span>
-                <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
-              </span>
-            ` : ''}
-            <span class="status-pill">
-              <span class="status-dot ${cfg.class}"></span>
-              <span class="text-slate-300">${cfg.label}</span>
-            </span>
+          <div class="issue-row-right">
+            ${showLabels ? renderTagBadges(task.tags) : ''}
+            ${showProject && goal ? renderProjectBadge(goal) : ''}
+            ${showAssignee ? renderAgentAvatar(task.claimedByAgent) : ''}
+            ${showDate ? `<span class="issue-date">${formatIssueDate(dp.created ? task.createdAt : (task.lastStateChangeAt || task.createdAt))}</span>` : ''}
           </div>
         `;
 
@@ -1033,12 +2339,16 @@ function renderBoardView(tasks) {
       card.innerHTML = `
         <div class="board-card-header">
           <div class="flex items-center gap-1 font-mono text-[11px] text-slate-500">
-            <span>${task.id}</span>
+            <span>${formatIssueKey(task.id)}</span>
             ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="Stalled"></i>` : ''}
           </div>
-          ${getPriorityIcon(task.priority)}
+          <div class="flex items-center gap-1.5">
+            ${getTypeBadge(task.type)}
+            ${getPrioritySignal(task.priority)}
+          </div>
         </div>
         <div class="board-card-title">${task.title}</div>
+        ${task.tags && task.tags.length > 0 ? `<div class="flex items-center gap-1 flex-wrap mb-2">${renderTagBadges(task.tags)}</div>` : ''}
         ${hasActiveLease ? `
           <div class="mb-2">
             <span class="lease-countdown-badge" data-lease-expires="${task.leaseExpiresAt}" title="Active agent lease">
@@ -1048,8 +2358,11 @@ function renderBoardView(tasks) {
           </div>
         ` : ''}
         <div class="board-card-footer">
-          ${task.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10.5px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 text-[10px]">Unassigned</span>`}
-          <span class="text-slate-500 text-[10px] font-mono">${formatRelativeTime(task.lastStateChangeAt)}</span>
+          <div class="flex items-center gap-1.5 min-w-0">
+            ${renderAgentAvatar(task.claimedByAgent, 'sm')}
+            ${task.claimedByAgent ? `<span class="text-indigo-300 font-mono text-[10.5px] truncate">@${escapeHtml(task.claimedByAgent)}</span>` : `<span class="text-slate-500 text-[10px]">Unassigned</span>`}
+          </div>
+          <span class="text-slate-500 text-[10px] font-mono shrink-0">${formatRelativeTime(task.lastStateChangeAt)}</span>
         </div>
       `;
 
@@ -1061,27 +2374,269 @@ function renderBoardView(tasks) {
   });
 }
 
+// Mode 3: Interactive Dependency DAG Graph View
+async function renderGraphView(tasks) {
+  if (!tasksGraphView) return;
+  tasksGraphView.innerHTML = '';
+
+  if (tasks.length === 0) {
+    tasksGraphView.innerHTML = `
+      <div class="flex flex-col items-center justify-center py-20 text-slate-500">
+        <i data-lucide="git-fork" class="w-12 h-12 text-slate-600 mb-3"></i>
+        <div class="text-sm font-medium text-slate-400">No issues to display in Dependency Graph</div>
+        <div class="text-xs text-slate-600 mt-1">Create issues and link dependencies to view workflow DAG</div>
+      </div>
+    `;
+    refreshLucideIcons();
+    return;
+  }
+
+  // Header Bar with Legend and Stats
+  const header = document.createElement('div');
+  header.className = 'flex items-center justify-between pb-3 border-b border-borderSubtle mb-4 select-none';
+  header.innerHTML = `
+    <div class="flex items-center gap-4 text-xs">
+      <span class="font-semibold text-slate-200 flex items-center gap-1.5 font-mono">
+        <i data-lucide="network" class="w-4 h-4 text-indigo-400"></i> WORKFLOW DAG
+      </span>
+      <span class="text-slate-500 font-mono text-[11px]">${tasks.length} Nodes</span>
+    </div>
+    <div class="flex items-center gap-3 text-[11px] text-slate-400 font-mono">
+      <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> Done</span>
+      <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-indigo-500"></span> In Progress</span>
+      <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-purple-500"></span> Needs Human</span>
+      <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span> Todo</span>
+      <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-red-500"></span> Blocked</span>
+    </div>
+  `;
+  tasksGraphView.appendChild(header);
+
+  // Fetch dependencies for all visible tasks
+  const taskMap = new Map();
+  tasks.forEach((t) => taskMap.set(t.id, t));
+
+  // Build edges
+  const edges = [];
+  const inDegree = new Map();
+  tasks.forEach((t) => {
+    inDegree.set(t.id, 0);
+  });
+
+  // Query dependency links from server or task fields
+  try {
+    const depsRes = await fetch('/api/tasks');
+    const depsData = await depsRes.json();
+    const allTasks = depsData.tasks || [];
+    
+    for (const t of allTasks) {
+      if (t.dependsOnTaskIds && Array.isArray(t.dependsOnTaskIds)) {
+        for (const depId of t.dependsOnTaskIds) {
+          if (taskMap.has(depId) && taskMap.has(t.id)) {
+            edges.push({ from: depId, to: t.id });
+            inDegree.set(t.id, (inDegree.get(t.id) || 0) + 1);
+          }
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  // Calculate topological depth layers
+  const depth = new Map();
+  const queue = [];
+  tasks.forEach((t) => {
+    if ((inDegree.get(t.id) || 0) === 0) {
+      depth.set(t.id, 0);
+      queue.push(t.id);
+    }
+  });
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    const currDepth = depth.get(currentId) || 0;
+    const outgoing = edges.filter((e) => e.from === currentId);
+    for (const edge of outgoing) {
+      const nextDepth = Math.max(depth.get(edge.to) || 0, currDepth + 1);
+      depth.set(edge.to, nextDepth);
+      queue.push(edge.to);
+    }
+  }
+
+  // Group into layers
+  const layers = new Map();
+  let maxDepth = 0;
+  tasks.forEach((t) => {
+    const d = depth.get(t.id) || 0;
+    maxDepth = Math.max(maxDepth, d);
+    if (!layers.has(d)) layers.set(d, []);
+    layers.get(d).push(t);
+  });
+
+  // Graph Canvas Area
+  const canvasWrapper = document.createElement('div');
+  canvasWrapper.className = 'relative flex-1 overflow-auto w-full min-h-[480px] p-4 bg-app/60 rounded-lg border border-borderSubtle';
+
+  const nodeWidth = 240;
+  const nodeHeight = 84;
+  const gapX = 100;
+  const gapY = 32;
+
+  const nodePositions = new Map(); // id -> { x, y, cx, cy }
+  let maxColHeight = 0;
+
+  for (let col = 0; col <= maxDepth; col++) {
+    const colTasks = layers.get(col) || [];
+    const colX = 30 + col * (nodeWidth + gapX);
+    colTasks.forEach((t, row) => {
+      const colY = 30 + row * (nodeHeight + gapY);
+      nodePositions.set(t.id, {
+        x: colX,
+        y: colY,
+        cx: colX + nodeWidth,
+        cy: colY + nodeHeight / 2,
+        inX: colX,
+        inY: colY + nodeHeight / 2,
+      });
+      maxColHeight = Math.max(maxColHeight, colY + nodeHeight + 40);
+    });
+  }
+
+  const canvasWidth = Math.max(900, 30 + (maxDepth + 1) * (nodeWidth + gapX) + 60);
+  const canvasHeight = Math.max(500, maxColHeight + 60);
+
+  // SVG Layer for Bezier Arrows
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', `${canvasWidth}`);
+  svg.setAttribute('height', `${canvasHeight}`);
+  svg.style.position = 'absolute';
+  svg.style.top = '0';
+  svg.style.left = '0';
+  svg.style.pointerEvents = 'none';
+  svg.style.zIndex = '1';
+
+  svg.innerHTML = `
+    <defs>
+      <marker id="dag-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 1 L 10 5 L 0 9 z" fill="#5e6ad2" />
+      </marker>
+    </defs>
+  `;
+
+  edges.forEach((edge) => {
+    const fromPos = nodePositions.get(edge.from);
+    const toPos = nodePositions.get(edge.to);
+    if (!fromPos || !toPos) return;
+
+    const startX = fromPos.cx;
+    const startY = fromPos.cy;
+    const endX = toPos.inX;
+    const endY = toPos.inY;
+    const dx = Math.max(40, (endX - startX) / 2);
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute(
+      'd',
+      `M ${startX} ${startY} C ${startX + dx} ${startY}, ${endX - dx} ${endY}, ${endX} ${endY}`
+    );
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', '#5e6ad2');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-dasharray', 'none');
+    path.setAttribute('marker-end', 'url(#dag-arrow)');
+    svg.appendChild(path);
+  });
+
+  canvasWrapper.appendChild(svg);
+
+  // HTML Node Cards Layer
+  tasks.forEach((task) => {
+    const pos = nodePositions.get(task.id);
+    if (!pos) return;
+
+    const cfg = statusConfig[task.status] || { label: task.status, class: 'todo' };
+    const priorityColor =
+      task.priority === 'critical'
+        ? 'text-red-400 bg-red-500/10 border-red-500/30'
+        : task.priority === 'high'
+        ? 'text-amber-400 bg-amber-500/10 border-amber-500/30'
+        : 'text-slate-400 bg-slate-500/10 border-slate-500/30';
+
+    const card = document.createElement('div');
+    card.className =
+      'absolute bg-surface border border-borderDefault hover:border-indigo-500/70 transition-all rounded-lg p-2.5 cursor-pointer shadow-lg hover:shadow-indigo-500/10 flex flex-col justify-between select-none group';
+    card.style.left = `${pos.x}px`;
+    card.style.top = `${pos.y}px`;
+    card.style.width = `${nodeWidth}px`;
+    card.style.height = `${nodeHeight}px`;
+    card.style.zIndex = '2';
+
+    card.innerHTML = `
+      <div>
+        <div class="flex items-center justify-between mb-1">
+          <div class="flex items-center gap-1.5 font-mono text-[10px] text-slate-400">
+            <span class="status-dot ${cfg.class}"></span>
+            <span class="font-semibold text-slate-300">${task.id}</span>
+          </div>
+          <span class="text-[9.5px] uppercase font-mono px-1.5 py-0.5 rounded border ${priorityColor}">${task.priority}</span>
+        </div>
+        <div class="text-[12px] font-medium text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition-colors">${task.title}</div>
+      </div>
+      <div class="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1 border-t border-borderSubtle">
+        <span>${cfg.label}</span>
+        ${task.claimedByAgent ? `<span class="text-indigo-400 flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${task.claimedByAgent}</span>` : '<span>Unclaimed</span>'}
+      </div>
+    `;
+
+    card.onclick = () => openInspector(task.id);
+    canvasWrapper.appendChild(card);
+  });
+
+  tasksGraphView.appendChild(canvasWrapper);
+  refreshLucideIcons();
+}
+
 // Slide-Over Inspector Drawer
-async function openInspector(taskId, showDrawer = true, updateHash = true) {
-  state.selectedTaskId = taskId;
+async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = true) {
+  if (!taskIdOrShortCode) return;
+
+  // Resolve target task from state.tasks if passing a short code (e.g. MO-123, SH-123)
+  let targetTask = state.tasks.find((t) => t.id === taskIdOrShortCode);
+  if (!targetTask) {
+    targetTask = state.tasks.find((t) => formatIssueKey(t.id, t) === taskIdOrShortCode);
+  }
+  if (!targetTask) {
+    const match = String(taskIdOrShortCode).match(/^(?:[A-Za-z]{2,}-)?(\d+)$/);
+    if (match) {
+      const orderIdx = parseInt(match[1], 10);
+      targetTask = state.tasks.find((t) => t.orderIndex === orderIdx);
+    }
+  }
+
+  const lookupId = targetTask ? targetTask.id : taskIdOrShortCode;
+  const shortKey = targetTask ? formatIssueKey(targetTask.id, targetTask) : taskIdOrShortCode;
+
+  state.selectedTaskId = lookupId;
   if (updateHash) {
-    window.location.hash = `#/tasks/${taskId}`;
+    window.location.hash = `#/tasks/${shortKey}`;
   }
   try {
-    const res = await fetch(`/api/tasks/${taskId}`);
+    const res = await fetch(`/api/tasks/${lookupId}`);
     const data = await res.json();
     const task = data.task;
+    if (!task) return;
     const subtasks = data.subtasks || [];
     const dependencies = data.dependencies || [];
     const dependents = data.dependents || [];
     const notes = data.notes || [];
 
+    const displayKey = formatIssueKey(task.id, task);
     const cfg = statusConfig[task.status] || { label: task.status, class: 'todo' };
     const drawerTaskId = document.getElementById('drawerTaskId');
     const drawerStatusDot = document.getElementById('drawerStatusDot');
     const drawerPriorityBadge = document.getElementById('drawerPriorityBadge');
 
-    if (drawerTaskId) drawerTaskId.textContent = task.id;
+    if (drawerTaskId) drawerTaskId.textContent = displayKey;
     if (drawerStatusDot) drawerStatusDot.className = `status-dot ${cfg.class}`;
     if (drawerPriorityBadge) drawerPriorityBadge.textContent = task.priority;
 
@@ -1111,6 +2666,29 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           </select>
         </div>
 
+        <span class="property-label">Backlog / Queue</span>
+        <div class="property-value flex items-center gap-2">
+          <label class="toggle-switch">
+            <input type="checkbox" ${task.isDeferred ? 'checked' : ''} onchange="handleSaveInlineField('${task.id}', 'isDeferred', this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+          <span class="text-xs text-slate-300">${task.isDeferred ? 'In Backlog (Deferred)' : 'In Active Queue'}</span>
+        </div>
+
+        <span class="property-label">Type</span>
+        <div class="property-value flex items-center gap-2">
+          <select class="filter-select text-xs" onchange="handleSaveInlineField('${task.id}', 'type', this.value)">
+            <option value="feature" ${(task.type || 'feature') === 'feature' ? 'selected' : ''}>✨ Feature</option>
+            <option value="bug" ${task.type === 'bug' ? 'selected' : ''}>🐛 Bug</option>
+            <option value="refactor" ${task.type === 'refactor' ? 'selected' : ''}>♻️ Refactor</option>
+            <option value="test" ${task.type === 'test' ? 'selected' : ''}>🧪 Test</option>
+            <option value="docs" ${task.type === 'docs' ? 'selected' : ''}>📚 Docs</option>
+            <option value="chore" ${task.type === 'chore' ? 'selected' : ''}>🧹 Chore</option>
+            <option value="spike" ${task.type === 'spike' ? 'selected' : ''}>🔬 Spike</option>
+            <option value="security" ${task.type === 'security' ? 'selected' : ''}>🔒 Security</option>
+          </select>
+        </div>
+
         <span class="property-label">Priority</span>
         <div class="property-value flex items-center gap-2">
           <select class="filter-select text-xs capitalize" onchange="handleSaveInlineField('${task.id}', 'priority', this.value)">
@@ -1121,6 +2699,11 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           </select>
         </div>
 
+        <span class="property-label">Tags</span>
+        <div class="property-value flex items-center gap-1.5 flex-wrap">
+          <input type="text" value="${(task.tags || []).join(', ')}" placeholder="e.g. auth, frontend" class="input-field text-xs py-0.5 px-2 w-full font-mono" onchange="handleSaveInlineTags('${task.id}', this.value)">
+        </div>
+
         <span class="property-label">Linked Goal</span>
         <div class="property-value">
           <select class="filter-select text-xs w-full" onchange="handleSaveInlineField('${task.id}', 'goalId', this.value || null)">
@@ -1129,9 +2712,15 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           </select>
         </div>
 
-        <span class="property-label">Claimed Agent</span>
-        <div class="property-value font-mono text-indigo-300 flex items-center gap-1.5">
-          ${task.claimedByAgent ? `<i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent} ${task.attemptCount > 1 ? `(Attempt #${task.attemptCount})` : ''}` : '<span class="text-slate-500 font-sans">Unclaimed</span>'}
+        <span class="property-label">Assigned Agent</span>
+        <div class="property-value flex items-center gap-2">
+          ${renderAgentAvatar(task.claimedByAgent, 'sm')}
+          <input type="text" value="${task.claimedByAgent ? escapeHtml(task.claimedByAgent) : ''}" placeholder="e.g. antigravity, vibe-agent" class="input-field text-xs py-0.5 px-2 flex-1 font-mono" onchange="handleSaveInlineField('${task.id}', 'claimedByAgent', this.value.trim() || null)">
+          ${task.claimedByAgent ? `
+            <button class="text-slate-400 hover:text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-surface border border-borderSubtle transition flex items-center justify-center" onclick="handleSaveInlineField('${task.id}', 'claimedByAgent', null)" title="Unassign agent">
+              <i data-lucide="x" class="w-3 h-3"></i>
+            </button>
+          ` : ''}
         </div>
 
         ${task.status === 'doing' && task.leaseExpiresAt ? `
@@ -1207,12 +2796,11 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
             </button>
           </div>
           <div class="space-y-1.5">
-            ${subtasks.length === 0 ? `<div class="text-xs text-slate-500 italic">No subtasks.</div>` : ''}
-            ${subtasks.map((s) => `
+                       ${subtasks.map((s) => `
               <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between text-xs cursor-pointer hover:border-borderActive" onclick="openInspector('${s.id}')">
                 <div class="flex items-center gap-2">
                   <span class="status-dot ${statusConfig[s.status]?.class || 'todo'}"></span>
-                  <span class="font-mono text-slate-500 text-[10px]">${s.id}</span>
+                  <span class="font-mono text-slate-500 text-[10px]">${formatIssueKey(s.id, s)}</span>
                   <span class="text-slate-200">${s.title}</span>
                 </div>
                 <span class="font-mono text-[10px] text-slate-400 uppercase">${s.status}</span>
@@ -1224,7 +2812,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         <div class="bg-surface border border-subtle rounded-lg p-2.5 text-xs text-slate-400 flex items-center gap-1.5">
           <i data-lucide="corner-down-right" class="w-3.5 h-3.5 text-indigo-400"></i>
           <span>Subtask of parent issue: </span>
-          <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector('${task.parentId}')">${task.parentId}</span>
+          <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector('${task.parentId}')">${formatIssueKey(task.parentId)}</span>
         </div>
       `}
 
@@ -1237,7 +2825,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           <div class="flex items-center gap-1">
             <select id="selectAddBlocker" class="filter-select text-[11px]">
               <option value="">+ Add Blocker...</option>
-              ${candidateBlockers.map((c) => `<option value="${c.id}">${c.id} - ${c.title.slice(0, 30)}</option>`).join('')}
+              ${candidateBlockers.map((c) => `<option value="${c.id}">${formatIssueKey(c.id, c)} - ${c.title.slice(0, 30)}</option>`).join('')}
             </select>
             <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="handleAddBlocker('${task.id}')">Link</button>
           </div>
@@ -1251,7 +2839,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
                 const bTask = state.tasks.find((t) => t.id === d);
                 return `
                   <div class="dag-node" onclick="openInspector('${d}')">
-                    <span class="text-amber-300 font-bold">${d}</span>
+                    <span class="text-amber-300 font-bold">${formatIssueKey(d, bTask)}</span>
                     <span class="text-slate-300 truncate max-w-[130px]">${bTask ? bTask.title : ''}</span>
                   </div>
                 `;
@@ -1261,7 +2849,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
             <div class="dag-column">
               <div class="text-[9px] font-mono text-indigo-400 font-bold uppercase">This Task</div>
               <div class="dag-node active-node">
-                <span class="text-indigo-300 font-bold">${task.id}</span>
+                <span class="text-indigo-300 font-bold">${formatIssueKey(task.id, task)}</span>
                 <span class="text-slate-100 font-medium truncate max-w-[140px]">${task.title}</span>
               </div>
             </div>
@@ -1272,7 +2860,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
                 const depTask = state.tasks.find((t) => t.id === d);
                 return `
                   <div class="dag-node" onclick="openInspector('${d}')">
-                    <span class="text-blue-300 font-bold">${d}</span>
+                    <span class="text-blue-300 font-bold">${formatIssueKey(d, depTask)}</span>
                     <span class="text-slate-300 truncate max-w-[130px]">${depTask ? depTask.title : ''}</span>
                   </div>
                 `;
@@ -1285,7 +2873,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           ${dependencies.length === 0 ? `<div class="text-xs text-slate-500 italic">No direct blockers.</div>` : ''}
           ${dependencies.map((d) => `
             <span class="font-mono text-xs px-2 py-0.5 bg-amber-950/40 border border-amber-800/40 text-amber-300 rounded flex items-center gap-1.5">
-              <span class="cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${d}</span>
+              <span class="cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${formatIssueKey(d)}</span>
               <button class="text-amber-500 hover:text-rose-400 text-xs ml-1" onclick="handleRemoveBlocker('${task.id}', '${d}')">&times;</button>
             </span>
           `).join('')}
@@ -1297,7 +2885,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
               <i data-lucide="zap" class="w-3.5 h-3.5 text-blue-400"></i> BLOCKS DOWNSTREAM
             </div>
             <div class="flex flex-wrap gap-1.5">
-              ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${d}</span>`).join('')}
+              ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${formatIssueKey(d)}</span>`).join('')}
             </div>
           </div>
         ` : ''}
@@ -1502,6 +3090,11 @@ window.handleSaveInlineField = async (taskId, field, value) => {
   } else {
     showToast(`Failed to update ${field}`, 'error');
   }
+};
+
+window.handleSaveInlineTags = async (taskId, tagString) => {
+  const tags = tagString.split(',').map((t) => t.trim()).filter(Boolean);
+  await window.handleSaveInlineField(taskId, 'tags', tags);
 };
 
 // Blocker Linking Handlers
@@ -2016,7 +3609,7 @@ async function renderGoalDetails(goalId) {
 
 window.filterByGoalDirect = (goalId) => {
   state.filterGoal = goalId;
-  if (filterGoal) filterGoal.value = goalId;
+  renderActiveFilterChips();
   switchView('tasks');
   renderTasks();
 };
@@ -2070,6 +3663,22 @@ function renderHumanInbox() {
         <div>${renderMarkdown(task.humanQuestion)}</div>
       </div>
       
+      ${task.humanOptions && Array.isArray(task.humanOptions) && task.humanOptions.length > 0 ? `
+        <!-- Custom Selectable Options (1-Click Resolution) -->
+        <div class="mb-3 p-2.5 rounded bg-purple-900/20 border border-purple-800/40">
+          <div class="text-[11px] font-semibold text-purple-300 mb-1.5 flex items-center gap-1">
+            <i data-lucide="list" class="w-3 h-3 text-purple-400"></i> Selectable Choices (1-Click Resolution):
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            ${task.humanOptions.map((opt) => `
+              <button type="button" onclick="setQuickAnswer('${task.id}', '${opt.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded bg-purple-800/40 border border-purple-600/60 text-purple-200 text-xs hover:bg-purple-700/60 hover:text-white transition flex items-center gap-1 font-medium shadow-sm">
+                <i data-lucide="corner-down-right" class="w-3 h-3 text-purple-400"></i> ${opt}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
       <!-- Quick Action Buttons -->
       <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
         <span class="text-[10px] uppercase font-bold text-slate-500 mr-1">Quick Action:</span>
@@ -2396,11 +4005,11 @@ function renderPaletteResults(query) {
   });
 
   // Search Tasks
-  const matchedTasks = state.tasks.filter((t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q)).slice(0, 6);
+  const matchedTasks = state.tasks.filter((t) => t.title.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || formatIssueKey(t.id, t).toLowerCase().includes(q)).slice(0, 6);
   matchedTasks.forEach((t) => {
     const item = document.createElement('div');
     item.className = 'palette-item';
-    item.innerHTML = `<div class="flex items-center gap-2"><span class="font-mono text-slate-500 text-[10px]">${t.id}</span><span>${t.title}</span></div><span class="status-pill text-[10px]">${t.status}</span>`;
+    item.innerHTML = `<div class="flex items-center gap-2"><span class="font-mono text-slate-500 text-[10px]">${formatIssueKey(t.id, t)}</span><span>${t.title}</span></div><span class="status-pill text-[10px]">${t.status}</span>`;
     item.onclick = () => {
       closeCommandPalette();
       openInspector(t.id);
@@ -2457,6 +4066,8 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === 'Escape') {
     closeCommandPalette();
+    closeFilterPopover();
+    closeSortPopover();
     if (drawerInspector) drawerInspector.classList.add('hidden');
     document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('hidden'));
     return;
@@ -2468,6 +4079,16 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       modalKeyboardShortcuts?.classList.toggle('hidden');
       refreshLucideIcons();
+      return;
+    }
+
+    // Filter Menu (F)
+    if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      if (state.currentView !== 'tasks') {
+        switchView('tasks');
+      }
+      toggleFilterPopover();
       return;
     }
 
@@ -2536,6 +4157,46 @@ if (btnOpenShortcutsHelp) {
 const btnHeaderNewTask = document.getElementById('btnHeaderNewTask');
 if (btnHeaderNewTask) btnHeaderNewTask.onclick = () => { modalCreateTask?.classList.remove('hidden'); refreshLucideIcons(); };
 
+const btnSidebarSearch = document.getElementById('btnSidebarSearch');
+if (btnSidebarSearch) btnSidebarSearch.onclick = () => openCommandPalette();
+
+const btnSidebarCompose = document.getElementById('btnSidebarCompose');
+if (btnSidebarCompose) btnSidebarCompose.onclick = () => { modalCreateTask?.classList.remove('hidden'); refreshLucideIcons(); };
+
+// Issue Tab Switcher (Assigned, Created, Subscribed, Activity)
+window.switchIssueTab = (tab) => {
+  document.querySelectorAll('#issueTabsBar .tab-pill').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-tab') === tab);
+  });
+  state.currentIssueTab = tab;
+  if (tab === 'activity') {
+    switchView('activity');
+  } else {
+    if (state.currentView !== 'tasks') {
+      switchView('tasks');
+    }
+    renderTasks();
+  }
+};
+
+// Favorites Filter Click Handler
+window.applyFavoriteFilter = (filterKey) => {
+  switchView('tasks');
+  if (filterKey === 'saved_search') {
+    state.filterSearch = 'saved search';
+  } else if (filterKey === 'blockers') {
+    state.filterPriority = 'critical';
+  } else if (filterKey === 'api_key') {
+    state.filterSearch = 'api key';
+  } else if (filterKey === 'product_analytics') {
+    state.filterSearch = 'analytics';
+  } else {
+    state.filterSearch = '';
+    state.filterPriority = '';
+  }
+  renderTasks();
+};
+
 const btnCreateGoal = document.getElementById('btnCreateGoal');
 if (btnCreateGoal) btnCreateGoal.onclick = () => { modalCreateGoal?.classList.remove('hidden'); refreshLucideIcons(); };
 
@@ -2555,18 +4216,22 @@ if (formCreateTask) {
     e.preventDefault();
     const title = document.getElementById('inputTaskTitle').value;
     const goalId = document.getElementById('inputTaskGoal').value || undefined;
+    const type = document.getElementById('inputTaskType')?.value || 'feature';
     const priority = document.getElementById('inputTaskPriority').value;
+    const tagsInput = document.getElementById('inputTaskTags')?.value;
+    const tags = tagsInput ? tagsInput.split(',').map((t) => t.trim()).filter(Boolean) : [];
     const description = document.getElementById('inputTaskDescription')?.value || undefined;
     const acceptanceCriteria = document.getElementById('inputTaskAC').value;
     const filesInput = document.getElementById('inputTaskFiles').value;
     const isDeferred = document.getElementById('inputTaskDeferred').checked;
+    const claimedByAgent = document.getElementById('inputTaskAgent')?.value?.trim() || undefined;
 
     const declaredFiles = filesInput ? filesInput.split(',').map((f) => f.trim()).filter(Boolean) : [];
 
     const res = await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, goalId, priority, description, acceptanceCriteria, declaredFiles, isDeferred }),
+      body: JSON.stringify({ title, goalId, type, priority, tags, description, acceptanceCriteria, declaredFiles, isDeferred, claimedByAgent }),
     });
 
     const data = await res.json();
@@ -2625,6 +4290,68 @@ if (formCreateDecision) {
     modalCreateDecision.classList.add('hidden');
     formCreateDecision.reset();
     fetchDecisions();
+  };
+}
+
+// Workspace Management Forms
+const formEditWorkspace = document.getElementById('formEditWorkspace');
+if (formEditWorkspace) {
+  formEditWorkspace.onsubmit = async (e) => {
+    e.preventDefault();
+    const id = document.getElementById('inputEditWorkspaceId')?.value;
+    const name = document.getElementById('inputEditWorkspaceName')?.value?.trim();
+    const gitRemote = document.getElementById('inputEditWorkspaceRemote')?.value?.trim();
+    if (!id || !name) return;
+
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, gitRemote }),
+      });
+      const data = await res.json();
+      if (data.success && data.workspace) {
+        document.getElementById('modalEditWorkspace')?.classList.add('hidden');
+        showToast(`Workspace updated: ${data.workspace.name}`, 'success');
+        if (state.activeWorkspace?.id === id) {
+          state.activeWorkspace = data.workspace;
+          updateWorkspaceNameInUI(data.workspace.name);
+        }
+        await refreshAll();
+      } else {
+        showToast(data.error || 'Failed to update workspace', 'error');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+}
+
+const formRegisterWorkspace = document.getElementById('formRegisterWorkspace');
+if (formRegisterWorkspace) {
+  formRegisterWorkspace.onsubmit = async (e) => {
+    e.preventDefault();
+    const projectPath = document.getElementById('inputRegisterWorkspacePath')?.value?.trim();
+    const name = document.getElementById('inputRegisterWorkspaceName')?.value?.trim();
+    if (!projectPath) return;
+
+    try {
+      const res = await fetch('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectPath, name: name || undefined }),
+      });
+      const data = await res.json();
+      if (data.success && data.workspace) {
+        document.getElementById('modalRegisterWorkspace')?.classList.add('hidden');
+        showToast(`Registered workspace: ${data.workspace.name}`, 'success');
+        await switchWorkspace(data.workspace.id);
+      } else {
+        showToast(data.error || 'Failed to register workspace', 'error');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   };
 }
 

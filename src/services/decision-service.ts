@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import crypto from 'crypto';
 import { AuthorType, Decision, DecisionStatus } from '../domain/types.js';
 import { DecisionNotFoundError, MandatoryReasonMissingError } from '../domain/errors.js';
@@ -12,15 +14,17 @@ export interface RecordDecisionDTO {
   projectPath: string;
   authorId: string;
   authorType?: AuthorType;
+  workspaceId?: string;
 }
 
 export class DecisionService {
   constructor(private decisionRepo: IDecisionRepository) {}
 
-  recordDecision(dto: RecordDecisionDTO): Decision {
+  recordDecision(dto: RecordDecisionDTO, autoSyncAdr: boolean = true): Decision {
     const now = new Date().toISOString();
     const decision: Decision = {
       id: `dec-${crypto.randomUUID().slice(0, 8)}`,
+      workspaceId: dto.workspaceId,
       title: dto.title.trim(),
       context: dto.context.trim(),
       choice: dto.choice.trim(),
@@ -34,7 +38,17 @@ export class DecisionService {
       updatedAt: now,
     };
 
-    return this.decisionRepo.create(decision);
+    const created = this.decisionRepo.create(decision);
+
+    if (autoSyncAdr && dto.projectPath) {
+      try {
+        this.syncAdrFiles(dto.projectPath);
+      } catch {
+        // In-memory / test environment safe fallback
+      }
+    }
+
+    return created;
   }
 
   getDecision(id: string): Decision {
@@ -45,8 +59,8 @@ export class DecisionService {
     return dec;
   }
 
-  listDecisions(projectPath: string, status?: DecisionStatus, tag?: string): Decision[] {
-    return this.decisionRepo.list(projectPath, status, tag);
+  listDecisions(projectPath?: string, status?: DecisionStatus, tag?: string, workspaceId?: string): Decision[] {
+    return this.decisionRepo.list(projectPath, status, tag, workspaceId);
   }
 
   supersedeDecision(
@@ -59,16 +73,93 @@ export class DecisionService {
     }
 
     const oldDecision = this.getDecision(oldDecisionId);
-    const newDecision = this.recordDecision(newDecisionDto);
+    const newDecision = this.recordDecision(newDecisionDto, false);
 
     oldDecision.status = 'superseded';
     oldDecision.supersededById = newDecision.id;
     oldDecision.updatedAt = new Date().toISOString();
     this.decisionRepo.update(oldDecision);
 
+    if (newDecisionDto.projectPath) {
+      try {
+        this.syncAdrFiles(newDecisionDto.projectPath);
+      } catch {
+        // In-memory / test safe
+      }
+    }
+
     return {
       oldDecision,
       newDecision,
+    };
+  }
+
+  syncAdrFiles(projectPath: string): { writtenCount: number; files: string[] } {
+    if (!projectPath || projectPath.startsWith(':memory:')) {
+      return { writtenCount: 0, files: [] };
+    }
+
+    const allDecisions = this.decisionRepo.list(projectPath);
+    if (allDecisions.length === 0) {
+      return { writtenCount: 0, files: [] };
+    }
+
+    const adrDir = path.join(path.resolve(projectPath), 'docs', 'adr');
+    if (!fs.existsSync(adrDir)) {
+      fs.mkdirSync(adrDir, { recursive: true });
+    }
+
+    // Sort chronologically ascending
+    const sorted = [...allDecisions].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    const writtenFiles: string[] = [];
+
+    sorted.forEach((dec, index) => {
+      const numStr = String(index + 1).padStart(4, '0');
+      const slug = dec.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      const filename = `${numStr}-${slug || dec.id}.md`;
+      const filePath = path.join(adrDir, filename);
+
+      const statusLine =
+        dec.status === 'superseded' && dec.supersededById
+          ? `Superseded by [${dec.supersededById}]`
+          : dec.status.toUpperCase();
+
+      const adrMarkdown = [
+        `# ${index + 1}. ${dec.title}`,
+        ``,
+        `* **Status**: ${statusLine}`,
+        `* **Decision ID**: \`${dec.id}\``,
+        `* **Date**: ${dec.createdAt.split('T')[0]}`,
+        `* **Author**: \`${dec.authorId}\` (${dec.authorType})`,
+        `* **Tags**: ${dec.tags.length > 0 ? dec.tags.map((t) => `\`${t}\``).join(', ') : 'None'}`,
+        ``,
+        `## Context`,
+        ``,
+        dec.context,
+        ``,
+        `## Decision`,
+        ``,
+        dec.choice,
+        ``,
+        `## Rationale & Consequences`,
+        ``,
+        dec.rationale,
+        ``,
+      ].join('\n');
+
+      fs.writeFileSync(filePath, adrMarkdown, 'utf-8');
+      writtenFiles.push(filePath);
+    });
+
+    return {
+      writtenCount: writtenFiles.length,
+      files: writtenFiles,
     };
   }
 }

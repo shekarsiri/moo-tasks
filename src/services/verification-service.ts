@@ -43,15 +43,24 @@ export class VerificationService {
       throw new TaskNotFoundError(taskId);
     }
 
-    // 1. Evidence is mandatory to close
+    // 1. Evidence is mandatory to close (must supply commands, test proof, snippet, or explicit files/gitContext)
     const hasEvidence =
-      (evidence.commandsRun && evidence.commandsRun.length > 0) ||
-      (evidence.outputSnippet && evidence.outputSnippet.trim().length > 0) ||
-      (evidence.testProof && evidence.testProof.trim().length > 0) ||
-      (evidence.filesModified && evidence.filesModified.length > 0);
+      Boolean(evidence.commandsRun && evidence.commandsRun.length > 0) ||
+      Boolean(evidence.outputSnippet && evidence.outputSnippet.trim().length > 0) ||
+      Boolean(evidence.testProof && evidence.testProof.trim().length > 0) ||
+      Boolean(evidence.filesModified && evidence.filesModified.length > 0) ||
+      Boolean(evidence.gitContext?.modifiedFiles && evidence.gitContext.modifiedFiles.length > 0);
 
     if (!hasEvidence) {
       throw new MissingEvidenceError(taskId);
+    }
+
+    // Auto-capture Git Context and auto-populate filesModified if missing
+    const gitContext = evidence.gitContext || GitContextService.getContext();
+    evidence.gitContext = gitContext;
+
+    if ((!evidence.filesModified || evidence.filesModified.length === 0) && gitContext.modifiedFiles && gitContext.modifiedFiles.length > 0) {
+      evidence.filesModified = gitContext.modifiedFiles;
     }
 
     // 2. Cannot close parent if subtasks are open
@@ -65,8 +74,6 @@ export class VerificationService {
 
     const now = new Date().toISOString();
     const prevStatus = task.status;
-    const gitContext = evidence.gitContext || GitContextService.getContext();
-    evidence.gitContext = gitContext;
 
     // Set completion fields
     task.status = 'done';

@@ -81,3 +81,17 @@ export class DecisionNotFoundError extends DomainError {
     this.name = 'DecisionNotFoundError';
   }
 }
+
+export class TaskBlockedOnDependencyError extends DomainError {
+  constructor(taskId: string, reason?: string) {
+    super(`Task ${taskId} is blocked on dependencies and cannot be claimed until blockers are completed (${reason || 'unmet prerequisites'}).`, 'TASK_BLOCKED_ON_DEPENDENCY');
+    this.name = 'TaskBlockedOnDependencyError';
+  }
+}
+
+export class TaskWaitingOnHumanError extends DomainError {
+  constructor(taskId: string, question?: string) {
+    super(`Task ${taskId} is paused waiting on human guidance and cannot be claimed until answered (${question || 'pending question'}).`, 'TASK_WAITING_ON_HUMAN');
+    this.name = 'TaskWaitingOnHumanError';
+  }
+}

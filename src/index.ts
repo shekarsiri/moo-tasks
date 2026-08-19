@@ -3,6 +3,7 @@ export * from './domain/errors.js';
 export * from './domain/dependency.js';
 export * from './domain/conflict.js';
 export * from './domain/similarity.js';
+export * from './domain/title-sanitizer.js';
 
 export * from './infrastructure/db/database.js';
 export * from './infrastructure/db/migrations.js';

@@ -8,8 +8,18 @@ export class DatabaseMigrator {
         applied_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL UNIQUE,
+        git_remote TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS goals (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         title TEXT NOT NULL,
         verbatim_prompt TEXT NOT NULL,
         description TEXT,
@@ -19,15 +29,19 @@ export class DatabaseMigrator {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         completed_at TEXT,
-        dropped_reason TEXT
+        dropped_reason TEXT,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         goal_id TEXT,
         parent_id TEXT,
         title TEXT NOT NULL,
         description TEXT,
+        type TEXT NOT NULL DEFAULT 'feature',
+        tags TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL DEFAULT 'todo',
         priority TEXT NOT NULL DEFAULT 'medium',
         order_index INTEGER NOT NULL DEFAULT 0,
@@ -57,6 +71,7 @@ export class DatabaseMigrator {
         blocked_reason TEXT,
         human_question TEXT,
         human_question_type TEXT,
+        human_options TEXT,
         human_answer TEXT,
         human_answered_at TEXT,
         human_answered_by TEXT,
@@ -74,6 +89,7 @@ export class DatabaseMigrator {
         completed_at TEXT,
         last_state_change_at TEXT NOT NULL,
 
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL,
         FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE SET NULL,
         FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE CASCADE
       );
@@ -101,6 +117,7 @@ export class DatabaseMigrator {
 
       CREATE TABLE IF NOT EXISTS decisions (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         title TEXT NOT NULL,
         context TEXT NOT NULL,
         choice TEXT NOT NULL,
@@ -113,6 +130,7 @@ export class DatabaseMigrator {
         author_type TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE SET NULL,
         FOREIGN KEY (superseded_by_id) REFERENCES decisions(id) ON DELETE SET NULL
       );
 
@@ -129,6 +147,10 @@ export class DatabaseMigrator {
       );
 
       -- Indexes for performance
+      CREATE INDEX IF NOT EXISTS idx_workspaces_root ON workspaces(root_path);
+      CREATE INDEX IF NOT EXISTS idx_goals_workspace ON goals(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_path);
+      CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_goal_id ON tasks(goal_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
@@ -137,15 +159,129 @@ export class DatabaseMigrator {
       CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id);
       CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_task_id);
       CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id);
+      CREATE INDEX IF NOT EXISTS idx_decisions_workspace ON decisions(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_path);
       CREATE INDEX IF NOT EXISTS idx_status_history_task ON status_history(task_id);
     `);
 
     // Dynamic column additions for existing installations
     try {
+      db.exec(`ALTER TABLE goals ADD COLUMN workspace_id TEXT;`);
+    } catch {
+      // column already exists
+    }
+
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN workspace_id TEXT;`);
+    } catch {
+      // column already exists
+    }
+
+    try {
+      db.exec(`ALTER TABLE decisions ADD COLUMN workspace_id TEXT;`);
+    } catch {
+      // column already exists
+    }
+
+    try {
       db.exec(`ALTER TABLE goals ADD COLUMN description TEXT;`);
     } catch {
       // column already exists
+    }
+
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN human_options TEXT;`);
+    } catch {
+      // column already exists
+    }
+
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'feature';`);
+    } catch {
+      // column already exists
+    }
+
+    try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';`);
+    } catch {
+      // column already exists
+    }
+
+    // FTS5 Virtual Tables & Triggers for Full-Text Search
+    try {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+          id UNINDEXED,
+          title,
+          description,
+          acceptance_criteria,
+          tags,
+          tokenize='unicode61'
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS decisions_fts USING fts5(
+          id UNINDEXED,
+          title,
+          context,
+          choice,
+          rationale,
+          tags,
+          tokenize='unicode61'
+        );
+
+        -- Tasks FTS triggers
+        CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+          INSERT INTO tasks_fts(id, title, description, acceptance_criteria, tags)
+          VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.acceptance_criteria, ''), coalesce(new.tags, '[]'));
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+          DELETE FROM tasks_fts WHERE id = old.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+          DELETE FROM tasks_fts WHERE id = old.id;
+          INSERT INTO tasks_fts(id, title, description, acceptance_criteria, tags)
+          VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.acceptance_criteria, ''), coalesce(new.tags, '[]'));
+        END;
+
+        -- Decisions FTS triggers
+        CREATE TRIGGER IF NOT EXISTS decisions_ai AFTER INSERT ON decisions BEGIN
+          INSERT INTO decisions_fts(id, title, context, choice, rationale, tags)
+          VALUES (new.id, new.title, new.context, new.choice, new.rationale, new.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS decisions_ad AFTER DELETE ON decisions BEGIN
+          DELETE FROM decisions_fts WHERE id = old.id;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS decisions_au AFTER UPDATE ON decisions BEGIN
+          DELETE FROM decisions_fts WHERE id = old.id;
+          INSERT INTO decisions_fts(id, title, context, choice, rationale, tags)
+          VALUES (new.id, new.title, new.context, new.choice, new.rationale, new.tags);
+        END;
+
+        -- Backfill FTS index for existing rows
+        INSERT INTO tasks_fts(id, title, description, acceptance_criteria, tags)
+        SELECT id, title, coalesce(description, ''), coalesce(acceptance_criteria, ''), coalesce(tags, '[]') FROM tasks
+        WHERE id NOT IN (SELECT id FROM tasks_fts);
+
+        INSERT INTO decisions_fts(id, title, context, choice, rationale, tags)
+        SELECT id, title, context, choice, rationale, tags FROM decisions
+        WHERE id NOT IN (SELECT id FROM decisions_fts);
+      `);
+    } catch {
+      // FTS5 extension already enabled or table exists
+    }
+
+    // Record schema version
+    try {
+      const row = db.prepare(`SELECT version FROM schema_version WHERE version = ?`).get(1);
+      if (!row) {
+        db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(1, new Date().toISOString());
+      }
+    } catch {
+      // ignore
     }
   }
 }

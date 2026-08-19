@@ -8,6 +8,7 @@ export class SqliteGoalRepository implements IGoalRepository {
   private mapRow(row: any): Goal {
     return {
       id: row.id,
+      workspaceId: row.workspace_id || undefined,
       title: row.title,
       verbatimPrompt: row.verbatim_prompt,
       description: row.description || undefined,
@@ -24,13 +25,14 @@ export class SqliteGoalRepository implements IGoalRepository {
   create(goal: Goal): Goal {
     const stmt = this.db.prepare(`
       INSERT INTO goals (
-        id, title, verbatim_prompt, description, status, max_open_tasks_cap, project_path,
+        id, workspace_id, title, verbatim_prompt, description, status, max_open_tasks_cap, project_path,
         created_at, updated_at, completed_at, dropped_reason
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       goal.id,
+      goal.workspaceId || null,
       goal.title,
       goal.verbatimPrompt,
       goal.description || null,
@@ -52,9 +54,17 @@ export class SqliteGoalRepository implements IGoalRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  list(projectPath: string, status?: GoalStatus): Goal[] {
-    let query = `SELECT * FROM goals WHERE project_path = ?`;
-    const params: any[] = [projectPath];
+  list(projectPath?: string, status?: GoalStatus, workspaceId?: string): Goal[] {
+    let query = `SELECT * FROM goals WHERE 1=1`;
+    const params: any[] = [];
+
+    if (workspaceId) {
+      query += ` AND workspace_id = ?`;
+      params.push(workspaceId);
+    } else if (projectPath) {
+      query += ` AND project_path = ?`;
+      params.push(projectPath);
+    }
 
     if (status) {
       query += ` AND status = ?`;
@@ -69,6 +79,7 @@ export class SqliteGoalRepository implements IGoalRepository {
   update(goal: Goal): Goal {
     const stmt = this.db.prepare(`
       UPDATE goals SET
+        workspace_id = ?,
         title = ?,
         verbatim_prompt = ?,
         description = ?,
@@ -81,6 +92,7 @@ export class SqliteGoalRepository implements IGoalRepository {
     `);
 
     stmt.run(
+      goal.workspaceId || null,
       goal.title,
       goal.verbatimPrompt,
       goal.description || null,

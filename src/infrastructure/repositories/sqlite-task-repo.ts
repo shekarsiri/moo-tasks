@@ -4,6 +4,7 @@ import {
   TaskDependency,
   TaskPriority,
   TaskStatus,
+  TaskType,
   VerificationState,
 } from '../../domain/types.js';
 import { ITaskRepository, TaskFilter } from './interfaces.js';
@@ -19,6 +20,13 @@ export class SqliteTaskRepository implements ITaskRepository {
       declaredFiles = [];
     }
 
+    let tags: string[] = [];
+    try {
+      tags = row.tags ? JSON.parse(row.tags) : [];
+    } catch {
+      tags = [];
+    }
+
     let evidence = undefined;
     try {
       if (row.evidence) {
@@ -28,12 +36,24 @@ export class SqliteTaskRepository implements ITaskRepository {
       evidence = undefined;
     }
 
+    let humanOptions: string[] | undefined = undefined;
+    try {
+      if (row.human_options) {
+        humanOptions = JSON.parse(row.human_options);
+      }
+    } catch {
+      humanOptions = undefined;
+    }
+
     return {
       id: row.id,
+      workspaceId: row.workspace_id || undefined,
       goalId: row.goal_id || undefined,
       parentId: row.parent_id || undefined,
       title: row.title,
       description: row.description || undefined,
+      type: (row.type as TaskType) || 'feature',
+      tags,
       status: row.status as TaskStatus,
       priority: row.priority as TaskPriority,
       orderIndex: row.order_index,
@@ -59,6 +79,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       blockedReason: row.blocked_reason || undefined,
       humanQuestion: row.human_question || undefined,
       humanQuestionType: row.human_question_type || undefined,
+      humanOptions,
       humanAnswer: row.human_answer || undefined,
       humanAnsweredAt: row.human_answered_at || undefined,
       humanAnsweredBy: row.human_answered_by || undefined,
@@ -79,21 +100,21 @@ export class SqliteTaskRepository implements ITaskRepository {
   create(task: Task): Task {
     const stmt = this.db.prepare(`
       INSERT INTO tasks (
-        id, goal_id, parent_id, title, description, status, priority, order_index,
+        id, workspace_id, goal_id, parent_id, title, description, type, tags, status, priority, order_index,
         acceptance_criteria, claimed_by_agent, claimed_session_id, claimed_at,
         lease_expires_at, declared_files, verification_state, evidence,
         verified_by, verified_at, rejection_reason, attempt_count, close_count,
         reopen_count, max_attempts_allowed, blocked_reason, human_question,
-        human_question_type, human_answer, human_answered_at, human_answered_by,
+        human_question_type, human_options, human_answer, human_answered_at, human_answered_by,
         discovered_from_task_id, is_deferred, idempotency_key, is_archived,
         dropped_reason, created_at, updated_at, completed_at, last_state_change_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?
       )
@@ -101,10 +122,13 @@ export class SqliteTaskRepository implements ITaskRepository {
 
     stmt.run(
       task.id,
+      task.workspaceId || null,
       task.goalId || null,
       task.parentId || null,
       task.title,
       task.description || null,
+      task.type || 'feature',
+      JSON.stringify(task.tags || []),
       task.status,
       task.priority,
       task.orderIndex,
@@ -126,6 +150,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       task.blockedReason || null,
       task.humanQuestion || null,
       task.humanQuestionType || null,
+      task.humanOptions ? JSON.stringify(task.humanOptions) : null,
       task.humanAnswer || null,
       task.humanAnsweredAt || null,
       task.humanAnsweredBy || null,
@@ -154,9 +179,20 @@ export class SqliteTaskRepository implements ITaskRepository {
   }
 
   findById(id: string): Task | null {
-    const stmt = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`);
-    const row = stmt.get(id);
-    return row ? this.mapRow(row) : null;
+    let stmt = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`);
+    let row = stmt.get(id);
+    if (row) return this.mapRow(row);
+
+    // Support short code sequence lookup (e.g. MO-123, SH-123, or numeric 123)
+    const match = String(id).match(/^(?:[A-Za-z]{2,}-)?(\d+)$/);
+    if (match) {
+      const orderIdx = parseInt(match[1], 10);
+      stmt = this.db.prepare(`SELECT * FROM tasks WHERE order_index = ?`);
+      row = stmt.get(orderIdx);
+      if (row) return this.mapRow(row);
+    }
+
+    return null;
   }
 
   findByIdempotencyKey(key: string): Task | null {
@@ -168,6 +204,11 @@ export class SqliteTaskRepository implements ITaskRepository {
   list(filter: TaskFilter = {}): Task[] {
     let query = `SELECT * FROM tasks WHERE 1=1`;
     const params: any[] = [];
+
+    if (filter.workspaceId) {
+      query += ` AND workspace_id = ?`;
+      params.push(filter.workspaceId);
+    }
 
     if (filter.goalId !== undefined) {
       if (filter.goalId === '') {
@@ -198,24 +239,52 @@ export class SqliteTaskRepository implements ITaskRepository {
       params.push(...filter.statuses);
     }
 
+    if (filter.priority) {
+      query += ` AND priority = ?`;
+      params.push(filter.priority);
+    }
+
+    if (filter.type) {
+      query += ` AND type = ?`;
+      params.push(filter.type);
+    }
+
+    if (filter.tag) {
+      query += ` AND tags LIKE ?`;
+      params.push(`%"${filter.tag}"%`);
+    }
+
+    if (filter.tags && filter.tags.length > 0) {
+      for (const t of filter.tags) {
+        query += ` AND tags LIKE ?`;
+        params.push(`%"${t}"%`);
+      }
+    }
+
     if (filter.claimedByAgent) {
       query += ` AND claimed_by_agent = ?`;
       params.push(filter.claimedByAgent);
     }
 
     if (filter.isDeferred !== undefined) {
+      const isDef = typeof filter.isDeferred === 'string'
+        ? filter.isDeferred === 'true' || filter.isDeferred === '1'
+        : Boolean(filter.isDeferred);
       query += ` AND is_deferred = ?`;
-      params.push(filter.isDeferred ? 1 : 0);
+      params.push(isDef ? 1 : 0);
     }
 
     if (filter.isArchived !== undefined) {
+      const isArch = typeof filter.isArchived === 'string'
+        ? filter.isArchived === 'true' || filter.isArchived === '1'
+        : Boolean(filter.isArchived);
       query += ` AND is_archived = ?`;
-      params.push(filter.isArchived ? 1 : 0);
+      params.push(isArch ? 1 : 0);
     }
 
     if (filter.searchQuery) {
-      query += ` AND (title LIKE ? OR description LIKE ?)`;
-      params.push(`%${filter.searchQuery}%`, `%${filter.searchQuery}%`);
+      query += ` AND (title LIKE ? OR description LIKE ? OR tags LIKE ?)`;
+      params.push(`%${filter.searchQuery}%`, `%${filter.searchQuery}%`, `%${filter.searchQuery}%`);
     }
 
     query += ` ORDER BY order_index ASC, created_at ASC`;
@@ -246,10 +315,13 @@ export class SqliteTaskRepository implements ITaskRepository {
   update(task: Task): Task {
     const stmt = this.db.prepare(`
       UPDATE tasks SET
+        workspace_id = ?,
         goal_id = ?,
         parent_id = ?,
         title = ?,
         description = ?,
+        type = ?,
+        tags = ?,
         status = ?,
         priority = ?,
         order_index = ?,
@@ -271,6 +343,7 @@ export class SqliteTaskRepository implements ITaskRepository {
         blocked_reason = ?,
         human_question = ?,
         human_question_type = ?,
+        human_options = ?,
         human_answer = ?,
         human_answered_at = ?,
         human_answered_by = ?,
@@ -286,10 +359,13 @@ export class SqliteTaskRepository implements ITaskRepository {
     `);
 
     stmt.run(
+      task.workspaceId || null,
       task.goalId || null,
       task.parentId || null,
       task.title,
       task.description || null,
+      task.type || 'feature',
+      JSON.stringify(task.tags || []),
       task.status,
       task.priority,
       task.orderIndex,
@@ -311,6 +387,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       task.blockedReason || null,
       task.humanQuestion || null,
       task.humanQuestionType || null,
+      task.humanOptions ? JSON.stringify(task.humanOptions) : null,
       task.humanAnswer || null,
       task.humanAnsweredAt || null,
       task.humanAnsweredBy || null,

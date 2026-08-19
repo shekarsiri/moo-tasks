@@ -2,9 +2,10 @@
 
 See [AGENTS.md](./AGENTS.md) for mandatory task orchestration rules with Moo Tasks.
 
+
 # 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
 
-> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server (`.moo/tasks.db`).
+> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server.
 > For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks with **FULL TECHNICAL DETAILS** **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
 
 ---
@@ -16,6 +17,8 @@ When the user asks you to implement a feature or fix an issue, use **`moo_quick_
 ```json
 {
   "title": "Implement feature X",
+  "type": "feature",
+  "tags": ["backend", "api"],
   "description": "### Technical Overview\nDetailed design, architectural breakdown, and step-by-step implementation plan.\n\n### Implementation Plan\n1. Step 1...\n2. Step 2...",
   "acceptanceCriteria": "- [ ] Clear, testable markdown definition of done\n- [ ] Unit tests pass",
   "priority": "high",
@@ -36,6 +39,7 @@ When the user asks you to implement a feature or fix an issue, use **`moo_quick_
 ### 2. Task Planning & Full Specifications
 - Break down the goal into small, atomic tasks before touching code:
   - Call `moo_create_task` or `moo_create_tasks_batch`.
+  - **Task titles must be clean, descriptive text** — do NOT embed priority codes, category prefixes, or sequence numbers in titles (e.g. avoid `"C1: …"`, `"H2: …"`, `"UX-3: …"`, `"M1 — …"`). Use the `priority`, `type`, and `tags` fields for classification.
   - ALWAYS write a comprehensive **`description`** containing:
     1. **Technical Overview & Architecture**: Why and how this is built.
     2. **Step-by-Step Implementation Plan**: Numbered actionable steps.

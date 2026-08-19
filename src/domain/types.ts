@@ -6,6 +6,16 @@ export type TaskStatus =
   | 'done'
   | 'dropped';
 
+export type TaskType =
+  | 'feature'
+  | 'bug'
+  | 'refactor'
+  | 'test'
+  | 'docs'
+  | 'chore'
+  | 'spike'
+  | 'security';
+
 export type TaskPriority = 'low' | 'medium' | 'high' | 'critical';
 
 export type GoalStatus = 'active' | 'completed' | 'dropped';
@@ -47,8 +57,18 @@ export interface GitContext {
   modifiedFiles?: string[];
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+  rootPath: string;
+  gitRemote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Goal {
   id: string;
+  workspaceId?: string;
   title: string;
   verbatimPrompt: string;
   description?: string;
@@ -63,10 +83,13 @@ export interface Goal {
 
 export interface Task {
   id: string;
+  workspaceId?: string;
   goalId?: string;
   parentId?: string; // One level of subtasks only
   title: string;
   description?: string;
+  type: TaskType;
+  tags: string[];
   status: TaskStatus;
   priority: TaskPriority;
   orderIndex: number;
@@ -96,6 +119,7 @@ export interface Task {
   blockedReason?: string;
   humanQuestion?: string;
   humanQuestionType?: 'clarification' | 'approval' | 'credential' | 'decision';
+  humanOptions?: string[];
   humanAnswer?: string;
   humanAnsweredAt?: string;
   humanAnsweredBy?: string;
@@ -135,6 +159,7 @@ export interface TaskNote {
 
 export interface Decision {
   id: string;
+  workspaceId?: string;
   title: string;
   context: string;
   choice: string;

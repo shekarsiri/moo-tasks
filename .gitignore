@@ -3,10 +3,7 @@ node_modules
 dist
 
 # Moo Tasks Persistence
-.moo/tasks.db
-.moo/tasks.db-wal
-.moo/tasks.db-shm
-.moo/tasks.db-journal
+.moo/
 
 # Local IDE & Agent Configurations
 .gemini/

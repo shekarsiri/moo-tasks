@@ -9,6 +9,15 @@ import { statusCommand } from './commands/status.js';
 import { listCommand } from './commands/list.js';
 import { nextCommand } from './commands/next.js';
 import { exportCommand } from './commands/export.js';
+import { importCommand } from './commands/import.js';
+import { searchCommand } from './commands/search.js';
+import {
+  workspacesCommand,
+  addWorkspaceCommand,
+  renameWorkspaceCommand,
+  setRemoteWorkspaceCommand,
+  removeWorkspaceCommand,
+} from './commands/workspaces.js';
 
 const program = new Command();
 
@@ -16,6 +25,59 @@ program
   .name('moo-tasks')
   .description('Agentic Task Orchestration & Management Engine with MCP and Web UI')
   .version('1.0.0');
+
+program
+  .command('workspaces')
+  .alias('ws')
+  .description('List registered project workspaces in the global Moo Tasks registry')
+  .option('--json', 'Output raw JSON')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(workspacesCommand);
+
+program
+  .command('workspaces:add <path>')
+  .alias('ws:add')
+  .description('Register a project directory as a workspace')
+  .option('-n, --name <name>', 'Custom workspace name')
+  .action(addWorkspaceCommand);
+
+program
+  .command('workspaces:rename <idOrName> <newName>')
+  .alias('ws:rename')
+  .description('Set or update the display name of a workspace')
+  .action(renameWorkspaceCommand);
+
+program
+  .command('workspaces:remote <idOrName> <remoteUrl>')
+  .alias('ws:remote')
+  .description('Set or update git remote URL for a workspace')
+  .action(setRemoteWorkspaceCommand);
+
+program
+  .command('workspaces:remove <idOrName>')
+  .alias('workspaces:delete')
+  .alias('ws:remove')
+  .alias('ws:delete')
+  .description('Unregister a workspace from the global registry')
+  .action(removeWorkspaceCommand);
+
+program
+  .command('search <query>')
+  .description('Full-text search (SQLite FTS5) across tasks, acceptance criteria, and architectural decisions')
+  .option('-t, --type <type>', 'Filter type (all, tasks, decisions)', 'all')
+  .option('-l, --limit <number>', 'Maximum results', '20')
+  .option('--json', 'Output raw JSON')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(searchCommand);
+
+program
+  .command('import <file>')
+  .description('Import markdown design doc, PRD, or task checklist into Goal and Tasks with dependencies')
+  .option('-g, --goal <goalId>', 'Attach imported tasks to existing Goal ID')
+  .option('-t, --title <title>', 'Custom Goal title')
+  .option('--sequential', 'Link tasks in sequential phases as dependencies')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(importCommand);
 
 program
   .command('run <prompt>')
@@ -43,6 +105,8 @@ program
   .option('-g, --goal <goalId>', 'Filter by Goal ID')
   .option('-s, --status <status>', 'Filter by Status (todo, doing, blocked-on-dependency, waiting-on-human, done, dropped)')
   .option('-p, --priority <priority>', 'Filter by Priority (low, medium, high, critical)')
+  .option('-t, --type <type>', 'Filter by Task Type (feature, bug, refactor, test, docs, chore, spike, security)')
+  .option('--tag <tag>', 'Filter by Tag name')
   .option('-a, --agent <agentId>', 'Filter by claimed agent')
   .option('--deferred', 'Include or filter deferred tasks')
   .option('--json', 'Output raw JSON')

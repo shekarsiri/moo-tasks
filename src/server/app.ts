@@ -5,6 +5,13 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { ServiceContainer } from '../services/index.js';
+import { DatabaseManager } from '../infrastructure/db/database.js';
+import {
+  DomainError,
+  GoalNotFoundError,
+  TaskNotFoundError,
+  DecisionNotFoundError,
+} from '../domain/errors.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,6 +24,24 @@ export interface ServerOptions {
 export function buildServer(container: ServiceContainer): FastifyInstance {
   const app = Fastify({
     logger: false,
+  });
+
+  app.setErrorHandler((error: any, request, reply) => {
+    if (error instanceof DomainError) {
+      const isNotFound =
+        error instanceof TaskNotFoundError ||
+        error instanceof GoalNotFoundError ||
+        error instanceof DecisionNotFoundError;
+      return reply.status(isNotFound ? 404 : 400).send({
+        success: false,
+        error: error.message,
+        code: error.code,
+      });
+    }
+    return reply.status(error.statusCode || 500).send({
+      success: false,
+      error: error.message || 'Internal Server Error',
+    });
   });
 
   app.register(cors, {
@@ -37,38 +62,45 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
   }
 
   // Native SQLite WAL File Watcher for Instant Cross-Process Multi-Agent Sync
-  const mooDir = path.join(container.projectPath, '.moo');
+  const watchers: fs.FSWatcher[] = [];
   let walDebounceTimer: NodeJS.Timeout | null = null;
-  let watcher: fs.FSWatcher | null = null;
 
-  if (fs.existsSync(mooDir)) {
-    try {
-      watcher = fs.watch(mooDir, (eventType, filename) => {
-        if (
-          filename &&
-          (filename.endsWith('.db') ||
-            filename.endsWith('.db-wal') ||
-            filename.endsWith('.db-shm') ||
-            filename === 'tasks.db' ||
-            filename === 'tasks.db-wal')
-        ) {
-          if (walDebounceTimer) clearTimeout(walDebounceTimer);
-          walDebounceTimer = setTimeout(() => {
-            broadcast('tasks_updated', {
-              source: 'sqlite_wal_change',
-              filename,
-              timestamp: Date.now(),
-            });
-            broadcast('goals_updated', {
-              source: 'sqlite_wal_change',
-              filename,
-              timestamp: Date.now(),
-            });
-          }, 75);
-        }
-      });
-    } catch {
-      // Ignore if filesystem watch not supported in environment
+  const dirsToWatch = [
+    DatabaseManager.getGlobalMooDir(),
+    path.join(container.projectPath, '.moo'),
+  ];
+
+  for (const dir of dirsToWatch) {
+    if (fs.existsSync(dir)) {
+      try {
+        const w = fs.watch(dir, (eventType, filename) => {
+          if (
+            filename &&
+            (filename.endsWith('.db') ||
+              filename.endsWith('.db-wal') ||
+              filename.endsWith('.db-shm') ||
+              filename === 'tasks.db' ||
+              filename === 'tasks.db-wal')
+          ) {
+            if (walDebounceTimer) clearTimeout(walDebounceTimer);
+            walDebounceTimer = setTimeout(() => {
+              broadcast('tasks_updated', {
+                source: 'sqlite_wal_change',
+                filename,
+                timestamp: Date.now(),
+              });
+              broadcast('goals_updated', {
+                source: 'sqlite_wal_change',
+                filename,
+                timestamp: Date.now(),
+              });
+            }, 75);
+          }
+        });
+        watchers.push(w);
+      } catch {
+        // Ignore if filesystem watch not supported in environment
+      }
     }
   }
 
@@ -125,7 +157,11 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
   }, 10000);
 
   app.addHook('onClose', (instance, done) => {
-    if (watcher) watcher.close();
+    for (const w of watchers) {
+      try {
+        w.close();
+      } catch {}
+    }
     clearInterval(dataVersionPollInterval);
     clearInterval(leaseCleanupInterval);
     clearInterval(heartbeatInterval);
@@ -173,22 +209,113 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
 
   // --- API Routes ---
 
+  // Workspaces
+  app.get('/api/workspaces', async (req, reply) => {
+    const workspaces = container.workspaceService.listWorkspaces();
+    const detailed = workspaces.map((ws) => {
+      const goals = container.goalRepo.list(undefined, undefined, ws.id);
+      const tasks = container.taskRepo.list({ workspaceId: ws.id });
+      const openTasks = tasks.filter(
+        (t) => ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'].includes(t.status) && !t.isArchived
+      );
+      return {
+        ...ws,
+        totalGoals: goals.length,
+        activeGoals: goals.filter((g) => g.status === 'active').length,
+        totalTasks: tasks.length,
+        openTasks: openTasks.length,
+        isActive: ws.id === container.activeWorkspace.id,
+      };
+    });
+    return { success: true, activeWorkspace: container.activeWorkspace, workspaces: detailed };
+  });
+
+  app.post('/api/workspaces', async (req, reply) => {
+    const { projectPath, name } = req.body as any;
+    if (!projectPath) {
+      return reply.status(400).send({ success: false, error: 'projectPath is required' });
+    }
+    const ws = container.workspaceService.getOrCreateWorkspace(projectPath, name);
+    broadcast('workspaces_updated', { workspace: ws });
+    return { success: true, workspace: ws };
+  });
+
+  app.get('/api/workspaces/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const ws = container.workspaceService.getWorkspace(id);
+    if (!ws) {
+      return reply.status(404).send({ success: false, error: 'Workspace not found' });
+    }
+    return { success: true, workspace: ws };
+  });
+
+  app.put('/api/workspaces/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const { name, rootPath, gitRemote } = req.body as any;
+    const ws = container.workspaceService.updateWorkspace(id, { name, rootPath, gitRemote });
+    if (ws.id === container.activeWorkspace.id) {
+      container.activeWorkspace = ws;
+      container.projectPath = ws.rootPath;
+    }
+    broadcast('workspaces_updated', { workspace: ws });
+    broadcast('project_updated', { workspace: ws });
+    return { success: true, workspace: ws };
+  });
+
+  app.patch('/api/workspaces/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const { name, rootPath, gitRemote } = req.body as any;
+    const ws = container.workspaceService.updateWorkspace(id, { name, rootPath, gitRemote });
+    if (ws.id === container.activeWorkspace.id) {
+      container.activeWorkspace = ws;
+      container.projectPath = ws.rootPath;
+    }
+    broadcast('workspaces_updated', { workspace: ws });
+    broadcast('project_updated', { workspace: ws });
+    return { success: true, workspace: ws };
+  });
+
+  app.delete('/api/workspaces/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const deleted = container.workspaceService.deleteWorkspace(id);
+    broadcast('workspaces_updated', { action: 'deleted', workspaceId: id });
+    return { success: deleted };
+  });
+
+  app.post('/api/workspaces/switch', async (req, reply) => {
+    const { workspaceId } = req.body as any;
+    const ws = container.workspaceService.getWorkspace(workspaceId);
+    if (!ws) {
+      return reply.status(404).send({ success: false, error: 'Workspace not found' });
+    }
+    container.activeWorkspace = ws;
+    container.projectPath = ws.rootPath;
+    broadcast('workspaces_switched', { activeWorkspace: ws });
+    broadcast('goals_updated', { activeWorkspace: ws });
+    broadcast('tasks_updated', { activeWorkspace: ws });
+    return { success: true, activeWorkspace: ws };
+  });
+
   // Goals
   app.get('/api/goals', async (req, reply) => {
-    const { status } = req.query as any;
-    const goals = container.goalService.listGoals(container.projectPath, status);
+    const { status, workspaceId } = req.query as any;
+    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || container.activeWorkspace.id);
+    const goals = targetWsId
+      ? container.goalService.listGoals(undefined, status, targetWsId)
+      : container.goalService.listGoals(container.projectPath, status);
     const summaries = goals.map((g) => container.goalService.getGoalStatus(g.id));
     return { success: true, goals: summaries };
   });
 
   app.post('/api/goals', async (req, reply) => {
-    const { title, verbatimPrompt, maxOpenTasksCap, description } = req.body as any;
+    const { title, verbatimPrompt, maxOpenTasksCap, description, workspaceId } = req.body as any;
     const goal = container.goalService.createGoal(
       title,
       verbatimPrompt,
       container.projectPath,
       maxOpenTasksCap,
-      description
+      description,
+      workspaceId || container.activeWorkspace.id
     );
     broadcast('goals_updated', { goal });
     return { success: true, goal };
@@ -239,14 +366,49 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     return { success: true, goal };
   });
 
+  app.delete('/api/goals/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const deleted = container.goalRepo.delete(id);
+    broadcast('goals_updated', { goalId: id, action: 'deleted' });
+    broadcast('tasks_updated', { goalId: id });
+    return { success: deleted };
+  });
+
+  // Search (FTS5)
+  app.get('/api/search', async (req, reply) => {
+    const { q, type, limit } = req.query as any;
+    const results = container.searchService.search(q || '', {
+      type: type || 'all',
+      limit: limit ? parseInt(limit, 10) : 20,
+    });
+    return { success: true, ...results };
+  });
+
+  // Diagnostics & Stall Detection
+  app.get('/api/diagnostics/stalls', async (req, reply) => {
+    const warnings = container.sessionService.detectAgentStallsAndThrashing(container.projectPath);
+    return { success: true, count: warnings.length, warnings };
+  });
+
   // Tasks
   app.get('/api/tasks', async (req, reply) => {
-    const tasks = container.taskRepo.list(req.query as any);
+    const query = req.query as any;
+    const filter = { ...query };
+    if (!filter.workspaceId && filter.workspaceId !== 'all') {
+      filter.workspaceId = container.activeWorkspace.id;
+    } else if (filter.workspaceId === 'all') {
+      delete filter.workspaceId;
+    }
+    const tasks = container.taskRepo.list(filter);
     return { success: true, total: tasks.length, tasks };
   });
 
   app.post('/api/tasks', async (req, reply) => {
-    const res = container.taskLifecycleService.createTask(req.body as any, 'human', 'human');
+    const body = req.body as any;
+    if (!body.workspaceId) {
+      body.workspaceId = container.activeWorkspace.id;
+    }
+    const res = container.taskLifecycleService.createTask(body, 'human', 'human');
     broadcast('tasks_updated', { task: res.task, action: 'created' });
     return { success: true, ...res };
   });
@@ -267,6 +429,13 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     const updated = container.taskLifecycleService.updateTask(id, req.body as any);
     broadcast('tasks_updated', { task: updated, action: 'updated' });
     return { success: true, task: updated };
+  });
+
+  app.delete('/api/tasks/:id', async (req, reply) => {
+    const { id } = req.params as any;
+    const deleted = container.taskRepo.delete(id);
+    broadcast('tasks_updated', { action: 'deleted', taskId: id });
+    return { success: deleted };
   });
 
   app.post('/api/tasks/:id/status', async (req, reply) => {
@@ -317,16 +486,55 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
   app.post('/api/tasks/:id/dependencies', async (req, reply) => {
     const { id } = req.params as any;
     const { dependsOnTaskId } = req.body as any;
-    container.taskRepo.addDependency(id, dependsOnTaskId);
+    container.taskLifecycleService.addDependency(id, dependsOnTaskId);
     broadcast('tasks_updated', { action: 'dependency_added', taskId: id, dependsOnTaskId });
     return { success: true };
   });
 
   app.delete('/api/tasks/:id/dependencies/:dependsOnTaskId', async (req, reply) => {
     const { id, dependsOnTaskId } = req.params as any;
-    container.taskRepo.removeDependency(id, dependsOnTaskId);
+    container.taskLifecycleService.removeDependency(id, dependsOnTaskId);
     broadcast('tasks_updated', { action: 'dependency_removed', taskId: id, dependsOnTaskId });
     return { success: true };
+  });
+
+  app.post('/api/tasks/bulk/update', async (req, reply) => {
+    const { taskIds, updates } = req.body as any;
+    if (!Array.isArray(taskIds) || !updates) {
+      return reply.status(400).send({ success: false, error: 'taskIds array and updates object required' });
+    }
+    for (const id of taskIds) {
+      if (updates.status) {
+        container.taskLifecycleService.transitionStatus(id, updates.status, updates.authorId || 'human-batch', 'human', updates.reason);
+      }
+      const taskUpdates: any = {};
+      if (updates.priority) taskUpdates.priority = updates.priority;
+      if (updates.type) taskUpdates.type = updates.type;
+      if (updates.tags) taskUpdates.tags = updates.tags;
+      if (Object.keys(taskUpdates).length > 0) {
+        container.taskLifecycleService.updateTask(id, taskUpdates);
+      }
+    }
+    broadcast('tasks_updated', { action: 'bulk_updated', count: taskIds.length });
+    return { success: true, updatedCount: taskIds.length };
+  });
+
+  app.post('/api/import/markdown', async (req, reply) => {
+    const { content, goalId, goalTitle, sequentialPhases } = req.body as any;
+    if (!content || typeof content !== 'string') {
+      return reply.status(400).send({ success: false, error: 'Markdown content string is required' });
+    }
+    const result = container.markdownImportService.importMarkdown(content, {
+      goalId,
+      goalTitle,
+      projectPath: container.projectPath,
+      sequentialPhases: sequentialPhases !== false,
+      authorId: 'human-web',
+      authorType: 'human',
+    });
+    broadcast('goals_updated', { action: 'imported', goalId: result.goal?.id });
+    broadcast('tasks_updated', { action: 'imported', count: result.importedCount });
+    return { success: true, ...result };
   });
 
   app.post('/api/tasks/bulk/drop', async (req, reply) => {
@@ -382,19 +590,23 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
 
   // Decisions
   app.get('/api/decisions', async (req, reply) => {
-    const { status, tag } = req.query as any;
-    const decisions = container.decisionService.listDecisions(container.projectPath, status, tag);
+    const { status, tag, workspaceId } = req.query as any;
+    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || container.activeWorkspace.id);
+    const decisions = targetWsId
+      ? container.decisionService.listDecisions(undefined, status, tag, targetWsId)
+      : container.decisionService.listDecisions(container.projectPath, status, tag);
     return { success: true, decisions };
   });
 
   app.post('/api/decisions', async (req, reply) => {
-    const { title, context, choice, rationale, tags } = req.body as any;
+    const { title, context, choice, rationale, tags, workspaceId } = req.body as any;
     const dec = container.decisionService.recordDecision({
       title,
       context,
       choice,
       rationale,
       tags,
+      workspaceId: workspaceId || container.activeWorkspace.id,
       projectPath: container.projectPath,
       authorId: 'human',
       authorType: 'human',
@@ -414,6 +626,7 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
         choice,
         rationale,
         tags,
+        workspaceId: container.activeWorkspace.id,
         projectPath: container.projectPath,
         authorId: 'human',
         authorType: 'human',
@@ -450,8 +663,9 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
   app.get('/api/project', async (req, reply) => {
     return {
       success: true,
-      projectName: path.basename(container.projectPath),
+      projectName: container.activeWorkspace.name || path.basename(container.projectPath),
       projectPath: container.projectPath,
+      workspace: container.activeWorkspace,
     };
   });
 

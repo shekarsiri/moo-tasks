@@ -6,6 +6,7 @@ import {
   TaskNote,
   TaskPriority,
   TaskStatus,
+  TaskType,
 } from '../domain/types.js';
 import {
   MandatoryReasonMissingError,
@@ -14,7 +15,9 @@ import {
   TaskNotFoundError,
 } from '../domain/errors.js';
 import { DependencyGraph } from '../domain/dependency.js';
+import { FileConflictDetector } from '../domain/conflict.js';
 import { DuplicateMatch, TaskSimilarityDetector } from '../domain/similarity.js';
+import { TaskTitleSanitizer } from '../domain/title-sanitizer.js';
 import {
   ITaskRepository,
   IStatusHistoryRepository,
@@ -24,15 +27,19 @@ import { GoalService } from './goal-service.js';
 
 export interface CreateTaskDTO {
   title: string;
+  workspaceId?: string;
   description?: string;
   goalId?: string;
   parentId?: string;
+  type?: TaskType;
+  tags?: string[];
   priority?: TaskPriority;
   acceptanceCriteria: string;
   dependsOnTaskIds?: string[];
   declaredFiles?: string[];
   idempotencyKey?: string;
   isDeferred?: boolean;
+  claimedByAgent?: string;
 }
 
 export interface CreateTaskResult {
@@ -74,9 +81,17 @@ export class TaskLifecycleService {
       }
     }
 
-    // 2. Check Goal open task cap
-    if (dto.goalId) {
-      this.goalService.checkGoalCap(dto.goalId);
+    // 2. Resolve and check Goal open task cap (auto-link primary active goal if not specified)
+    let effectiveGoalId = dto.goalId;
+    if (!effectiveGoalId && !dto.parentId) {
+      const activeGoals = this.goalService.listGoals(undefined, 'active');
+      if (activeGoals.length > 0) {
+        effectiveGoalId = activeGoals[0].id;
+      }
+    }
+
+    if (effectiveGoalId) {
+      this.goalService.checkGoalCap(effectiveGoalId);
     }
 
     // 3. Subtask 1-level limit validation
@@ -94,8 +109,14 @@ export class TaskLifecycleService {
     const existingTasks = this.taskRepo.list();
     const duplicateWarnings = TaskSimilarityDetector.findPotentialDuplicates(dto.title, existingTasks);
 
-    // 5. Dependency cycle validation
+    // 5. Dependency existence and cycle validation
     if (dto.dependsOnTaskIds && dto.dependsOnTaskIds.length > 0) {
+      for (const depId of dto.dependsOnTaskIds) {
+        const blocker = this.taskRepo.findById(depId);
+        if (!blocker) {
+          throw new TaskNotFoundError(depId);
+        }
+      }
       const existingDeps = this.taskRepo.getAllDependencies();
       const tempId = 'candidate-task-id';
       DependencyGraph.validateNoCycles(existingDeps, tempId, dto.dependsOnTaskIds);
@@ -104,23 +125,34 @@ export class TaskLifecycleService {
     const now = new Date().toISOString();
     const taskId = `task-${crypto.randomUUID().slice(0, 8)}`;
 
+    const parsedTitle = TaskTitleSanitizer.parse(dto.title, {
+      type: dto.type,
+      priority: dto.priority,
+      tags: dto.tags,
+      declaredFiles: dto.declaredFiles,
+    });
+
     const task: Task = {
       id: taskId,
-      goalId: dto.goalId,
+      workspaceId: dto.workspaceId,
+      goalId: effectiveGoalId,
       parentId: dto.parentId,
-      title: dto.title.trim(),
+      title: parsedTitle.cleanTitle,
       description: dto.description?.trim(),
+      type: parsedTitle.type || 'feature',
+      tags: parsedTitle.tags,
       status: 'todo',
-      priority: dto.priority || 'medium',
+      priority: parsedTitle.priority || 'medium',
       orderIndex: existingTasks.length + 1,
       acceptanceCriteria: dto.acceptanceCriteria?.trim() || 'Criteria not specified',
-      declaredFiles: dto.declaredFiles || [],
+      declaredFiles: parsedTitle.declaredFiles,
       verificationState: 'unverified',
       attemptCount: 0,
       closeCount: 0,
       reopenCount: 0,
       maxAttemptsAllowed: 3,
       isDeferred: Boolean(dto.isDeferred),
+      claimedByAgent: dto.claimedByAgent ? dto.claimedByAgent.trim() : undefined,
       idempotencyKey: dto.idempotencyKey,
       isArchived: false,
       createdAt: now,
@@ -176,7 +208,7 @@ export class TaskLifecycleService {
 
   updateTask(
     taskId: string,
-    updates: Partial<Pick<Task, 'title' | 'description' | 'priority' | 'acceptanceCriteria' | 'declaredFiles' | 'goalId' | 'isDeferred'>>
+    updates: Partial<Pick<Task, 'title' | 'description' | 'type' | 'tags' | 'priority' | 'acceptanceCriteria' | 'declaredFiles' | 'goalId' | 'isDeferred' | 'claimedByAgent'>>
   ): Task {
     const task = this.getTask(taskId);
     const now = new Date().toISOString();
@@ -188,12 +220,29 @@ export class TaskLifecycleService {
       task.goalId = updates.goalId;
     }
 
-    if (updates.title !== undefined) task.title = updates.title.trim();
+    if (updates.title !== undefined) {
+      const sanitized = TaskTitleSanitizer.parse(updates.title, {
+        type: updates.type,
+        priority: updates.priority,
+        tags: updates.tags,
+        declaredFiles: updates.declaredFiles,
+      });
+      task.title = sanitized.cleanTitle;
+      if (updates.type === undefined && sanitized.type) task.type = sanitized.type;
+      if (updates.priority === undefined && sanitized.priority) task.priority = sanitized.priority;
+      if (updates.tags === undefined && sanitized.tags.length > 0) task.tags = sanitized.tags;
+      if (updates.declaredFiles === undefined && sanitized.declaredFiles.length > 0) task.declaredFiles = sanitized.declaredFiles;
+    }
     if (updates.description !== undefined) task.description = updates.description.trim();
+    if (updates.type !== undefined) task.type = updates.type;
+    if (updates.tags !== undefined) task.tags = updates.tags;
     if (updates.priority !== undefined) task.priority = updates.priority;
     if (updates.acceptanceCriteria !== undefined) task.acceptanceCriteria = updates.acceptanceCriteria.trim();
     if (updates.declaredFiles !== undefined) task.declaredFiles = updates.declaredFiles;
     if (updates.isDeferred !== undefined) task.isDeferred = Boolean(updates.isDeferred);
+    if (updates.claimedByAgent !== undefined) {
+      task.claimedByAgent = updates.claimedByAgent ? updates.claimedByAgent.trim() : undefined;
+    }
 
     task.updatedAt = now;
     return this.taskRepo.update(task);
@@ -315,7 +364,7 @@ export class TaskLifecycleService {
     }
   }
 
-  getNextUnblockedTask(goalId?: string, agentId?: string): Task | null {
+  getNextUnblockedTask(goalId?: string, agentId?: string, avoidFileConflicts: boolean = false): Task | null {
     const filter: any = { status: 'todo', isDeferred: false, isArchived: false };
     if (goalId) filter.goalId = goalId;
 
@@ -345,6 +394,25 @@ export class TaskLifecycleService {
       if (pDiff !== 0) return pDiff;
       return a.orderIndex - b.orderIndex;
     });
+
+    if (avoidFileConflicts) {
+      const activeClaimedTasks = allTasks.filter(
+        (t) => t.status === 'doing' && !t.isArchived && t.claimedByAgent !== agentId
+      );
+      const conflictFree = unblockedTasks.filter((candidate) => {
+        if (!candidate.declaredFiles || candidate.declaredFiles.length === 0) return true;
+        const conflicts = FileConflictDetector.detectConflicts(
+          candidate.id,
+          candidate.declaredFiles,
+          activeClaimedTasks
+        );
+        return conflicts.length === 0;
+      });
+
+      if (conflictFree.length > 0) {
+        return conflictFree[0];
+      }
+    }
 
     return unblockedTasks[0];
   }

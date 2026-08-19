@@ -346,6 +346,69 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       });
       expect(exportRes.statusCode).toBe(200);
       expect(JSON.parse(exportRes.payload).content).toContain('Setup Infrastructure');
+
+      // Test boolean query string parsing: isDeferred=false vs isDeferred=true
+      const deferredTaskRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks',
+        payload: {
+          title: 'Deferred Backlog Item',
+          acceptanceCriteria: 'Deferred criteria',
+          isDeferred: true,
+        },
+      });
+      expect(deferredTaskRes.statusCode).toBe(200);
+      const defId = JSON.parse(deferredTaskRes.payload).task.id;
+
+      const nonDeferredRes = await app.inject({
+        method: 'GET',
+        url: '/api/tasks?isDeferred=false',
+      });
+      const nonDefTasks = JSON.parse(nonDeferredRes.payload).tasks;
+      expect(nonDefTasks.some((t: any) => t.id === defId)).toBe(false);
+
+      const deferredQueryRes = await app.inject({
+        method: 'GET',
+        url: '/api/tasks?isDeferred=true',
+      });
+      const defTasks = JSON.parse(deferredQueryRes.payload).tasks;
+      expect(defTasks.some((t: any) => t.id === defId)).toBe(true);
+
+      // Test POST /api/tasks/bulk/update
+      const bulkUpdateRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks/bulk/update',
+        payload: {
+          taskIds: [defId],
+          updates: { priority: 'critical' },
+        },
+      });
+      expect(bulkUpdateRes.statusCode).toBe(200);
+      expect(JSON.parse(bulkUpdateRes.payload).updatedCount).toBe(1);
+
+      // Test DELETE /api/tasks/:id
+      const delTaskRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/tasks/${defId}`,
+      });
+      expect(delTaskRes.statusCode).toBe(200);
+      expect(JSON.parse(delTaskRes.payload).success).toBe(true);
+
+      // Test DELETE /api/goals/:id
+      const delGoalRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/goals/${goalBody.goal.id}`,
+      });
+      expect(delGoalRes.statusCode).toBe(200);
+      expect(JSON.parse(delGoalRes.payload).success).toBe(true);
+
+      // Test DomainError status mapping (404 for not found, 400 for domain error)
+      const notFoundRes = await app.inject({
+        method: 'GET',
+        url: '/api/tasks/task-non-existent',
+      });
+      expect(notFoundRes.statusCode).toBe(404);
+      expect(JSON.parse(notFoundRes.payload).success).toBe(false);
     });
   });
 
@@ -579,6 +642,416 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       });
       expect(executePromptRes.messages[0].content.text).toContain("coder-bot");
       expect(executePromptRes.messages[0].content.text).toContain('moo_claim_task');
+    });
+
+    it('handles moo_check_file_lock and detects active locks held by other agents', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // Create and claim a task with declared files
+      const task = container.taskLifecycleService.createTask({
+        title: 'Edit Auth Middleware',
+        acceptanceCriteria: 'Middleware updated',
+        declaredFiles: ['src/middleware/auth.ts'],
+      });
+      container.claimService.claimTask(task.task.id, 'agent-alpha', 'sess-alpha', {
+        declaredFiles: ['src/middleware/auth.ts'],
+      });
+
+      // Agent Beta checks lock on src/middleware/auth.ts
+      const checkRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_check_file_lock',
+          arguments: {
+            filePaths: ['src/middleware/auth.ts'],
+            agentId: 'agent-beta',
+          },
+        },
+      });
+
+      const data = JSON.parse(checkRes.content[0].text);
+      expect(data.success).toBe(true);
+      expect(data.canEdit).toBe(false);
+      expect(data.isLockedByOther).toBe(true);
+      expect(data.activeLocks[0].claimedByAgent).toBe('agent-alpha');
+
+      // Agent Alpha checks lock on the same file
+      const checkSelfRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_check_file_lock',
+          arguments: {
+            filePaths: ['src/middleware/auth.ts'],
+            agentId: 'agent-alpha',
+          },
+        },
+      });
+      const selfData = JSON.parse(checkSelfRes.content[0].text);
+      expect(selfData.canEdit).toBe(true);
+      expect(selfData.isLockedByOther).toBe(false);
+    });
+
+    it('returns structured machine-readable error recovery hints on domain errors', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // Create blocker and blocked task
+      const blocker = container.taskLifecycleService.createTask({
+        title: 'Blocker Task',
+        acceptanceCriteria: 'Blocker done',
+      });
+      const blocked = container.taskLifecycleService.createTask({
+        title: 'Blocked Task',
+        acceptanceCriteria: 'Blocked done',
+        dependsOnTaskIds: [blocker.task.id],
+      });
+
+      // Attempt to claim blocked task
+      const claimRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_claim_task',
+          arguments: {
+            taskId: blocked.task.id,
+            agentId: 'eager-agent',
+            sessionId: 'sess-eager',
+          },
+        },
+      });
+
+      expect(claimRes.isError).toBe(true);
+      const errData = JSON.parse(claimRes.content[0].text);
+      expect(errData.code).toBe('TASK_BLOCKED_ON_DEPENDENCY');
+      expect(errData.recoveryAction).toContain('Prerequisites must be completed first');
+    });
+
+    it('supports options parameter in moo_ask_human tool', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      const task = container.taskLifecycleService.createTask({
+        title: 'Choose ORM',
+        acceptanceCriteria: 'ORM picked',
+      });
+
+      const askRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_ask_human',
+          arguments: {
+            taskId: task.task.id,
+            agentId: 'agent-1',
+            question: 'Which ORM do you prefer?',
+            questionType: 'decision',
+            options: ['Prisma', 'Drizzle', 'Kysely'],
+          },
+        },
+      });
+
+      const data = JSON.parse(askRes.content[0].text);
+      expect(data.success).toBe(true);
+      expect(data.task.humanOptions).toEqual(['Prisma', 'Drizzle', 'Kysely']);
+    });
+
+    it('executes moo_import_markdown and moo_search MCP tools', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // 1. moo_import_markdown
+      const importRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_import_markdown',
+          arguments: {
+            content: '# New Plan\n- [ ] Task A\n- [ ] Task B',
+          },
+        },
+      });
+
+      const importData = JSON.parse(importRes.content[0].text);
+      expect(importData.success).toBe(true);
+      expect(importData.importedCount).toBe(2);
+
+      // 2. moo_search
+      const searchRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_search',
+          arguments: {
+            query: 'Task A',
+          },
+        },
+      });
+
+      const searchData = JSON.parse(searchRes.content[0].text);
+      expect(searchData.success).toBe(true);
+      expect(searchData.total).toBeGreaterThan(0);
+      expect(searchData.results[0].title).toBe('Task A');
+    });
+
+    it('tests REST endpoints for markdown import, search, and stall diagnostics', async () => {
+      const server = buildServer(container);
+
+      // 1. POST /api/import/markdown
+      const importRes = await server.inject({
+        method: 'POST',
+        url: '/api/import/markdown',
+        payload: {
+          content: '# REST Imported Goal\n- [ ] Task 1\n- [ ] Task 2',
+        },
+      });
+
+      expect(importRes.statusCode).toBe(200);
+      const importBody = JSON.parse(importRes.body);
+      expect(importBody.success).toBe(true);
+      expect(importBody.importedCount).toBe(2);
+
+      // 2. GET /api/search
+      const searchRes = await server.inject({
+        method: 'GET',
+        url: '/api/search?q=Task 1',
+      });
+
+      expect(searchRes.statusCode).toBe(200);
+      const searchBody = JSON.parse(searchRes.body);
+      expect(searchBody.success).toBe(true);
+      expect(searchBody.total).toBeGreaterThan(0);
+
+      // 3. GET /api/diagnostics/stalls
+      const diagRes = await server.inject({
+        method: 'GET',
+        url: '/api/diagnostics/stalls',
+      });
+
+      expect(diagRes.statusCode).toBe(200);
+      const diagBody = JSON.parse(diagRes.body);
+      expect(diagBody.success).toBe(true);
+      expect(Array.isArray(diagBody.warnings)).toBe(true);
+    });
+
+    it('tests moo_create_task, moo_quick_start, and moo_list_tasks with type and tags', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // 1. Create goal
+      const goalRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_create_goal',
+          arguments: {
+            title: 'Type and Tag Goal',
+            verbatimPrompt: 'Test type and tags',
+          },
+        },
+      });
+      const goalData = JSON.parse(goalRes.content[0].text);
+
+      // 2. Create task with type and tags
+      const createRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_create_task',
+          arguments: {
+            title: 'Fix Memory Leak',
+            goalId: goalData.goal.id,
+            type: 'bug',
+            tags: ['memory', 'perf'],
+            acceptanceCriteria: 'No leak detected in heap dump',
+          },
+        },
+      });
+      const createData = JSON.parse(createRes.content[0].text);
+      expect(createData.success).toBe(true);
+      expect(createData.task.type).toBe('bug');
+      expect(createData.task.tags).toEqual(['memory', 'perf']);
+
+      // 3. Quick start with type and tags
+      const quickRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_quick_start',
+          arguments: {
+            title: 'Refactor Connection Pool',
+            goalId: goalData.goal.id,
+            type: 'refactor',
+            tags: ['db', 'pool'],
+            acceptanceCriteria: 'Clean architecture',
+            agentId: 'mcp-agent',
+            sessionId: 'sess-test',
+          },
+        },
+      });
+      const quickData = JSON.parse(quickRes.content[0].text);
+      expect(quickData.success).toBe(true);
+      expect(quickData.task.type).toBe('refactor');
+      expect(quickData.task.tags).toEqual(['db', 'pool']);
+
+      // 4. List tasks filtered by type
+      const listRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_list_tasks',
+          arguments: {
+            type: 'bug',
+          },
+        },
+      });
+      const listData = JSON.parse(listRes.content[0].text);
+      expect(listData.success).toBe(true);
+      expect(listData.tasks.every((t: any) => t.type === 'bug')).toBe(true);
+    });
+
+    it('executes workspace MCP tools and manages global workspaces', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // 1. List workspaces
+      const listRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_list_workspaces',
+          arguments: {},
+        },
+      });
+      const listData = JSON.parse(listRes.content[0].text);
+      expect(listData.success).toBe(true);
+      expect(listData.workspaces.length).toBeGreaterThanOrEqual(1);
+
+      // 2. Register new workspace
+      const regRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_register_workspace',
+          arguments: {
+            projectPath: '/test/new-microservice',
+            name: 'Microservice X',
+          },
+        },
+      });
+      const regData = JSON.parse(regRes.content[0].text);
+      expect(regData.success).toBe(true);
+      expect(regData.workspace.name).toBe('Microservice X');
+      expect(regData.workspace.rootPath).toBe('/test/new-microservice');
+
+      // 3. Get workspace
+      const getRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_get_workspace',
+          arguments: {
+            workspaceId: regData.workspace.id,
+          },
+        },
+      });
+      const getData = JSON.parse(getRes.content[0].text);
+      expect(getData.success).toBe(true);
+      expect(getData.workspace.name).toBe('Microservice X');
+
+      // 4. Update workspace display name and remote
+      const updateRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_update_workspace',
+          arguments: {
+            workspaceId: regData.workspace.id,
+            name: 'Microservice X Core',
+            gitRemote: 'git@github.com:org/ms-x.git',
+          },
+        },
+      });
+      const updateData = JSON.parse(updateRes.content[0].text);
+      expect(updateData.success).toBe(true);
+      expect(updateData.workspace.name).toBe('Microservice X Core');
+      expect(updateData.workspace.gitRemote).toBe('git@github.com:org/ms-x.git');
+
+      // 5. Delete workspace
+      const delRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_delete_workspace',
+          arguments: {
+            workspaceId: regData.workspace.id,
+          },
+        },
+      });
+      const delData = JSON.parse(delRes.content[0].text);
+      expect(delData.success).toBe(true);
+    });
+
+    it('handles Fastify HTTP API workspace management, rename, and deletion', async () => {
+      const app = buildServer(container);
+
+      // 1. List workspaces
+      const wsListRes = await app.inject({
+        method: 'GET',
+        url: '/api/workspaces',
+      });
+      expect(wsListRes.statusCode).toBe(200);
+      const wsListData = JSON.parse(wsListRes.body);
+      expect(wsListData.success).toBe(true);
+      expect(wsListData.workspaces.length).toBeGreaterThanOrEqual(1);
+
+      // 2. Register new workspace via POST
+      const createWsRes = await app.inject({
+        method: 'POST',
+        url: '/api/workspaces',
+        payload: {
+          projectPath: '/test/mobile-app',
+          name: 'Mobile App',
+        },
+      });
+      expect(createWsRes.statusCode).toBe(200);
+      const createWsData = JSON.parse(createWsRes.body);
+      expect(createWsData.success).toBe(true);
+      expect(createWsData.workspace.name).toBe('Mobile App');
+
+      // 3. Rename workspace via PATCH
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/workspaces/${createWsData.workspace.id}`,
+        payload: {
+          name: 'Mobile App iOS & Android',
+        },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      const patchData = JSON.parse(patchRes.body);
+      expect(patchData.success).toBe(true);
+      expect(patchData.workspace.name).toBe('Mobile App iOS & Android');
+
+      // 4. Switch workspace via POST
+      const switchRes = await app.inject({
+        method: 'POST',
+        url: '/api/workspaces/switch',
+        payload: {
+          workspaceId: createWsData.workspace.id,
+        },
+      });
+      expect(switchRes.statusCode).toBe(200);
+      const switchData = JSON.parse(switchRes.body);
+      expect(switchData.success).toBe(true);
+      expect(switchData.activeWorkspace.name).toBe('Mobile App iOS & Android');
+
+      // 5. Check project info reflects switched workspace
+      const projRes = await app.inject({
+        method: 'GET',
+        url: '/api/project',
+      });
+      expect(projRes.statusCode).toBe(200);
+      const projData = JSON.parse(projRes.body);
+      expect(projData.projectName).toBe('Mobile App iOS & Android');
+      expect(projData.workspace.id).toBe(createWsData.workspace.id);
+
+      // 6. Delete workspace via DELETE
+      const deleteRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/workspaces/${createWsData.workspace.id}`,
+      });
+      expect(deleteRes.statusCode).toBe(200);
+      const deleteData = JSON.parse(deleteRes.body);
+      expect(deleteData.success).toBe(true);
+
+      await app.close();
     });
   });
 });

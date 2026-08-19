@@ -121,15 +121,17 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // 2. Tasks & Lifecycle
         {
           name: 'moo_create_task',
-          description: 'Create a task under a goal (or standalone) with detailed technical description, acceptance criteria, priority, declared files, and dependencies.',
+          description: 'Create a task under a goal (or standalone) with detailed technical description, acceptance criteria, type, tags, priority, declared files, and dependencies.',
           inputSchema: {
             type: 'object',
             properties: {
-              title: { type: 'string', description: 'Concise, actionable task title' },
+              title: { type: 'string', description: 'Concise, actionable task title. Must be clean descriptive text — do NOT embed priority codes, category prefixes, or sequence numbers (e.g. avoid "C1:", "H2:", "UX-3:", "M1 —"). Use the priority, type, and tags fields instead.' },
               description: { type: 'string', description: 'Comprehensive Markdown technical specification containing architecture overview, step-by-step implementation plan, design rationale, and code snippets' },
               goalId: { type: 'string', description: 'Goal ID this task belongs to' },
               parentId: { type: 'string', description: 'Parent Task ID if this is a subtask (max 1 level depth)' },
               acceptanceCriteria: { type: 'string', description: 'Mandatory testable criteria defining when task is done (written before code)' },
+              type: { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'], description: 'Task category type (default: feature)' },
+              tags: { type: 'array', items: { type: 'string' }, description: 'Array of contextual tag labels (e.g. ["auth", "frontend"])' },
               priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Task priority' },
               dependsOnTaskIds: { type: 'array', items: { type: 'string' }, description: 'Task IDs this task depends on' },
               declaredFiles: { type: 'array', items: { type: 'string' }, description: 'Files or directories this task will touch' },
@@ -141,7 +143,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_create_tasks_batch',
-          description: 'Batch create multiple tasks under a goal with full technical descriptions, criteria, and dependencies in a single operation.',
+          description: 'Batch create multiple tasks under a goal with full technical descriptions, criteria, types, tags, and dependencies in a single operation.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -150,11 +152,13 @@ export function setupMcpServer(container: ServiceContainer): Server {
                 items: {
                   type: 'object',
                   properties: {
-                    title: { type: 'string' },
+                    title: { type: 'string', description: 'Clean descriptive title without priority/category prefixes — use priority, type, and tags fields instead' },
                     description: { type: 'string', description: 'Comprehensive Markdown technical specification and implementation plan' },
                     goalId: { type: 'string' },
                     parentId: { type: 'string' },
                     acceptanceCriteria: { type: 'string' },
+                    type: { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'] },
+                    tags: { type: 'array', items: { type: 'string' } },
                     priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
                     dependsOnTaskIds: { type: 'array', items: { type: 'string' } },
                     declaredFiles: { type: 'array', items: { type: 'string' } },
@@ -170,7 +174,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_update_task',
-          description: 'Update task properties: title, description, priority, acceptance criteria, declared files, goal, or deferred state.',
+          description: 'Update task properties: title, description, type, tags, priority, acceptance criteria, declared files, goal, or deferred state.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -178,6 +182,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
               title: { type: 'string', description: 'Updated title' },
               description: { type: 'string', description: 'Updated description' },
               acceptanceCriteria: { type: 'string', description: 'Updated acceptance criteria' },
+              type: { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'] },
+              tags: { type: 'array', items: { type: 'string' } },
               priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
               goalId: { type: 'string', description: 'Re-link to different goal (or null to unlink)' },
               declaredFiles: { type: 'array', items: { type: 'string' } },
@@ -212,11 +218,13 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_get_next_task',
-          description: 'Auto-surface the next unblocked, highest-priority task ready for execution from the active ready queue.',
+          description: 'Auto-surface the next unblocked, highest-priority task ready for execution from the active ready queue, with optional file conflict avoidance for parallel agent swarms.',
           inputSchema: {
             type: 'object',
             properties: {
               goalId: { type: 'string', description: 'Optional goal ID filter' },
+              agentId: { type: 'string', description: 'Optional agent identifier' },
+              avoidFileConflicts: { type: 'boolean', description: 'If true, skips candidate tasks that share declared files with active in-flight claims (default: false)' },
             },
           },
         },
@@ -233,12 +241,15 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_list_tasks',
-          description: 'List and filter tasks by goal, status, priority, agent, deferred state, or search text.',
+          description: 'List and filter tasks by goal, status, priority, type, tag, agent, deferred state, or search text.',
           inputSchema: {
             type: 'object',
             properties: {
               goalId: { type: 'string' },
               status: { type: 'string', enum: ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human', 'done', 'dropped'] },
+              priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+              type: { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'] },
+              tag: { type: 'string', description: 'Filter tasks containing this tag' },
               claimedByAgent: { type: 'string' },
               isDeferred: { type: 'boolean' },
               searchQuery: { type: 'string' },
@@ -388,7 +399,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // 5. Blocking & Human Collaboration
         {
           name: 'moo_ask_human',
-          description: 'Escalate a question/blocker to the human user and transition task to waiting-on-human.',
+          description: 'Escalate a question/blocker to the human user with optional selectable choices and transition task to waiting-on-human.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -396,6 +407,11 @@ export function setupMcpServer(container: ServiceContainer): Server {
               agentId: { type: 'string' },
               question: { type: 'string', description: 'Question or decision needed from the human' },
               questionType: { type: 'string', enum: ['clarification', 'approval', 'credential', 'decision'] },
+              options: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional selectable multi-choice options for 1-click human resolution in the Web UI',
+              },
             },
             required: ['taskId', 'agentId', 'question'],
           },
@@ -627,12 +643,38 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_get_compact_context',
-          description: 'Ultra-dense token-optimized context block (< 400 tokens) with active goal, claimed task, acceptance criteria, settled decisions, and file locks. Ideal for system prompt injection.',
+          description: 'Ultra-dense token-optimized context block with active goal, claimed task, acceptance criteria, settled decisions, and file locks. Ideal for system prompt injection.',
           inputSchema: {
             type: 'object',
             properties: {
               agentId: { type: 'string', description: 'Optional agent ID filter' },
+              verbosity: { type: 'string', enum: ['ultra-dense', 'standard', 'full'], description: 'Context detail level (default: standard)' },
             },
+          },
+        },
+        {
+          name: 'moo_check_file_lock',
+          description: 'Pre-check if specific files are currently locked by another agent holding an active claim, preventing edit collisions.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              filePaths: { type: 'array', items: { type: 'string' }, description: 'Array of file paths to verify' },
+              agentId: { type: 'string', description: 'Agent ID performing the edit' },
+            },
+            required: ['filePaths'],
+          },
+        },
+        {
+          name: 'moo_search',
+          description: 'Full-text ranked search (SQLite FTS5) across tasks, acceptance criteria, and architectural decisions (ADR).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Search term or keyword expression' },
+              type: { type: 'string', enum: ['all', 'tasks', 'decisions'], description: 'Filter search scope (default: all)' },
+              limit: { type: 'number', description: 'Maximum results to return (default: 20)' },
+            },
+            required: ['query'],
           },
         },
         {
@@ -648,13 +690,15 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_quick_start',
-          description: 'Fast-path vibe coding tool: Atomically creates a task under a goal and claims it exclusively in a single round-trip, setting declared files and lease duration.',
+          description: 'Fast-path vibe coding tool: Atomically creates a task under a goal and claims it exclusively in a single round-trip, setting declared files, type, tags, and lease duration.',
           inputSchema: {
             type: 'object',
             properties: {
               goalId: { type: 'string', description: 'Goal ID to anchor this task under' },
-              title: { type: 'string', description: 'Task title' },
+              title: { type: 'string', description: 'Clean descriptive task title — no priority/category prefixes (use priority, type, tags fields)' },
               acceptanceCriteria: { type: 'string', description: 'Definition of done in Markdown (mandatory)' },
+              type: { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'docs', 'chore', 'spike', 'security'], description: 'Task category type (default: feature)' },
+              tags: { type: 'array', items: { type: 'string' }, description: 'Array of contextual tag labels' },
               priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Priority level (default: medium)' },
               declaredFiles: { type: 'array', items: { type: 'string' }, description: 'Files you will modify to detect file collisions' },
               description: { type: 'string', description: 'Optional detailed description' },
@@ -680,6 +724,20 @@ export function setupMcpServer(container: ServiceContainer): Server {
           },
         },
         {
+          name: 'moo_import_markdown',
+          description: 'Parse a markdown plan, PRD, or task checklist into a Goal and atomic Tasks with dependencies.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: 'Markdown content containing task checklists, phases, and criteria' },
+              goalId: { type: 'string', description: 'Optional existing Goal ID to attach tasks under' },
+              goalTitle: { type: 'string', description: 'Optional Goal title' },
+              sequentialPhases: { type: 'boolean', description: 'Whether to link phase transitions as dependencies (default: true)' },
+            },
+            required: ['content'],
+          },
+        },
+        {
           name: 'moo_export_project',
           description: 'Export all goals, tasks, notes, and decisions in Markdown, JSON, or Plain Text format.',
           inputSchema: {
@@ -697,6 +755,60 @@ export function setupMcpServer(container: ServiceContainer): Server {
             properties: {
               goalId: { type: 'string' },
             },
+          },
+        },
+        // Workspaces
+        {
+          name: 'moo_list_workspaces',
+          description: 'List all registered project workspaces in the global Moo Tasks registry with their paths and git remotes.',
+          inputSchema: {
+            type: 'object',
+            properties: {},
+          },
+        },
+        {
+          name: 'moo_get_workspace',
+          description: 'Get details of the active workspace or a specific workspace by ID, name, or folder path.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              workspaceId: { type: 'string', description: 'Optional workspace ID, name, or path (defaults to active project)' },
+            },
+          },
+        },
+        {
+          name: 'moo_register_workspace',
+          description: 'Register a new project directory as a workspace in the global Moo Tasks database.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: { type: 'string', description: 'Absolute or relative directory path of the project' },
+              name: { type: 'string', description: 'Optional custom workspace name (defaults to folder name)' },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'moo_update_workspace',
+          description: "Update a workspace's display name or git remote URL.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              workspaceId: { type: 'string', description: 'Workspace ID, name, or path (defaults to active project)' },
+              name: { type: 'string', description: 'New display name' },
+              gitRemote: { type: 'string', description: 'New git remote URL' },
+            },
+          },
+        },
+        {
+          name: 'moo_delete_workspace',
+          description: 'Unregister/delete a workspace from the global registry.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              workspaceId: { type: 'string', description: 'Workspace ID, name, or path to delete' },
+            },
+            required: ['workspaceId'],
           },
         },
       ],
@@ -804,6 +916,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
         case 'moo_create_task': {
           const rawFiles = (args as any).declaredFiles;
           const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+          const rawTags = (args as any).tags;
+          const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
           const rawDeps = (args as any).dependsOnTaskIds || (args as any).dependsOnTaskId;
           const dependsOnTaskIds = rawDeps ? (Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean)) : undefined;
 
@@ -811,6 +925,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
             {
               ...(args as any),
               declaredFiles,
+              tags,
               dependsOnTaskIds,
             },
             (args as any).authorId || 'agent',
@@ -839,9 +954,11 @@ export function setupMcpServer(container: ServiceContainer): Server {
           const tasks = (Array.isArray(rawTasks) ? rawTasks : [rawTasks]).map((t: any) => {
             const rawFiles = t.declaredFiles;
             const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+            const rawTags = t.tags;
+            const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
             const rawDeps = t.dependsOnTaskIds || t.dependsOnTaskId;
             const dependsOnTaskIds = rawDeps ? (Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean)) : undefined;
-            return { ...t, declaredFiles, dependsOnTaskIds };
+            return { ...t, declaredFiles, tags, dependsOnTaskIds };
           });
           const results = container.taskLifecycleService.createBatch(tasks, 'agent', 'agent');
           return {
@@ -864,9 +981,14 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_update_task': {
-          const { taskId, declaredFiles: rawFiles, ...updates } = args as any;
+          const { taskId, declaredFiles: rawFiles, tags: rawTags, ...updates } = args as any;
           const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
-          const updated = container.taskLifecycleService.updateTask(taskId, { ...updates, declaredFiles });
+          const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
+          const updated = container.taskLifecycleService.updateTask(taskId, {
+            ...updates,
+            ...(declaredFiles !== undefined ? { declaredFiles } : {}),
+            ...(tags !== undefined ? { tags } : {}),
+          });
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task: updated }, null, 2) }] };
         }
 
@@ -905,8 +1027,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_get_next_task': {
-          const { goalId } = args as any;
-          const next = container.taskLifecycleService.getNextUnblockedTask(goalId);
+          const { goalId, agentId, avoidFileConflicts } = args as any;
+          const next = container.taskLifecycleService.getNextUnblockedTask(goalId, agentId, Boolean(avoidFileConflicts));
           if (next) {
             return {
               content: [
@@ -1125,10 +1247,10 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         // Human Collab
         case 'moo_ask_human': {
-          const { taskId, agentId, question, questionType } = args as any;
+          const { taskId, agentId, question, questionType, options } = args as any;
           const currentTask = container.taskRepo.findById(taskId);
           const aid = agentId || currentTask?.claimedByAgent || 'agent';
-          const task = container.humanCollabService.askHuman(taskId, aid, question, questionType);
+          const task = container.humanCollabService.askHuman(taskId, aid, question, questionType, options);
           return {
             content: [
               {
@@ -1303,9 +1425,52 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_get_compact_context': {
-          const { agentId } = args as any;
-          const compact = container.sessionService.getCompactContext(container.projectPath, agentId);
+          const { agentId, verbosity } = args as any;
+          const compact = container.sessionService.getCompactContext(container.projectPath, agentId, verbosity || 'standard');
           return { content: [{ type: 'text', text: compact }] };
+        }
+
+        case 'moo_check_file_lock': {
+          const rawFiles = (args as any).filePaths || (args as any).files || [];
+          const filePaths = Array.isArray(rawFiles) ? rawFiles : [rawFiles].filter(Boolean);
+          const { agentId } = args as any;
+          const fileContext = container.sessionService.getFileContext(filePaths, container.projectPath);
+          const otherAgentLocks = fileContext.activeLocks.filter((l) => !agentId || l.claimedByAgent !== agentId);
+          const isLockedByOther = otherAgentLocks.length > 0;
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    canEdit: !isLockedByOther,
+                    isLockedByOther,
+                    activeLocks: fileContext.activeLocks,
+                    hint: isLockedByOther
+                      ? `Conflict Warning: Files are actively claimed by ${otherAgentLocks.map((l) => l.claimedByAgent).join(', ')}. Coordinate with agent or wait for lease expiration.`
+                      : 'Files are free to edit.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case 'moo_search': {
+          const { query, type, limit } = args as any;
+          const searchResults = container.searchService.search(query, { type, limit });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, ...searchResults }, null, 2),
+              },
+            ],
+          };
         }
 
         case 'moo_get_file_context': {
@@ -1323,14 +1488,17 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_quick_start': {
-          const { goalId, title, acceptanceCriteria, priority, declaredFiles, description, agentId, sessionId, leaseDurationMinutes } = args as any;
+          const { goalId, title, acceptanceCriteria, priority, type, tags: rawTags, declaredFiles, description, agentId, sessionId, leaseDurationMinutes } = args as any;
           const aid = agentId || 'agent';
+          const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
           const created = container.taskLifecycleService.createTask(
             {
               goalId,
               title,
               acceptanceCriteria,
               priority: priority || 'medium',
+              type: type || 'feature',
+              tags: tags || [],
               declaredFiles,
               description,
             },
@@ -1396,6 +1564,36 @@ export function setupMcpServer(container: ServiceContainer): Server {
           };
         }
 
+        case 'moo_import_markdown': {
+          const { content, goalId, goalTitle, sequentialPhases } = args as any;
+          const result = container.markdownImportService.importMarkdown(content, {
+            goalId,
+            goalTitle,
+            projectPath: container.projectPath,
+            sequentialPhases: sequentialPhases !== false,
+            authorId: 'agent',
+            authorType: 'agent',
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    goal: result.goal,
+                    importedCount: result.importedCount,
+                    tasks: result.tasks,
+                    hint: `Successfully imported ${result.importedCount} tasks from markdown plan.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
         case 'moo_export_project': {
           const { format } = args as any;
           const output = container.housekeepingService.exportProject(container.projectPath, format || 'markdown');
@@ -1408,6 +1606,101 @@ export function setupMcpServer(container: ServiceContainer): Server {
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, archivedCount: count }, null, 2) }] };
         }
 
+        // Workspaces
+        case 'moo_list_workspaces': {
+          const workspaces = container.workspaceService.listWorkspaces();
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    activeWorkspace: container.activeWorkspace,
+                    total: workspaces.length,
+                    workspaces,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        case 'moo_get_workspace': {
+          const schema = z.object({
+            workspaceId: z.string().optional(),
+          });
+          const parsed = schema.parse(args);
+          const ws = parsed.workspaceId
+            ? container.workspaceService.getWorkspace(parsed.workspaceId)
+            : container.activeWorkspace;
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: Boolean(ws), workspace: ws }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'moo_register_workspace': {
+          const schema = z.object({
+            projectPath: z.string(),
+            name: z.string().optional(),
+          });
+          const parsed = schema.parse(args);
+          const ws = container.workspaceService.getOrCreateWorkspace(parsed.projectPath, parsed.name);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, workspace: ws }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'moo_update_workspace': {
+          const schema = z.object({
+            workspaceId: z.string().optional(),
+            name: z.string().optional(),
+            gitRemote: z.string().optional(),
+          });
+          const parsed = schema.parse(args);
+          const targetId = parsed.workspaceId || container.activeWorkspace.id;
+          const updated = container.workspaceService.updateWorkspace(targetId, {
+            name: parsed.name,
+            gitRemote: parsed.gitRemote,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, workspace: updated }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'moo_delete_workspace': {
+          const schema = z.object({
+            workspaceId: z.string(),
+          });
+          const parsed = schema.parse(args);
+          const deleted = container.workspaceService.deleteWorkspace(parsed.workspaceId);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: deleted }, null, 2),
+              },
+            ],
+          };
+        }
+
         default:
           return {
             content: [{ type: 'text', text: `Unknown tool: ${name}` }],
@@ -1415,8 +1708,36 @@ export function setupMcpServer(container: ServiceContainer): Server {
           };
       }
     } catch (err: any) {
+      const code = err.code || (err.name ? err.name : 'TOOL_ERROR');
+      let recoveryAction = 'Check input parameters and retry.';
+
+      if (code === 'TASK_BLOCKED_ON_DEPENDENCY') {
+        recoveryAction = 'Prerequisites must be completed first. Call moo_get_next_task() to find actionable unblocked tasks or complete blockers.';
+      } else if (code === 'TASK_WAITING_ON_HUMAN') {
+        recoveryAction = 'This task is paused awaiting human input. Call moo_get_human_inbox() to inspect pending questions or wait for human answer.';
+      } else if (code === 'GOAL_CAP_EXCEEDED') {
+        recoveryAction = 'Goal open tasks limit reached. Execute and complete existing tasks before creating more.';
+      } else if (code === 'TASK_ALREADY_CLAIMED') {
+        recoveryAction = 'Another agent holds the lease on this task. Call moo_get_next_task() to work on a different task or wait for lease expiration.';
+      } else if (code === 'AGENT_CONCURRENCY_LIMIT') {
+        recoveryAction = 'Agent holds maximum simultaneous tasks. Complete or release current task before claiming another.';
+      } else if (code === 'MISSING_EVIDENCE') {
+        recoveryAction = 'Provide evidence (commandsRun, outputSnippet, testProof, or filesModified) to complete the task.';
+      } else if (code === 'SUBTASK_NESTING_LIMIT') {
+        recoveryAction = 'Only 1 level of subtasks is permitted. Create task directly under the goal instead.';
+      } else if (code === 'DEPENDENCY_CYCLE') {
+        recoveryAction = 'Circular dependency detected. Remove conflicting dependency links.';
+      }
+
+      const errorPayload = {
+        success: false,
+        error: err.message || String(err),
+        code,
+        recoveryAction,
+      };
+
       return {
-        content: [{ type: 'text', text: `Error: ${err.message || String(err)}` }],
+        content: [{ type: 'text', text: JSON.stringify(errorPayload, null, 2) }],
         isError: true,
       };
     }

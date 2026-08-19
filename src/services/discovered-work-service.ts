@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Task, TaskPriority } from '../domain/types.js';
+import { Task, TaskPriority, TaskType } from '../domain/types.js';
 import { TaskNotFoundError } from '../domain/errors.js';
 import {
   ITaskRepository,
@@ -13,6 +13,8 @@ export interface CaptureDiscoveredWorkDTO {
   title: string;
   acceptanceCriteria: string;
   isMustFixNow: boolean;
+  type?: TaskType;
+  tags?: string[];
   priority?: TaskPriority;
   declaredFiles?: string[];
   description?: string;
@@ -39,6 +41,8 @@ export class DiscoveredWorkService {
       {
         title: dto.title,
         description: dto.description,
+        type: dto.type || (dto.isMustFixNow ? 'bug' : 'feature'),
+        tags: dto.tags || [],
         goalId: currentTask.goalId,
         priority,
         acceptanceCriteria: dto.acceptanceCriteria,

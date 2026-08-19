@@ -2,10 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import picocolors from 'picocolors';
 import { createServiceContainer } from '../../services/index.js';
+import { DatabaseManager } from '../../infrastructure/db/database.js';
 
 export const AGENTS_MD_CONTENT = `# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
 
-> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server (\`.moo/tasks.db\`).
+> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server.
 > For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks with **FULL TECHNICAL DETAILS** **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
 
 ---
@@ -17,6 +18,8 @@ When the user asks you to implement a feature or fix an issue, use **\`moo_quick
 \`\`\`json
 {
   "title": "Implement feature X",
+  "type": "feature",
+  "tags": ["backend", "api"],
   "description": "### Technical Overview\\nDetailed design, architectural breakdown, and step-by-step implementation plan.\\n\\n### Implementation Plan\\n1. Step 1...\\n2. Step 2...",
   "acceptanceCriteria": "- [ ] Clear, testable markdown definition of done\\n- [ ] Unit tests pass",
   "priority": "high",
@@ -37,6 +40,7 @@ When the user asks you to implement a feature or fix an issue, use **\`moo_quick
 ### 2. Task Planning & Full Specifications
 - Break down the goal into small, atomic tasks before touching code:
   - Call \`moo_create_task\` or \`moo_create_tasks_batch\`.
+  - **Task titles must be clean, descriptive text** — do NOT embed priority codes, category prefixes, or sequence numbers in titles (e.g. avoid \`"C1: …"\`, \`"H2: …"\`, \`"UX-3: …"\`, \`"M1 — …"\`). Use the \`priority\`, \`type\`, and \`tags\` fields for classification.
   - ALWAYS write a comprehensive **\`description\`** containing:
     1. **Technical Overview & Architecture**: Why and how this is built.
     2. **Step-by-Step Implementation Plan**: Numbered actionable steps.
@@ -67,47 +71,35 @@ When the user asks you to implement a feature or fix an issue, use **\`moo_quick
 
 export async function initCommand(options: { projectPath?: string; rules?: boolean; force?: boolean }) {
   const root = options.projectPath ? path.resolve(options.projectPath) : process.cwd();
-  const mooDir = path.join(root, '.moo');
   const overwrite = Boolean(options.force || options.rules);
 
-  if (!fs.existsSync(mooDir)) {
-    fs.mkdirSync(mooDir, { recursive: true });
-  }
+  // Initialize service container and register global workspace
+  const container = createServiceContainer({ projectPath: root });
+  const ws = container.activeWorkspace;
+  const globalDbPath = DatabaseManager.resolveGlobalDbPath();
 
-  // Initialize service container and database
-  createServiceContainer({ projectPath: root });
-
-  // 1. Add .moo/tasks.db to .gitignore if not present
-  const gitignorePath = path.join(root, '.gitignore');
-  if (fs.existsSync(gitignorePath)) {
-    const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
-    if (!gitignoreContent.includes('.moo/tasks.db')) {
-      fs.appendFileSync(gitignorePath, '\n# Moo Tasks Database\n.moo/tasks.db\n.moo/tasks.db-wal\n.moo/tasks.db-shm\n');
-    }
-  }
-
-  // 2. Generate AGENTS.md
+  // 1. Generate AGENTS.md
   const agentsMdPath = path.join(root, 'AGENTS.md');
   if (!fs.existsSync(agentsMdPath) || overwrite) {
     fs.writeFileSync(agentsMdPath, AGENTS_MD_CONTENT);
     console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} agent instructions: ${picocolors.cyan(agentsMdPath)}`);
   }
 
-  // 3. Generate CLAUDE.md for Claude Code
+  // 2. Generate CLAUDE.md for Claude Code
   const claudeMdPath = path.join(root, 'CLAUDE.md');
   if (!fs.existsSync(claudeMdPath) || overwrite) {
     fs.writeFileSync(claudeMdPath, `# Project Instructions for Claude Code\n\nSee [AGENTS.md](./AGENTS.md) for mandatory task orchestration rules with Moo Tasks.\n\n${AGENTS_MD_CONTENT}`);
     console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Claude Code instructions: ${picocolors.cyan(claudeMdPath)}`);
   }
 
-  // 4. Generate .cursorrules for Cursor
+  // 3. Generate .cursorrules for Cursor
   const cursorRulesPath = path.join(root, '.cursorrules');
   if (!fs.existsSync(cursorRulesPath) || overwrite) {
     fs.writeFileSync(cursorRulesPath, AGENTS_MD_CONTENT);
     console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Cursor instructions: ${picocolors.cyan(cursorRulesPath)}`);
   }
 
-  // 5. Generate .windsurfrules for Windsurf
+  // 4. Generate .windsurfrules for Windsurf
   const windsurfRulesPath = path.join(root, '.windsurfrules');
   if (!fs.existsSync(windsurfRulesPath) || overwrite) {
     fs.writeFileSync(windsurfRulesPath, AGENTS_MD_CONTENT);
@@ -115,8 +107,10 @@ export async function initCommand(options: { projectPath?: string; rules?: boole
   }
 
   console.log(`\n${picocolors.bold(picocolors.green('✔ Initialized Moo Tasks workspace!'))}`);
-  console.log(`  ${picocolors.gray('Database:')}    ${picocolors.cyan(path.join(mooDir, 'tasks.db'))}`);
-  console.log(`  ${picocolors.gray('Agent Rules:')} ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules')}`);
-  console.log(`  ${picocolors.gray('Web UI:')}      ${picocolors.yellow('npx moo-tasks start')}`);
-  console.log(`  ${picocolors.gray('MCP Mode:')}    ${picocolors.yellow('npx moo-tasks mcp')}\n`);
+  console.log(`  ${picocolors.gray('Workspace:')}      ${picocolors.bold(picocolors.cyan(ws.name))} (${picocolors.dim(ws.id)})`);
+  console.log(`  ${picocolors.gray('Root Path:')}      ${picocolors.cyan(ws.rootPath)}`);
+  console.log(`  ${picocolors.gray('Global Database:')} ${picocolors.yellow(globalDbPath)}`);
+  console.log(`  ${picocolors.gray('Agent Rules:')}    ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules')}`);
+  console.log(`  ${picocolors.gray('Web UI:')}         ${picocolors.yellow('npx moo-tasks start')}`);
+  console.log(`  ${picocolors.gray('MCP Mode:')}       ${picocolors.yellow('npx moo-tasks mcp')}\n`);
 }

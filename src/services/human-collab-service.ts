@@ -18,7 +18,8 @@ export class HumanCollabService {
     taskId: string,
     agentId: string,
     question: string,
-    questionType: 'clarification' | 'approval' | 'credential' | 'decision' = 'clarification'
+    questionType: 'clarification' | 'approval' | 'credential' | 'decision' = 'clarification',
+    options?: string[]
   ): Task {
     if (!question || !question.trim()) {
       throw new MandatoryReasonMissingError('asking a human question');
@@ -35,6 +36,7 @@ export class HumanCollabService {
     task.status = 'waiting-on-human';
     task.humanQuestion = question.trim();
     task.humanQuestionType = questionType;
+    task.humanOptions = options && options.length > 0 ? options : undefined;
     task.humanAnswer = undefined;
     task.humanAnsweredAt = undefined;
     task.humanAnsweredBy = undefined;

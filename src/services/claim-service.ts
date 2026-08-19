@@ -1,11 +1,14 @@
 import crypto from 'crypto';
-import { Decision, Task } from '../domain/types.js';
+import { Decision, Task, TaskNote } from '../domain/types.js';
 import {
   AgentConcurrencyLimitError,
   TaskAlreadyClaimedError,
+  TaskBlockedOnDependencyError,
   TaskNotFoundError,
+  TaskWaitingOnHumanError,
 } from '../domain/errors.js';
 import { ConflictWarning, FileConflictDetector } from '../domain/conflict.js';
+import { DependencyGraph } from '../domain/dependency.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
 import {
   ITaskRepository,
@@ -26,6 +29,7 @@ export interface ClaimTaskResult {
   attemptCount: number;
   autoEscalatedToHuman: boolean;
   relatedDecisions?: Decision[];
+  previousFailureHistory?: TaskNote[];
 }
 
 export class ClaimService {
@@ -45,6 +49,23 @@ export class ClaimService {
     const task = this.taskRepo.findById(taskId);
     if (!task) {
       throw new TaskNotFoundError(taskId);
+    }
+
+    // 0. Guardrail: Verify task is not blocked on human without an answer
+    if (task.status === 'waiting-on-human' && !task.humanAnswer) {
+      throw new TaskWaitingOnHumanError(taskId, task.humanQuestion);
+    }
+
+    // 0b. Guardrail: Verify task is not blocked on dependencies
+    const allTasks = this.taskRepo.list();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const allDeps = this.taskRepo.getAllDependencies();
+    const isUnblocked = DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap);
+
+    if (!isUnblocked || task.status === 'blocked-on-dependency') {
+      if (!isUnblocked) {
+        throw new TaskBlockedOnDependencyError(taskId, task.blockedReason);
+      }
     }
 
     const now = new Date();
@@ -137,6 +158,8 @@ export class ClaimService {
       if (allAccepted.length > 0) {
         const textToMatch = [
           task.title,
+          task.type,
+          ...(task.tags || []),
           ...(task.declaredFiles || []),
           task.description || '',
         ].join(' ').toLowerCase();
@@ -147,10 +170,11 @@ export class ClaimService {
           .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'].includes(w));
 
         const wordSet = new Set(words);
+        const taskTagSet = new Set((task.tags || []).map((t) => t.toLowerCase()));
 
         relatedDecisions = allAccepted.filter((dec) => {
-          // Check tags
-          if (dec.tags && dec.tags.some((tag) => wordSet.has(tag.toLowerCase()) || textToMatch.includes(tag.toLowerCase()))) {
+          // Check tags intersection
+          if (dec.tags && dec.tags.some((tag) => taskTagSet.has(tag.toLowerCase()) || wordSet.has(tag.toLowerCase()) || textToMatch.includes(tag.toLowerCase()))) {
             return true;
           }
           // Check title / choice tokens
@@ -165,12 +189,22 @@ export class ClaimService {
       }
     }
 
+    // 9. Fetch previous failure logs and hypotheses if task was retried
+    let previousFailureHistory: TaskNote[] = [];
+    if (task.attemptCount > 1) {
+      const allNotes = this.noteRepo.listByTaskId(taskId);
+      previousFailureHistory = allNotes.filter(
+        (n) => n.noteType === 'attempt_failure' || n.noteType === 'attempt_log' || n.noteType === 'rejection_reason'
+      );
+    }
+
     return {
       task,
       conflictWarnings,
       attemptCount: task.attemptCount,
       autoEscalatedToHuman,
       relatedDecisions,
+      previousFailureHistory: previousFailureHistory.length > 0 ? previousFailureHistory : undefined,
     };
   }
 
@@ -203,7 +237,22 @@ export class ClaimService {
 
     const now = new Date().toISOString();
     const prevStatus = task.status;
-    task.status = 'todo';
+
+    // Check if task dependencies are currently satisfied
+    const allTasks = this.taskRepo.list();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const allDeps = this.taskRepo.getAllDependencies();
+    const isUnblocked = DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap);
+
+    const nextStatus = isUnblocked ? 'todo' : 'blocked-on-dependency';
+    task.status = nextStatus;
+    if (!isUnblocked) {
+      const blockers = allDeps.filter((d) => d.taskId === taskId).map((d) => d.dependsOnTaskId);
+      task.blockedReason = `Waiting on blocker tasks: ${blockers.join(', ')}`;
+    } else {
+      task.blockedReason = undefined;
+    }
+
     task.claimedByAgent = undefined;
     task.claimedSessionId = undefined;
     task.claimedAt = undefined;
@@ -229,7 +278,7 @@ export class ClaimService {
       id: `hist-${crypto.randomUUID().slice(0, 8)}`,
       taskId,
       fromStatus: prevStatus,
-      toStatus: 'todo',
+      toStatus: nextStatus,
       changedBy: agentId,
       authorType: 'agent',
       reason: `Released voluntarily by agent ${agentId}`,
@@ -278,10 +327,24 @@ export class ClaimService {
     const activeTasks = this.taskRepo.list({ status: 'doing', isArchived: false });
     let releasedCount = 0;
 
+    const allTasks = this.taskRepo.list();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const allDeps = this.taskRepo.getAllDependencies();
+
     for (const task of activeTasks) {
       if (task.leaseExpiresAt && new Date(task.leaseExpiresAt) < now) {
         const expiredAgent = task.claimedByAgent;
-        task.status = 'todo';
+        const isUnblocked = DependencyGraph.isTaskUnblocked(task.id, allDeps, taskMap);
+        const nextStatus = isUnblocked ? 'todo' : 'blocked-on-dependency';
+
+        task.status = nextStatus;
+        if (!isUnblocked) {
+          const blockers = allDeps.filter((d) => d.taskId === task.id).map((d) => d.dependsOnTaskId);
+          task.blockedReason = `Waiting on blocker tasks: ${blockers.join(', ')}`;
+        } else {
+          task.blockedReason = undefined;
+        }
+
         task.claimedByAgent = undefined;
         task.claimedSessionId = undefined;
         task.leaseExpiresAt = undefined;
@@ -295,7 +358,7 @@ export class ClaimService {
           authorType: 'system',
           authorId: 'lease-monitor',
           noteType: 'general',
-          content: `Lease expired for silent agent '${expiredAgent}'. Task returned to todo queue.`,
+          content: `Lease expired for silent agent '${expiredAgent}'. Task returned to queue (${nextStatus}).`,
           createdAt: now.toISOString(),
         });
 
@@ -303,7 +366,7 @@ export class ClaimService {
           id: `hist-${crypto.randomUUID().slice(0, 8)}`,
           taskId: task.id,
           fromStatus: 'doing',
-          toStatus: 'todo',
+          toStatus: nextStatus,
           changedBy: 'lease-monitor',
           authorType: 'system',
           reason: `Auto-released: agent ${expiredAgent} lease expired`,

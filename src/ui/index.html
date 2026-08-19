@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Moo Tasks — Agentic Task Orchestration & Visibility</title>
+  <title>Moo Tasks — My issues</title>
   
   <!-- Lucide Icons Engine -->
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -22,41 +22,15 @@
       darkMode: 'class',
       theme: {
         extend: {
-          borderColor: {
-            DEFAULT: '#1c1f26',
-            subtle: '#1c1f26',
-            'border-subtle': '#1c1f26',
-            borderSubtle: '#1c1f26',
-            default: '#252933',
-            'border-default': '#252933',
-            borderDefault: '#252933',
-            active: '#383e4d',
-            'border-active': '#383e4d',
-            borderActive: '#383e4d',
-          },
           colors: {
-            app: '#08090a',
-            sidebar: '#0d0e12',
-            surface: '#12141a',
-            surfaceHover: '#181b22',
-            card: '#13151b',
-            cardHover: '#191c24',
-            modal: '#0f1117',
-            borderSubtle: '#1c1f26',
-            'border-subtle': '#1c1f26',
-            borderDefault: '#252933',
-            'border-default': '#252933',
-            borderActive: '#383e4d',
-            'border-active': '#383e4d',
-            accent: {
-              DEFAULT: '#5e6ad2',
-              hover: '#6f7ce8',
-              subtle: 'rgba(94, 106, 210, 0.12)',
-            }
-          },
-          fontFamily: {
-            sans: ['Plus Jakarta Sans', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-            mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+            app: '#0c0d0e',
+            sidebar: '#0d0e10',
+            surface: '#121316',
+            surfaceHover: '#17181c',
+            borderSubtle: '#1a1b1f',
+            borderDefault: '#23262e',
+            borderActive: '#343844',
+            pillActive: '#21242b',
           }
         }
       }
@@ -65,9 +39,6 @@
   
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="/styles.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="bg-app text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex">
   
@@ -77,206 +48,397 @@
     <!-- Mobile Sidebar Backdrop Overlay -->
     <div id="sidebarBackdrop" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-40 hidden md:hidden transition-opacity duration-200" onclick="toggleMobileSidebar(false)"></div>
 
-    <!-- Left Sidebar (Responsive Drawer on Mobile) -->
-    <aside id="sidebar" class="w-64 min-w-[250px] bg-sidebar border-r border-borderSubtle flex flex-col h-full z-50 fixed inset-y-0 left-0 -translate-x-full md:relative md:translate-x-0 transition-transform duration-200 ease-out shadow-2xl md:shadow-none">
-      <!-- Workspace Brand -->
-      <div class="sidebar-header p-3 border-b border-borderSubtle flex items-center justify-between">
-        <div class="flex items-center gap-2.5 font-bold text-[13px] text-slate-100">
-          <img src="/logo.png" alt="Moo Tasks Logo" class="w-7 h-7 rounded-lg shadow-md shadow-indigo-600/30 object-cover" />
-          <div>
-            <div class="leading-tight font-semibold">Moo Tasks</div>
-            <div class="text-[10px] text-slate-500 font-mono font-normal" id="sidebarProjectLabel">v1.0.0 • Local Engine</div>
+    <!-- Left Sidebar -->
+    <aside id="sidebar" class="w-60 min-w-[240px] bg-sidebar border-r border-borderSubtle flex flex-col h-full z-50 fixed inset-y-0 left-0 -translate-x-full md:relative md:translate-x-0 transition-transform duration-200 ease-out shadow-2xl md:shadow-none">
+      
+      <!-- Workspace Brand Header (Dynamic Project Name) -->
+      <div class="sidebar-header">
+        <button class="workspace-dropdown-btn" id="workspaceDropdownBtn">
+          <img src="/logo.png" alt="Logo" class="w-4 h-4 rounded object-cover shrink-0" onerror="this.style.display='none'">
+          <span class="truncate font-semibold" id="workspaceNameLabel">Workspace</span>
+          <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-500"></i>
+        </button>
+
+        <div class="sidebar-header-actions">
+          <button class="sidebar-action-btn" id="btnSidebarSearch" title="Search (⌘K)">
+            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400"></i>
+          </button>
+          <button class="sidebar-action-btn" id="btnSidebarCompose" title="New issue (C)">
+            <i data-lucide="square-pen" class="w-3.5 h-3.5 text-slate-400"></i>
+          </button>
+        </div>
+
+        <!-- Workspaces Dropdown Popover Menu -->
+        <div id="workspaceDropdownMenu" class="hidden absolute top-12 left-2 right-2 bg-surface border border-borderDefault rounded-lg shadow-2xl p-2 z-50">
+          <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 px-2 py-1 mb-1 border-b border-borderSubtle">Workspaces (Global)</div>
+          <div id="workspaceListContainer" class="max-h-56 overflow-y-auto space-y-1 py-1">
+            <!-- Dynamically populated -->
+          </div>
+          <div class="border-t border-borderSubtle mt-1 pt-1">
+            <button id="btnRegisterWorkspace" class="w-full flex items-center gap-2 px-2 py-1.5 text-xs text-slate-300 hover:text-white hover:bg-surfaceHover rounded transition-colors">
+              <i data-lucide="folder-plus" class="w-3.5 h-3.5 text-slate-400"></i>
+              <span>Register Workspace...</span>
+            </button>
           </div>
         </div>
-        <button id="btnMobileSidebarClose" class="md:hidden p-1.5 text-slate-400 hover:text-slate-200 rounded" onclick="toggleMobileSidebar(false)">
-          <i data-lucide="x" class="w-4 h-4"></i>
-        </button>
       </div>
 
-      <!-- Navigation List -->
-      <div class="sidebar-nav p-2 flex-1 overflow-y-auto flex flex-col gap-0.5">
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2.5 pt-3 pb-1">Views</div>
-        
-        <div class="nav-item active" data-view="tasks">
-          <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="check-square" class="w-4 h-4"></i></span>
-            <span>All Issues</span>
-          </div>
-          <span class="nav-counter" id="navCounterTotal">0</span>
-        </div>
-
-        <div class="nav-item" data-view="goals">
-          <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="target" class="w-4 h-4"></i></span>
-            <span>Goals & Roadmap</span>
-          </div>
-          <span class="nav-counter" id="navCounterGoals">0</span>
-        </div>
-
+      <!-- Navigation List (Only Real Supported Features) -->
+      <div class="sidebar-nav">
+        <!-- Main Views -->
         <div class="nav-item" data-view="human">
           <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i></span>
-            <span>Human Inbox</span>
+            <span class="nav-icon"><i data-lucide="inbox" class="w-4 h-4"></i></span>
+            <span>Inbox</span>
           </div>
           <span class="nav-counter alert hidden" id="navCounterHuman">0</span>
         </div>
 
-        <div class="nav-item" data-view="review">
+        <div class="nav-item active" data-view="tasks" data-mode="list">
           <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="shield-check" class="w-4 h-4 text-indigo-400"></i></span>
-            <span>Review & Proofs</span>
+            <span class="nav-icon"><i data-lucide="target" class="w-4 h-4 text-slate-300"></i></span>
+            <span>My issues</span>
           </div>
-          <span class="nav-counter alert hidden" id="navCounterReview">0</span>
-        </div>
-
-        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2.5 pt-4 pb-1">Knowledge & Sync</div>
-
-        <div class="nav-item" data-view="decisions">
-          <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="landmark" class="w-4 h-4"></i></span>
-            <span>Decisions (ADR)</span>
-          </div>
-          <span class="nav-counter" id="navCounterDecisions">0</span>
+          <span class="nav-counter" id="navCounterTotal">0</span>
         </div>
 
         <div class="nav-item" data-view="activity">
           <div class="nav-item-content">
             <span class="nav-icon"><i data-lucide="activity" class="w-4 h-4"></i></span>
-            <span>Activity Feed</span>
+            <span>Pulse</span>
           </div>
+        </div>
+
+        <div class="nav-item" data-view="review">
+          <div class="nav-item-content">
+            <span class="nav-icon"><i data-lucide="shield-check" class="w-4 h-4"></i></span>
+            <span>Review & Proofs</span>
+          </div>
+          <span class="nav-counter alert hidden" id="navCounterReview">0</span>
+        </div>
+
+        <!-- Section: Workspace -->
+        <div class="sidebar-section-title">
+          <span>Workspace</span>
+          <i data-lucide="chevron-down" class="w-3 h-3 text-slate-600"></i>
+        </div>
+
+        <div class="nav-item" data-view="goals">
+          <div class="nav-item-content">
+            <span class="nav-icon"><i data-lucide="compass" class="w-4 h-4"></i></span>
+            <span>Goals & Roadmap</span>
+          </div>
+          <span class="nav-counter" id="navCounterGoals">0</span>
+        </div>
+
+        <div class="nav-item" data-view="decisions">
+          <div class="nav-item-content">
+            <span class="nav-icon"><i data-lucide="layers" class="w-4 h-4"></i></span>
+            <span>Decisions (ADR)</span>
+          </div>
+          <span class="nav-counter" id="navCounterDecisions">0</span>
         </div>
 
         <div class="nav-item" data-view="resume">
           <div class="nav-item-content">
-            <span class="nav-icon"><i data-lucide="compass" class="w-4 h-4"></i></span>
+            <span class="nav-icon"><i data-lucide="repeat" class="w-4 h-4"></i></span>
             <span>Session Resume</span>
           </div>
         </div>
+
+
+
       </div>
 
-      <!-- Sidebar Footer -->
-      <div class="sidebar-footer p-3 border-t border-borderSubtle flex items-center justify-between text-xs text-slate-500">
-        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono transition-colors" id="liveSyncIndicator" title="Real-time multi-agent SQLite synchronization active">
+      <!-- Live Sync status footer -->
+      <div class="p-3 border-t border-borderSubtle flex items-center justify-between text-xs text-slate-500">
+        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono" id="liveSyncIndicator">
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" id="liveSyncDot"></span>
           <span id="liveSyncLabel">Live Sync</span>
         </div>
-        <div class="flex items-center gap-2 hidden md:flex">
-          <button id="btnOpenShortcutsHelp" class="text-slate-500 hover:text-slate-300 flex items-center gap-1" title="Keyboard Shortcuts (?)">
-            <kbd class="kbd-key">?</kbd>
-          </button>
-          <div class="flex items-center gap-1">
-            <kbd class="kbd-key">C</kbd>
-            <span class="text-[10px] text-slate-500">New</span>
-          </div>
-        </div>
+        <button class="text-slate-500 hover:text-slate-300" id="btnOpenShortcutsHelp" title="Keyboard Shortcuts (?)">
+          <kbd class="kbd-key">?</kbd>
+        </button>
       </div>
+
     </aside>
 
     <!-- Main Workspace View -->
-    <main id="mainWorkspace" class="flex-1 flex flex-col h-full overflow-hidden bg-app pb-14 md:pb-0">
+    <main id="mainWorkspace" class="flex-1 flex flex-col h-full overflow-hidden bg-app">
+      
       <!-- Top Action Header -->
-      <header class="top-header h-12 min-h-[48px] border-b border-borderSubtle bg-app flex items-center justify-between px-3 md:px-4 gap-2">
-        <div class="flex items-center gap-2 overflow-hidden">
-          <!-- Mobile Hamburger Toggle Button -->
-          <button id="btnMobileSidebarToggle" class="md:hidden p-1.5 rounded text-slate-300 hover:bg-surface border border-subtle flex items-center justify-center shrink-0" onclick="toggleMobileSidebar(true)" aria-label="Open navigation menu">
+      <header class="main-top-header">
+        <div class="flex items-center gap-4 overflow-hidden">
+          <!-- Mobile Hamburger Toggle -->
+          <button id="btnMobileSidebarToggle" class="md:hidden p-1.5 rounded text-slate-300 hover:bg-surface border border-borderSubtle flex items-center justify-center shrink-0" onclick="toggleMobileSidebar(true)">
             <i data-lucide="menu" class="w-4 h-4"></i>
           </button>
 
-          <div class="breadcrumb-area flex items-center gap-1.5 text-[12px] md:text-[12.5px] font-medium text-slate-400 truncate">
-            <span id="breadcrumbWorkspaceName" class="truncate max-w-[100px] sm:max-w-[160px]">Workspace</span>
-            <span class="text-slate-600">/</span>
-            <span class="breadcrumb-active text-slate-100 font-semibold truncate" id="activeViewTitle">All Issues</span>
+          <!-- Linear-style Breadcrumbs & Title -->
+          <div class="flex items-center gap-2 text-xs text-slate-400 font-medium">
+            <div class="w-4 h-4 rounded bg-pink-500/20 text-pink-400 flex items-center justify-center text-[10px] font-bold">
+              <i data-lucide="box" class="w-3 h-3 text-pink-400"></i>
+            </div>
+            <span id="headerWorkspaceBreadcrumb" class="hover:text-slate-200 cursor-pointer" onclick="document.getElementById('workspaceDropdownBtn')?.click()" title="Switch or manage workspace">Workspace</span>
+            <i data-lucide="chevron-right" class="w-3 h-3 text-slate-600"></i>
+            <h1 class="page-title text-slate-100 font-semibold text-sm" id="activeViewTitle">Issues</h1>
           </div>
         </div>
 
-        <div class="flex items-center gap-1.5 sm:gap-2.5">
-          <!-- Command Palette Trigger -->
-          <div class="search-trigger cursor-pointer flex items-center gap-1.5 bg-surface border border-borderDefault hover:border-borderActive rounded-md px-2 py-1 text-slate-400 text-xs transition" id="btnOpenPalette">
-            <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400"></i>
-            <span class="hidden sm:inline text-[11.5px]">Search...</span>
-            <kbd class="kbd-key hidden md:inline-block">⌘K</kbd>
+        <!-- Top Right Actions -->
+        <div class="header-action-group relative flex items-center gap-1.5">
+          <!-- Filter Button (≡) with Popover Menu -->
+          <div class="relative" id="filterMenuContainer">
+            <button class="icon-button-round relative" id="btnFilterMenu" title="Filter issues (F)" aria-expanded="false">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="4" y1="6" x2="20" y2="6"></line>
+                <line x1="7" y1="12" x2="17" y2="12"></line>
+                <line x1="10" y1="18" x2="14" y2="18"></line>
+              </svg>
+              <span id="filterActiveBadge" class="hidden absolute -top-1 -right-1 px-1 rounded-full text-[9px] font-mono bg-indigo-500 text-white font-bold">0</span>
+            </button>
+
+            <!-- Filter Popover -->
+            <div id="filterPopover" class="filter-popover hidden absolute right-0 top-full mt-2 w-64 bg-surface border border-borderDefault rounded-lg shadow-2xl z-50 p-1 backdrop-blur-md">
+              <!-- Root View -->
+              <div id="filterPopoverRoot" class="filter-menu-view">
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 px-2 py-1">Filter by</div>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="goal">
+                  <span class="flex items-center gap-2"><i data-lucide="target" class="w-3.5 h-3.5 text-indigo-400"></i> Goal / Initiative</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="type">
+                  <span class="flex items-center gap-2"><i data-lucide="sparkles" class="w-3.5 h-3.5 text-amber-400"></i> Type</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="priority">
+                  <span class="flex items-center gap-2"><i data-lucide="flag" class="w-3.5 h-3.5 text-rose-400"></i> Priority</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="tag">
+                  <span class="flex items-center gap-2"><i data-lucide="tag" class="w-3.5 h-3.5 text-emerald-400"></i> Tag</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="agent">
+                  <span class="flex items-center gap-2"><i data-lucide="bot" class="w-3.5 h-3.5 text-blue-400"></i> Assignee</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
+              </div>
+
+              <!-- Submenu View -->
+              <div id="filterPopoverSub" class="filter-menu-view hidden">
+                <div class="flex items-center justify-between px-2 py-1 border-b border-borderSubtle mb-1">
+                  <button id="btnFilterSubBack" class="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-200">
+                    <i data-lucide="chevron-left" class="w-3 h-3"></i>
+                    <span id="filterSubTitle">Back</span>
+                  </button>
+                </div>
+                <div class="p-1">
+                  <input type="text" id="filterSubSearch" placeholder="Search..." class="w-full bg-app border border-borderSubtle rounded px-2 py-1 text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-500 mb-1">
+                </div>
+                <div id="filterSubOptionsList" class="max-h-52 overflow-y-auto flex flex-col gap-0.5 p-1"></div>
+              </div>
+            </div>
           </div>
 
-          <!-- View Switcher (List vs Board) -->
-          <div class="view-switcher flex bg-surface border border-borderDefault rounded-md p-0.5 gap-0.5" id="tasksViewSwitcher">
-            <button class="view-btn active" data-mode="list" id="btnViewList" title="List View">
-              <i data-lucide="list" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">List</span>
+          <!-- View Options Button (tune / sliders) with Popover Menu -->
+          <div class="relative" id="sortMenuContainer">
+            <button class="icon-button-round" id="btnSortMenu" title="View options (V)" aria-expanded="false">
+              <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i>
             </button>
-            <button class="view-btn" data-mode="board" id="btnViewBoard" title="Kanban Board View">
-              <i data-lucide="kanban" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">Board</span>
+
+            <!-- View Options Popover -->
+            <div id="sortPopover" class="view-options-popover filter-popover hidden absolute right-0 top-full mt-2 w-80 bg-[#121316] border border-[#23262e] rounded-xl shadow-2xl z-50 p-3 backdrop-blur-md text-xs">
+              <!-- Segmented View Switcher -->
+              <div class="view-options-mode-switcher grid grid-cols-2 gap-1 p-1 bg-[#0c0d0e] rounded-lg border border-borderSubtle mb-3" id="viewOptModeSwitcher">
+                <button type="button" class="view-opt-tab active flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition" data-mode="list">
+                  <i data-lucide="list" class="w-3.5 h-3.5"></i>
+                  <span>List</span>
+                </button>
+                <button type="button" class="view-opt-tab flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-md text-xs font-medium transition" data-mode="board">
+                  <i data-lucide="kanban" class="w-3.5 h-3.5"></i>
+                  <span>Board</span>
+                </button>
+              </div>
+
+              <!-- Controls List -->
+              <div class="space-y-2.5">
+                <!-- Grouping -->
+                <div class="flex items-center justify-between">
+                  <label class="flex items-center gap-1.5 text-slate-300 font-medium">
+                    <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-500"></i>
+                    <span>Grouping</span>
+                  </label>
+                  <select id="selViewGrouping" class="view-opt-select">
+                    <option value="status">Status</option>
+                    <option value="priority">Priority</option>
+                    <option value="agent">Assignee</option>
+                    <option value="type">Type</option>
+                    <option value="goal">Goal / Project</option>
+                    <option value="none">No grouping</option>
+                  </select>
+                </div>
+
+                <!-- Sub-grouping -->
+                <div class="flex items-center justify-between">
+                  <label class="text-slate-300 font-medium pl-5">Sub-grouping</label>
+                  <select id="selViewSubGrouping" class="view-opt-select">
+                    <option value="none">No grouping</option>
+                    <option value="status">Status</option>
+                    <option value="priority">Priority</option>
+                    <option value="agent">Assignee</option>
+                    <option value="type">Type</option>
+                    <option value="goal">Goal / Project</option>
+                  </select>
+                </div>
+
+                <!-- Ordering -->
+                <div class="flex items-center justify-between">
+                  <label class="flex items-center gap-1.5 text-slate-300 font-medium">
+                    <i data-lucide="arrow-up-down" class="w-3.5 h-3.5 text-slate-500"></i>
+                    <span>Ordering</span>
+                  </label>
+                  <select id="selViewOrdering" class="view-opt-select">
+                    <option value="priority">Priority</option>
+                    <option value="status">Status</option>
+                    <option value="title">Title</option>
+                    <option value="updated">Recently Updated</option>
+                    <option value="created">Creation Date</option>
+                    <option value="thrash">Attempts / Thrash</option>
+                    <option value="default">Default</option>
+                  </select>
+                </div>
+
+                <!-- Order completed by recency -->
+                <div class="flex items-center justify-between pt-1">
+                  <label class="text-slate-300 text-[11.5px]" for="chkViewRecency">Order completed by recency</label>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="chkViewRecency">
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <!-- Completed issues -->
+                <div class="flex items-center justify-between">
+                  <label class="text-slate-300 text-[11.5px]">Completed issues</label>
+                  <select id="selViewCompleted" class="view-opt-select">
+                    <option value="all">All</option>
+                    <option value="past_day">Past day</option>
+                    <option value="past_week">Past week</option>
+                    <option value="past_month">Past month</option>
+                    <option value="hide">Hide completed</option>
+                  </select>
+                </div>
+
+                <!-- Show sub-issues -->
+                <div class="flex items-center justify-between">
+                  <label class="text-slate-300 text-[11.5px]" for="chkViewShowSubIssues">Show sub-issues</label>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="chkViewShowSubIssues" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+
+                <!-- List Options Section -->
+                <div class="pt-2 border-t border-borderSubtle">
+                  <div class="text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 mb-2">List options</div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="text-slate-300 text-[11.5px]" for="chkViewNestedSub">Nested sub-issues</label>
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="chkViewNestedSub">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <label class="text-slate-300 text-[11.5px]" for="chkViewEmptyGroups">Show empty groups</label>
+                    <label class="toggle-switch">
+                      <input type="checkbox" id="chkViewEmptyGroups">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- Display Properties Section -->
+                <div class="pt-2 border-t border-borderSubtle">
+                  <div class="text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 mb-2">Display properties</div>
+                  <div class="flex flex-wrap gap-1.5" id="displayPropertiesContainer">
+                    <button type="button" class="display-prop-pill active" data-prop="id">ID</button>
+                    <button type="button" class="display-prop-pill active" data-prop="status">Status</button>
+                    <button type="button" class="display-prop-pill active" data-prop="assignee">Assignee</button>
+                    <button type="button" class="display-prop-pill active" data-prop="priority">Priority</button>
+                    <button type="button" class="display-prop-pill" data-prop="project">Project</button>
+                    <button type="button" class="display-prop-pill" data-prop="dueDate">Due date</button>
+                    <button type="button" class="display-prop-pill" data-prop="milestone">Milestone</button>
+                    <button type="button" class="display-prop-pill active" data-prop="labels">Labels</button>
+                    <button type="button" class="display-prop-pill" data-prop="links">Links</button>
+                    <button type="button" class="display-prop-pill" data-prop="timeInStatus">Time in status</button>
+                    <button type="button" class="display-prop-pill" data-prop="created">Created</button>
+                    <button type="button" class="display-prop-pill" data-prop="updated">Updated</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- View Switcher (List vs Board vs Graph) -->
+          <div class="flex items-center gap-1 bg-surface border border-borderDefault rounded-full p-0.5 ml-1" id="tasksViewSwitcher">
+            <button class="icon-button-round active border-none" data-mode="list" id="btnViewList" title="List View">
+              <i data-lucide="list" class="w-3 h-3"></i>
+            </button>
+            <button class="icon-button-round border-none" data-mode="board" id="btnViewBoard" title="Kanban Board View">
+              <i data-lucide="kanban" class="w-3 h-3"></i>
+            </button>
+            <button class="icon-button-round border-none" data-mode="graph" id="btnViewGraph" title="DAG Graph View">
+              <i data-lucide="git-fork" class="w-3 h-3"></i>
             </button>
           </div>
 
-          <!-- Sound Alert Toggle -->
-          <button class="btn-secondary px-2 py-1" id="btnToggleSound" title="Toggle audio chime alerts">
-            <i data-lucide="bell" id="iconSoundState" class="w-3.5 h-3.5 text-slate-300"></i>
-          </button>
-
-          <!-- Quick Action Buttons -->
-          <button class="btn-secondary hidden sm:flex" id="btnHeaderExport">
-            <i data-lucide="download" class="w-3.5 h-3.5"></i> <span>Export</span>
-          </button>
-          <button class="btn-primary px-2.5 py-1" id="btnHeaderNewTask">
-            <i data-lucide="plus" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">New Issue</span>
+          <!-- New Issue Compose Button -->
+          <button class="btn-primary ml-2 px-2.5 py-1 text-xs" id="btnHeaderNewTask">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span class="hidden sm:inline">New Issue</span>
           </button>
         </div>
       </header>
 
-      <!-- Filter Toolbar -->
-      <div class="filter-toolbar h-10 min-h-[40px] border-b border-borderSubtle bg-app flex items-center justify-between px-3 md:px-4 text-xs overflow-x-auto" id="filterToolbar">
-        <div class="filter-group flex items-center gap-2 shrink-0">
-          <select id="filterGoal" class="filter-select" aria-label="Filter by Goal">
-            <option value="">All Goals</option>
-            <option value="__orphans__">Scope Drift (Orphans)</option>
-          </select>
-
-          <select id="filterPriority" class="filter-select" aria-label="Filter by Priority">
-            <option value="">All Priorities</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-
-          <select id="filterAgent" class="filter-select" aria-label="Filter by Assignee">
-            <option value="">All Assignees</option>
-          </select>
-
-          <select id="filterSort" class="filter-select" aria-label="Sort issues">
-            <option value="default">Sort: Default</option>
-            <option value="priority-desc">Sort: Priority (High→Low)</option>
-            <option value="updated-desc">Sort: Recently Updated</option>
-            <option value="thrash-desc">Sort: Attempts / Thrash</option>
-          </select>
-
-          <input type="text" id="filterSearch" placeholder="Filter issues..." class="filter-select w-44" aria-label="Search issues">
-        </div>
-
-        <div class="flex items-center gap-3 text-xs text-slate-500 font-mono">
-          <span id="displayCountLabel">0 issues</span>
+      <!-- Subheader Preset Tabs Bar -->
+      <div class="px-5 pt-2 pb-1.5 flex items-center justify-between border-b border-borderSubtle bg-app" id="tasksSubheaderBar">
+        <div class="flex items-center gap-1">
+          <button type="button" class="tab-preset-btn" data-preset="active" id="btnPresetActive">Active</button>
+          <button type="button" class="tab-preset-btn" data-preset="backlog" id="btnPresetBacklog">Backlog</button>
+          <button type="button" class="tab-preset-btn active" data-preset="all" id="btnPresetAll">All issues</button>
         </div>
       </div>
 
+      <!-- Active Filter Chips Bar with Inline Add Filter (+) -->
+      <div class="flex flex-wrap items-center gap-2 px-5 py-1.5 border-b border-borderSubtle bg-app empty:hidden" id="activeFilterChipsContainer">
+        <div class="flex flex-wrap items-center gap-1.5" id="activeFilterChips"></div>
+        <button type="button" class="filter-add-chip-btn" id="btnAddFilterChip" title="Add filter">
+          <i data-lucide="plus" class="w-3 h-3"></i>
+        </button>
+      </div>
+
       <!-- Viewport Area -->
-      <div class="content-viewport flex-1 overflow-y-auto p-4 relative">
+      <div class="content-viewport">
         <!-- View 1: All Issues (Tasks) -->
         <section id="pane-tasks" class="view-pane active">
-          <!-- Mode A: List View -->
-          <div id="tasksListView" class="list-container flex flex-col gap-4 max-w-6xl mx-auto"></div>
+          <!-- Mode A: List View (Exact OpenReplay Layout) -->
+          <div id="tasksListView" class="w-full flex flex-col py-2"></div>
           <!-- Mode B: Board View -->
-          <div id="tasksBoardView" class="board-container hidden"></div>
+          <div id="tasksBoardView" class="board-container hidden p-4"></div>
+          <!-- Mode C: Graph DAG View -->
+          <div id="tasksGraphView" class="graph-container hidden w-full h-full p-4"></div>
         </section>
 
         <!-- View 2: Goals & Roadmap -->
-        <section id="pane-goals" class="view-pane hidden">
-          <!-- Overview Mode -->
+        <section id="pane-goals" class="view-pane hidden p-6">
           <div id="goalsOverviewView">
             <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
               <div>
                 <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
-                  <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Project Goals & Product Roadmap
+                  <i data-lucide="compass" class="w-4 h-4 text-indigo-400"></i> Project Goals & Initiatives
                 </h2>
-                <p class="text-xs text-slate-400">Verbatim human prompts, full specifications, and live coverage tracking against caps.</p>
+                <p class="text-xs text-slate-400">Verbatim human prompts, architectural specifications, and live coverage tracking.</p>
               </div>
               <button class="btn-primary text-xs" id="btnCreateGoal">
                 <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Goal
@@ -284,18 +446,16 @@
             </div>
             <div id="goalsViewContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3.5 max-w-6xl mx-auto"></div>
           </div>
-
-          <!-- Goal Details & Spec Editor Mode -->
           <div id="goalDetailsView" class="hidden max-w-5xl mx-auto space-y-4">
             <div id="goalDetailsContent"></div>
           </div>
         </section>
 
         <!-- View 3: Human Inbox -->
-        <section id="pane-human" class="view-pane hidden">
+        <section id="pane-human" class="view-pane hidden p-6">
           <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-purple-400 flex items-center gap-2">
-              <i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i> Human Attention Queue
+              <i data-lucide="inbox" class="w-4 h-4 text-purple-400"></i> Human Attention Queue
             </h2>
             <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering immediately unblocks the waiting agent.</p>
           </div>
@@ -303,22 +463,22 @@
         </section>
 
         <!-- View 4: Review & Proofs -->
-        <section id="pane-review" class="view-pane hidden">
+        <section id="pane-review" class="view-pane hidden p-6">
           <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
               <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400"></i> Review & Proof Verification
             </h2>
-            <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks or review dropped tasks.</p>
+            <p class="text-xs text-slate-400">Inspect evidence and artifacts for agent-completed tasks or review dropped tasks.</p>
           </div>
           <div id="reviewFeedList" class="space-y-3.5 max-w-4xl mx-auto"></div>
         </section>
 
         <!-- View 5: Decisions (ADR) -->
-        <section id="pane-decisions" class="view-pane hidden">
+        <section id="pane-decisions" class="view-pane hidden p-6">
           <div class="flex items-center justify-between mb-4 max-w-6xl mx-auto">
             <div>
               <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
-                <i data-lucide="landmark" class="w-4 h-4 text-indigo-400"></i> Settled Architectural Decisions
+                <i data-lucide="layers" class="w-4 h-4 text-indigo-400"></i> Settled Architectural Decisions
               </h2>
               <p class="text-xs text-slate-400">Firm decisions consulted by agents prior to task planning.</p>
             </div>
@@ -330,26 +490,27 @@
         </section>
 
         <!-- View 6: Activity Feed -->
-        <section id="pane-activity" class="view-pane hidden">
+        <section id="pane-activity" class="view-pane hidden p-6">
           <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
-              <i data-lucide="activity" class="w-4 h-4 text-blue-400"></i> Live Activity Feed
+              <i data-lucide="activity" class="w-4 h-4 text-blue-400"></i> Pulse & Live Activity Feed
             </h2>
           </div>
           <div id="activityStream" class="space-y-2 max-w-4xl mx-auto font-mono text-xs"></div>
         </section>
 
         <!-- View 7: Session Resume -->
-        <section id="pane-resume" class="view-pane hidden">
+        <section id="pane-resume" class="view-pane hidden p-6">
           <div class="mb-4 max-w-4xl mx-auto">
             <h2 class="text-base font-semibold text-slate-100 flex items-center gap-2">
-              <i data-lucide="compass" class="w-4 h-4 text-indigo-400"></i> Where Did I Leave Off
+              <i data-lucide="repeat" class="w-4 h-4 text-indigo-400"></i> Session Continuity & Loops
             </h2>
-            <p class="text-xs text-slate-400">Instant session continuity snapshot.</p>
+            <p class="text-xs text-slate-400">Instant session continuity snapshot and active leases.</p>
           </div>
           <div id="sessionResumeDashboard" class="max-w-4xl mx-auto space-y-4"></div>
         </section>
       </div>
+
     </main>
   </div>
 
@@ -393,27 +554,44 @@
   </div>
 
   <!-- Modal: Create Task -->
-  <div id="modalCreateTask" class="modal-backdrop hidden">
-    <div class="modal-card max-w-lg">
-      <div class="flex items-center justify-between mb-3">
+  <div id="modalCreateTask" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-lg w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
           <i data-lucide="plus-circle" class="w-4 h-4 text-indigo-400"></i> Create New Issue
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
-      <form id="formCreateTask" class="space-y-3 text-xs">
+      <form id="formCreateTask" class="space-y-3.5 text-xs">
         <div>
-          <label class="block text-slate-400 mb-1">Title</label>
-          <input type="text" id="inputTaskTitle" required class="input-field" placeholder="Issue title...">
+          <label for="inputTaskTitle" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Title <span class="text-rose-400">*</span></span>
+          </label>
+          <input type="text" id="inputTaskTitle" required class="input-field w-full" placeholder="Issue title...">
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="block text-slate-400 mb-1">Goal</label>
-            <select id="inputTaskGoal" class="select-field"></select>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="flex flex-col">
+            <label for="inputTaskGoal" class="text-xs font-medium text-slate-300 mb-1.5 truncate">Goal / Project</label>
+            <select id="inputTaskGoal" class="select-field w-full"></select>
           </div>
-          <div>
-            <label class="block text-slate-400 mb-1">Priority</label>
-            <select id="inputTaskPriority" class="select-field">
+          <div class="flex flex-col">
+            <label for="inputTaskType" class="text-xs font-medium text-slate-300 mb-1.5">Type</label>
+            <select id="inputTaskType" class="select-field w-full">
+              <option value="feature">✨ Feature</option>
+              <option value="bug">🐛 Bug</option>
+              <option value="refactor">♻️ Refactor</option>
+              <option value="test">🧪 Test</option>
+              <option value="docs">📚 Docs</option>
+              <option value="chore">🧹 Chore</option>
+              <option value="spike">🔬 Spike</option>
+              <option value="security">🔒 Security</option>
+            </select>
+          </div>
+          <div class="flex flex-col">
+            <label for="inputTaskPriority" class="text-xs font-medium text-slate-300 mb-1.5">Priority</label>
+            <select id="inputTaskPriority" class="select-field w-full">
               <option value="medium">Medium</option>
               <option value="low">Low</option>
               <option value="high">High</option>
@@ -422,238 +600,265 @@
           </div>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Detailed Description & Notes (Supports Markdown)</label>
-          <textarea id="inputTaskDescription" rows="3" class="input-field font-mono" placeholder="Implementation steps, technical design, code snippets..."></textarea>
+          <label for="inputTaskTags" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Tags</span>
+            <span class="text-[11px] text-slate-500 font-normal">Comma-separated</span>
+          </label>
+          <input type="text" id="inputTaskTags" class="input-field w-full" placeholder="e.g. API, Backend, Android">
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Acceptance Criteria (Supports Markdown & Checkboxes)</label>
-          <textarea id="inputTaskAC" required rows="3" class="input-field font-mono" placeholder="## Criteria&#10;- [ ] Implement handler&#10;- [ ] Add unit test"></textarea>
+          <label for="inputTaskDescription" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Detailed Description & Notes</span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown supported</span>
+          </label>
+          <textarea id="inputTaskDescription" rows="3" class="input-field font-mono w-full" placeholder="Implementation steps, technical design, code snippets..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Declared Touch Files (Comma-separated)</label>
-          <input type="text" id="inputTaskFiles" class="input-field" placeholder="src/controllers/auth.ts, src/routes/user.ts">
+          <label for="inputTaskAC" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Acceptance Criteria <span class="text-rose-400">*</span></span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown & checkboxes</span>
+          </label>
+          <textarea id="inputTaskAC" required rows="3" class="input-field font-mono w-full" placeholder="## Criteria&#10;- [ ] Implement handler&#10;- [ ] Add unit test"></textarea>
         </div>
-        <div class="flex items-center gap-2 pt-1">
-          <input type="checkbox" id="inputTaskDeferred">
-          <label for="inputTaskDeferred" class="text-slate-300">Defer to backlog pile</label>
+        <div>
+          <label for="inputTaskFiles" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Declared Touch Files</span>
+            <span class="text-[11px] text-slate-500 font-normal">Comma-separated paths</span>
+          </label>
+          <input type="text" id="inputTaskFiles" class="input-field font-mono w-full" placeholder="src/feature.ts, src/types.ts">
         </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Create Issue</button>
+        <div>
+          <label for="inputTaskAgent" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Assign to Agent</span>
+            <span class="text-[11px] text-slate-500 font-normal">Optional (e.g. antigravity, vibe-agent)</span>
+          </label>
+          <input type="text" id="inputTaskAgent" class="input-field font-mono w-full" placeholder="e.g. antigravity, vibe-agent">
+        </div>
+        <div class="flex items-center gap-2 pt-0.5">
+          <input type="checkbox" id="inputTaskDeferred" class="w-3.5 h-3.5 rounded bg-surface border-borderDefault text-indigo-600 focus:ring-0 focus:ring-offset-0 cursor-pointer accent-indigo-600">
+          <label for="inputTaskDeferred" class="text-xs text-slate-300 cursor-pointer select-none">Defer to backlog pile</label>
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Issue
+          </button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Create Subtask -->
-  <div id="modalCreateSubtask" class="modal-backdrop hidden">
-    <div class="modal-card max-w-md">
-      <div class="flex items-center justify-between mb-3">
+  <div id="modalCreateSubtask" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
           <i data-lucide="corner-down-right" class="w-4 h-4 text-indigo-400"></i> Add Subtask
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
-      <form id="formCreateSubtask" class="space-y-3 text-xs">
+      <form id="formCreateSubtask" class="space-y-3.5 text-xs">
         <input type="hidden" id="inputSubtaskParentId">
         <div>
-          <label class="block text-slate-400 mb-1">Subtask Title</label>
-          <input type="text" id="inputSubtaskTitle" required class="input-field" placeholder="Subtask title...">
+          <label for="inputSubtaskTitle" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Subtask Title <span class="text-rose-400">*</span></span>
+          </label>
+          <input type="text" id="inputSubtaskTitle" required class="input-field w-full" placeholder="Subtask title...">
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Acceptance Criteria (Supports Markdown)</label>
-          <textarea id="inputSubtaskAC" required rows="3" class="input-field font-mono" placeholder="- [ ] Subtask criteria..."></textarea>
+          <label for="inputSubtaskAC" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Acceptance Criteria <span class="text-rose-400">*</span></span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown supported</span>
+          </label>
+          <textarea id="inputSubtaskAC" required rows="3" class="input-field font-mono w-full" placeholder="- [ ] Subtask criteria..."></textarea>
         </div>
-        <div class="flex justify-end gap-2 pt-2 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Add Subtask</button>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Subtask
+          </button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Merge Task -->
-  <div id="modalMergeTask" class="modal-backdrop hidden">
-    <div class="modal-card max-w-md">
-      <div class="flex items-center justify-between mb-3">
+  <div id="modalMergeTask" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
           <i data-lucide="git-merge" class="w-4 h-4 text-indigo-400"></i> Merge Issue into Another
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
-      <form id="formMergeTask" class="space-y-3 text-xs">
+      <form id="formMergeTask" class="space-y-3.5 text-xs">
         <input type="hidden" id="inputMergeSourceId">
-        <div class="text-slate-400">
-          Source issue <span id="labelMergeSourceId" class="font-mono text-indigo-300 font-semibold"></span> will be marked as dropped/merged. Its subtasks, dependencies, and audit notes will transfer to the target issue.
+        <div class="text-slate-400 text-xs bg-surface/50 p-2.5 rounded-md border border-borderSubtle">
+          Source issue <span id="labelMergeSourceId" class="font-mono text-indigo-300 font-semibold"></span> will be marked as dropped/merged.
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Target Issue to Keep</label>
-          <select id="selectMergeTargetId" required class="select-field"></select>
+          <label for="selectMergeTargetId" class="block text-xs font-medium text-slate-300 mb-1.5">Target Issue to Keep <span class="text-rose-400">*</span></label>
+          <select id="selectMergeTargetId" required class="select-field w-full"></select>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Reason for Merging</label>
-          <input type="text" id="inputMergeReason" class="input-field" placeholder="e.g. Duplicate issue found during implementation">
+          <label for="inputMergeReason" class="block text-xs font-medium text-slate-300 mb-1.5">Reason for Merging</label>
+          <input type="text" id="inputMergeReason" class="input-field w-full" placeholder="e.g. Duplicate issue found">
         </div>
-        <div class="flex justify-end gap-2 pt-2 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Confirm Merge</button>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="git-merge" class="w-3.5 h-3.5"></i> Confirm Merge
+          </button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Create Goal -->
-  <div id="modalCreateGoal" class="modal-backdrop hidden">
-    <div class="modal-card max-w-lg">
-      <div class="flex items-center justify-between mb-3">
+  <div id="modalCreateGoal" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-lg w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
-          <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Create Goal
+          <i data-lucide="target" class="w-4 h-4 text-indigo-400"></i> Create Initiative / Goal
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
-      <form id="formCreateGoal" class="space-y-3 text-xs">
+      <form id="formCreateGoal" class="space-y-3.5 text-xs">
         <div>
-          <label class="block text-slate-400 mb-1">Title</label>
-          <input type="text" id="inputGoalTitle" required class="input-field" placeholder="e.g. Implement Multi-Factor Authentication">
+          <label for="inputGoalTitle" class="block text-xs font-medium text-slate-300 mb-1.5">Title <span class="text-rose-400">*</span></label>
+          <input type="text" id="inputGoalTitle" required class="input-field w-full" placeholder="e.g. Regressions & Improvements">
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Verbatim Human Request (Supports Markdown)</label>
-          <textarea id="inputGoalVerbatim" required rows="3" class="input-field font-mono" placeholder="Paste verbatim original prompt here..."></textarea>
+          <label for="inputGoalVerbatim" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Verbatim Request <span class="text-rose-400">*</span></span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown supported</span>
+          </label>
+          <textarea id="inputGoalVerbatim" required rows="3" class="input-field font-mono w-full" placeholder="Paste verbatim original prompt here..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Rich Markdown PRD / Specification (Optional)</label>
-          <textarea id="inputGoalDescription" rows="4" class="input-field font-mono" placeholder="# Goal PRD & Architecture&#10;&#10;Detailed specification, architectural breakdown, and milestones..."></textarea>
+          <label for="inputGoalDescription" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Rich Markdown PRD / Specification</span>
+            <span class="text-[11px] text-slate-500 font-normal">Optional</span>
+          </label>
+          <textarea id="inputGoalDescription" rows="4" class="input-field font-mono w-full" placeholder="# Goal PRD & Architecture&#10;&#10;Detailed specification..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Open Tasks Cap (Max open items)</label>
+          <label for="inputGoalCap" class="block text-xs font-medium text-slate-300 mb-1.5">Open Tasks Cap</label>
           <input type="number" id="inputGoalCap" value="10" min="1" max="50" class="input-field w-24">
         </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Create Goal</button>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create Goal
+          </button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Create Decision -->
-  <div id="modalCreateDecision" class="modal-backdrop hidden">
-    <div class="modal-card max-w-lg">
-      <div class="flex items-center justify-between mb-3">
+  <div id="modalCreateDecision" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-lg w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
           <i data-lucide="landmark" class="w-4 h-4 text-indigo-400"></i> Record Architectural Decision
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
-      <form id="formCreateDecision" class="space-y-3 text-xs">
+      <form id="formCreateDecision" class="space-y-3.5 text-xs">
         <div>
-          <label class="block text-slate-400 mb-1">Title</label>
-          <input type="text" id="inputDecTitle" required class="input-field" placeholder="e.g. Use SQLite with WAL mode">
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Context (Markdown)</label>
-          <textarea id="inputDecContext" required rows="2" class="input-field font-mono" placeholder="Background problem..."></textarea>
+          <label for="inputDecTitle" class="block text-xs font-medium text-slate-300 mb-1.5">Title <span class="text-rose-400">*</span></label>
+          <input type="text" id="inputDecTitle" required class="input-field w-full" placeholder="e.g. Use SQLite with WAL mode">
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Choice</label>
-          <input type="text" id="inputDecChoice" required class="input-field" placeholder="The selected solution...">
+          <label for="inputDecContext" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Context <span class="text-rose-400">*</span></span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown supported</span>
+          </label>
+          <textarea id="inputDecContext" required rows="2" class="input-field font-mono w-full" placeholder="Background problem..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Rationale (Markdown)</label>
-          <textarea id="inputDecRationale" required rows="2" class="input-field font-mono" placeholder="Why this was selected..."></textarea>
+          <label for="inputDecChoice" class="block text-xs font-medium text-slate-300 mb-1.5">Choice <span class="text-rose-400">*</span></label>
+          <input type="text" id="inputDecChoice" required class="input-field w-full" placeholder="The selected solution...">
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">Tags (Comma-separated)</label>
-          <input type="text" id="inputDecTags" class="input-field" placeholder="storage, database">
-        </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Save Decision</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  <!-- Modal: Supersede Decision -->
-  <div id="modalSupersedeDecision" class="modal-backdrop hidden">
-    <div class="modal-card max-w-lg">
-      <div class="flex items-center justify-between mb-3">
-        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
-          <i data-lucide="refresh-cw" class="w-4 h-4 text-indigo-400"></i> Supersede Decision
-        </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
-      </div>
-      <form id="formSupersedeDecision" class="space-y-3 text-xs">
-        <input type="hidden" id="inputSupersedeOldId">
-        <div class="text-slate-400 mb-1">
-          Superseding decision: <span id="labelSupersedeOldTitle" class="font-semibold text-slate-200"></span>
+          <label for="inputDecRationale" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Rationale <span class="text-rose-400">*</span></span>
+            <span class="text-[11px] text-slate-500 font-normal">Markdown supported</span>
+          </label>
+          <textarea id="inputDecRationale" required rows="2" class="input-field font-mono w-full" placeholder="Why this was selected..."></textarea>
         </div>
         <div>
-          <label class="block text-slate-400 mb-1">New Decision Title</label>
-          <input type="text" id="inputSuperNewTitle" required class="input-field" placeholder="Updated title...">
+          <label for="inputDecTags" class="flex items-center justify-between text-xs font-medium text-slate-300 mb-1.5">
+            <span>Tags</span>
+            <span class="text-[11px] text-slate-500 font-normal">Comma-separated</span>
+          </label>
+          <input type="text" id="inputDecTags" class="input-field w-full" placeholder="e.g. storage, database">
         </div>
-        <div>
-          <label class="block text-slate-400 mb-1">New Context</label>
-          <textarea id="inputSuperNewContext" required rows="2" class="input-field" placeholder="Why the change is needed..."></textarea>
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">New Choice</label>
-          <input type="text" id="inputSuperNewChoice" required class="input-field" placeholder="New chosen approach...">
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">New Rationale</label>
-          <textarea id="inputSuperNewRationale" required rows="2" class="input-field" placeholder="Rationale for new choice..."></textarea>
-        </div>
-        <div>
-          <label class="block text-slate-400 mb-1">Mandatory Reason for Superseding</label>
-          <input type="text" id="inputSuperReason" required class="input-field" placeholder="Explanation why previous decision was replaced...">
-        </div>
-        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Supersede Decision</button>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i> Save Decision
+          </button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Mandatory Reason Prompt -->
-  <div id="modalReasonPrompt" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalReasonTitle">
-    <div class="modal-card max-w-md">
-      <h3 id="modalReasonTitle" class="text-sm font-semibold mb-2">Mandatory Reason</h3>
-      <form id="formReasonPrompt" class="space-y-3 text-xs">
-        <textarea id="inputReasonText" required rows="3" class="input-field" placeholder="Provide reason..."></textarea>
-        <div class="flex justify-end gap-2 pt-2">
-          <button type="button" class="modal-close btn-secondary">Cancel</button>
-          <button type="submit" class="btn-primary">Confirm</button>
+  <div id="modalReasonPrompt" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
+        <h3 id="modalReasonTitle" class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="alert-circle" class="w-4 h-4 text-amber-400"></i> Mandatory Reason
+        </h3>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="formReasonPrompt" class="space-y-3.5 text-xs">
+        <div>
+          <label for="inputReasonText" class="block text-xs font-medium text-slate-300 mb-1.5">Please provide a reason <span class="text-rose-400">*</span></label>
+          <textarea id="inputReasonText" required rows="3" class="input-field w-full" placeholder="Provide reason..."></textarea>
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">Confirm</button>
         </div>
       </form>
     </div>
   </div>
 
   <!-- Modal: Keyboard Shortcuts Help -->
-  <div id="modalKeyboardShortcuts" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalShortcutsTitle">
-    <div class="modal-card max-w-lg">
-      <div class="flex items-center justify-between mb-3 border-b border-borderSubtle pb-2">
-        <h3 id="modalShortcutsTitle" class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+  <div id="modalKeyboardShortcuts" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-lg w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
           <i data-lucide="keyboard" class="w-4 h-4 text-indigo-400"></i> Keyboard Shortcuts
         </h3>
-        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
       <div class="grid grid-cols-2 gap-3 text-xs py-1">
         <div class="space-y-2">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">Navigation</div>
           <div class="flex items-center justify-between"><span class="text-slate-300">Command Palette</span><kbd class="kbd-key">⌘K / ^K</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Navigate Issues</span><kbd class="kbd-key">J / K</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Open Inspector</span><kbd class="kbd-key">↵ / Space</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Toggle Selection</span><kbd class="kbd-key">X</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Close Modals/Drawer</span><kbd class="kbd-key">Esc</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Open Inspector</span><kbd class="kbd-key">↵ / Click</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Close Modals</span><kbd class="kbd-key">Esc</kbd></div>
         </div>
         <div class="space-y-2">
           <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">Actions & Views</div>
           <div class="flex items-center justify-between"><span class="text-slate-300">New Issue</span><kbd class="kbd-key">C</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Issues</span><kbd class="kbd-key">1</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Goals</span><kbd class="kbd-key">2</kbd></div>
-          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Human Inbox</span><kbd class="kbd-key">3</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Filter Menu</span><kbd class="kbd-key">F</kbd></div>
           <div class="flex items-center justify-between"><span class="text-slate-300">Shortcuts Help</span><kbd class="kbd-key">?</kbd></div>
         </div>
       </div>
@@ -663,61 +868,73 @@
     </div>
   </div>
 
-  <!-- Floating Batch Actions Bar -->
-  <div id="batchActionBar" class="fixed bottom-16 md:bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-surface/95 backdrop-blur-md border border-indigo-500/40 shadow-2xl shadow-indigo-950/40 rounded-xl px-4 py-2.5 flex items-center gap-3 text-xs hidden transition-all duration-200">
-    <div class="flex items-center gap-2 font-medium text-indigo-300">
-      <span id="batchSelectedCount" class="font-mono bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800/60 font-bold">0</span>
-      <span>selected</span>
+  <!-- Modal: Edit / Rename Workspace -->
+  <div id="modalEditWorkspace" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="pencil" class="w-4 h-4 text-cyan-400"></i> Rename Workspace
+        </h3>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="formEditWorkspace" class="space-y-3.5 text-xs">
+        <input type="hidden" id="inputEditWorkspaceId">
+        <div>
+          <label for="inputEditWorkspaceName" class="block text-xs font-medium text-slate-300 mb-1.5">Display Name <span class="text-rose-400">*</span></label>
+          <input type="text" id="inputEditWorkspaceName" required class="input-field w-full" placeholder="e.g. My Awesome Project">
+        </div>
+        <div>
+          <label for="inputEditWorkspacePath" class="block text-xs font-medium text-slate-400 mb-1.5">Project Path</label>
+          <input type="text" id="inputEditWorkspacePath" readonly class="input-field w-full text-slate-500 bg-slate-900/50 cursor-not-allowed">
+        </div>
+        <div>
+          <label for="inputEditWorkspaceRemote" class="block text-xs font-medium text-slate-400 mb-1.5">Git Remote URL</label>
+          <input type="text" id="inputEditWorkspaceRemote" class="input-field w-full text-slate-300" placeholder="e.g. git@github.com:user/repo.git">
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i> Save Changes
+          </button>
+        </div>
+      </form>
     </div>
-    <div class="h-4 w-px bg-borderDefault"></div>
-    <div class="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-      <select id="batchStatusSelect" class="filter-select text-xs" onchange="handleBatchStatusChange(this.value)">
-        <option value="">Move Status...</option>
-        <option value="todo">Todo</option>
-        <option value="doing">In Progress</option>
-        <option value="done">Done</option>
-        <option value="dropped">Dropped</option>
-      </select>
-      <select id="batchPrioritySelect" class="filter-select text-xs" onchange="handleBatchPriorityChange(this.value)">
-        <option value="">Set Priority...</option>
-        <option value="critical">Critical</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low</option>
-      </select>
-      <button class="btn-secondary text-xs" onclick="clearTaskSelection()">
-        Cancel
-      </button>
+  </div>
+
+  <!-- Modal: Register Workspace -->
+  <div id="modalRegisterWorkspace" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="folder-plus" class="w-4 h-4 text-cyan-400"></i> Register New Workspace
+        </h3>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="formRegisterWorkspace" class="space-y-3.5 text-xs">
+        <div>
+          <label for="inputRegisterWorkspacePath" class="block text-xs font-medium text-slate-300 mb-1.5">Directory Path <span class="text-rose-400">*</span></label>
+          <input type="text" id="inputRegisterWorkspacePath" required class="input-field w-full" placeholder="/Users/username/dev/my-project">
+        </div>
+        <div>
+          <label for="inputRegisterWorkspaceName" class="block text-xs font-medium text-slate-300 mb-1.5">Display Name <span class="text-slate-500 font-normal">(optional)</span></label>
+          <input type="text" id="inputRegisterWorkspaceName" class="input-field w-full" placeholder="e.g. Backend Service">
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Register Workspace
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
   <!-- Interactive Toast Notification Container -->
-  <div id="toastContainer" class="fixed bottom-16 md:bottom-5 right-4 z-[120] flex flex-col gap-2 pointer-events-none max-w-[90vw]"></div>
-
-  <!-- Mobile Bottom Navigation Bar -->
-  <nav id="mobileBottomNav" class="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-sidebar/95 backdrop-blur-md border-t border-borderSubtle flex items-center justify-around z-30 px-1 select-none">
-    <button class="mobile-nav-btn active flex flex-col items-center justify-center flex-1 h-full py-1 text-indigo-400" data-view="tasks" onclick="switchView('tasks')">
-      <i data-lucide="check-square" class="w-4 h-4"></i>
-      <span class="text-[10px] font-medium mt-0.5">Issues</span>
-    </button>
-    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" data-view="goals" onclick="switchView('goals')">
-      <i data-lucide="target" class="w-4 h-4"></i>
-      <span class="text-[10px] font-medium mt-0.5">Goals</span>
-    </button>
-    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200 relative" data-view="human" onclick="switchView('human')">
-      <i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i>
-      <span class="text-[10px] font-medium mt-0.5">Inbox</span>
-      <span class="mobile-nav-badge hidden" id="mobileNavBadgeHuman">0</span>
-    </button>
-    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" data-view="review" onclick="switchView('review')">
-      <i data-lucide="shield-check" class="w-4 h-4 text-indigo-400"></i>
-      <span class="text-[10px] font-medium mt-0.5">Review</span>
-    </button>
-    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" onclick="toggleMobileSidebar(true)">
-      <i data-lucide="menu" class="w-4 h-4"></i>
-      <span class="text-[10px] font-medium mt-0.5">Menu</span>
-    </button>
-  </nav>
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-[120] flex flex-col gap-2 pointer-events-none max-w-[90vw]"></div>
 
   <script src="/app.js"></script>
 </body>
