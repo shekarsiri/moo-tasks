@@ -832,25 +832,49 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         ` : ''}
       </div>
 
-      <!-- Acceptance Criteria (Rich Markdown View & Edit) -->
-      <div class="bg-surface border border-subtle rounded-lg p-3">
-        <div class="flex items-center justify-between mb-2 pb-1 border-b border-subtle">
-          <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">ACCEPTANCE CRITERIA</div>
-          <div class="flex items-center gap-1">
-            <button id="btnTabCriteriaPreview" class="markdown-tab-btn active" onclick="toggleCriteriaView('preview')">Preview</button>
-            <button id="btnTabCriteriaEdit" class="markdown-tab-btn" onclick="toggleCriteriaView('edit')">Edit Markdown</button>
+      <!-- Issue Description (Full Rich Markdown View) -->
+      ${task.description ? `
+        <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between pb-1.5 border-b border-subtle">
+            <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
+              <i data-lucide="align-left" class="w-3.5 h-3.5 text-indigo-400"></i> Description & Context
+            </div>
+            <button class="text-[11px] text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1" onclick="toggleTaskDocEdit('${task.id}', 'description')">
+              <i data-lucide="edit-2" class="w-3 h-3"></i> Edit
+            </button>
+          </div>
+          <div id="taskDescPreview-${task.id}" class="markdown-body text-xs text-slate-200 leading-relaxed">
+            ${renderMarkdown(task.description)}
+          </div>
+          <div id="taskDescEdit-${task.id}" class="hidden space-y-2">
+            <textarea id="taskDescInput-${task.id}" rows="5" class="input-field text-xs font-mono text-slate-200 w-full">${task.description}</textarea>
+            <div class="flex justify-end gap-2">
+              <button class="btn-primary text-xs" onclick="handleSaveInlineField('${task.id}', 'description', document.getElementById('taskDescInput-${task.id}').value)">Save</button>
+            </div>
           </div>
         </div>
+      ` : ''}
 
-        <!-- Rendered View -->
-        <div id="criteriaPreviewBox" class="markdown-body text-xs text-slate-200">
-          ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">No criteria specified.</p>'}
+      <!-- Acceptance Criteria & Definition of Done (Full Rich Markdown View) -->
+      <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
+        <div class="flex items-center justify-between pb-1.5 border-b border-subtle">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
+            <i data-lucide="check-circle" class="w-3.5 h-3.5 text-indigo-400"></i> Acceptance Criteria & Requirements
+          </div>
+          <button class="text-[11px] text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1" onclick="toggleTaskDocEdit('${task.id}', 'criteria')">
+            <i data-lucide="edit-2" class="w-3 h-3"></i> Edit
+          </button>
         </div>
 
-        <!-- Raw Edit View -->
-        <div id="criteriaEditBox" class="hidden">
-          <textarea id="drawerInputAC" rows="6" class="input-field text-xs font-mono text-slate-200" onchange="handleSaveInlineField('${task.id}', 'acceptanceCriteria', this.value)">${task.acceptanceCriteria || ''}</textarea>
-          <div class="text-[10px] text-slate-500 font-mono mt-1">Changes are automatically saved when you click out.</div>
+        <div id="taskCriteriaPreview-${task.id}" class="markdown-body text-xs text-slate-200 leading-relaxed">
+          ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">No criteria specified yet. AI agents will define criteria when creating or scoping tasks.</p>'}
+        </div>
+
+        <div id="taskCriteriaEdit-${task.id}" class="hidden space-y-2">
+          <textarea id="taskCriteriaInput-${task.id}" rows="6" class="input-field text-xs font-mono text-slate-200 w-full">${task.acceptanceCriteria || ''}</textarea>
+          <div class="flex justify-end gap-2">
+            <button class="btn-primary text-xs" onclick="handleSaveInlineField('${task.id}', 'acceptanceCriteria', document.getElementById('taskCriteriaInput-${task.id}').value)">Save</button>
+          </div>
         </div>
       </div>
 
@@ -1019,23 +1043,42 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
   }
 }
 
-// Criteria Toggle
-window.toggleCriteriaView = (mode) => {
-  const previewBtn = document.getElementById('btnTabCriteriaPreview');
-  const editBtn = document.getElementById('btnTabCriteriaEdit');
-  const previewBox = document.getElementById('criteriaPreviewBox');
-  const editBox = document.getElementById('criteriaEditBox');
+// Markdown Document View / Edit Toggles
+window.toggleTaskDocEdit = (taskId, type) => {
+  const previewId = type === 'description' ? `taskDescPreview-${taskId}` : `taskCriteriaPreview-${taskId}`;
+  const editId = type === 'description' ? `taskDescEdit-${taskId}` : `taskCriteriaEdit-${taskId}`;
+  const previewBox = document.getElementById(previewId);
+  const editBox = document.getElementById(editId);
 
-  if (mode === 'preview') {
-    previewBtn?.classList.add('active');
-    editBtn?.classList.remove('active');
-    previewBox?.classList.remove('hidden');
-    editBox?.classList.add('hidden');
-  } else {
-    previewBtn?.classList.remove('active');
-    editBtn?.classList.add('active');
-    previewBox?.classList.add('hidden');
-    editBox?.classList.remove('hidden');
+  if (editBox && previewBox) {
+    const isEditing = !editBox.classList.contains('hidden');
+    if (isEditing) {
+      editBox.classList.add('hidden');
+      previewBox.classList.remove('hidden');
+    } else {
+      editBox.classList.remove('hidden');
+      previewBox.classList.add('hidden');
+    }
+  }
+  refreshLucideIcons();
+};
+
+window.toggleGoalSpecEdit = () => {
+  const previewBox = document.getElementById('goalSpecPreviewBox');
+  const editBox = document.getElementById('goalSpecEditBox');
+  const label = document.getElementById('btnGoalSpecEditLabel');
+
+  if (editBox && previewBox) {
+    const isEditing = !editBox.classList.contains('hidden');
+    if (isEditing) {
+      editBox.classList.add('hidden');
+      previewBox.classList.remove('hidden');
+      if (label) label.textContent = 'Edit Spec';
+    } else {
+      editBox.classList.remove('hidden');
+      previewBox.classList.add('hidden');
+      if (label) label.textContent = 'View Rendered';
+    }
   }
   refreshLucideIcons();
 };
@@ -1481,29 +1524,24 @@ async function renderGoalDetails(goalId) {
         </div>
       </div>
 
-      <!-- Specification & PRD Section (Rich Markdown with Tabs) -->
+      <!-- Specification & PRD Section (Full First-Class Markdown Document View) -->
       <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
         <div class="flex items-center justify-between border-b border-subtle pb-2">
           <div class="flex items-center gap-2">
             <i data-lucide="file-text" class="w-4 h-4 text-indigo-400"></i>
-            <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Full Specification & Task Definition (PRD)</span>
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Specification & Definition of Done (PRD)</span>
           </div>
-          <div class="tab-pill-group">
-            <button type="button" class="tab-pill active" id="btnGoalSpecPreview" onclick="toggleGoalSpecTab('preview')">
-              <i data-lucide="eye" class="w-3 h-3"></i> Preview
-            </button>
-            <button type="button" class="tab-pill" id="btnGoalSpecEdit" onclick="toggleGoalSpecTab('edit')">
-              <i data-lucide="edit-3" class="w-3 h-3"></i> Edit Spec
-            </button>
-          </div>
+          <button type="button" class="text-xs text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1.5 px-2.5 py-1 rounded bg-card hover:bg-cardHover border border-subtle transition" onclick="toggleGoalSpecEdit()">
+            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> <span id="btnGoalSpecEditLabel">Edit Spec</span>
+          </button>
         </div>
 
-        <div id="goalSpecPreviewBox" class="bg-card p-4 rounded-lg border border-subtle min-h-[120px] text-xs text-slate-300 markdown-body leading-relaxed">
-          ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">No detailed specification written yet. Click <strong>Edit Spec</strong> to write user stories, architectural plans, and full definition of done in Markdown (or have your AI coding agent update it with <code>moo_update_goal</code>).</div>'}
+        <div id="goalSpecPreviewBox" class="bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px] text-xs text-slate-200 markdown-body leading-relaxed">
+          ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">No detailed specification recorded yet. AI coding agents will populate this with full requirements and architecture using <code>moo_update_goal</code>.</div>'}
         </div>
 
         <div id="goalSpecEditBox" class="hidden space-y-2">
-          <textarea id="goalSpecTextarea" class="input-field w-full font-mono text-xs h-48 leading-relaxed resize-y" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
+          <textarea id="goalSpecTextarea" class="input-field w-full font-mono text-xs h-56 leading-relaxed resize-y" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
           <div class="flex justify-end gap-2">
             <button type="button" class="btn-primary text-xs flex items-center gap-1.5" onclick="handleSaveGoalSpec('${g.id}')">
               <i data-lucide="save" class="w-3.5 h-3.5"></i> Save Specification
