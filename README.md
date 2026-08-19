@@ -163,6 +163,9 @@ All AI coding agents are instructed to follow this 6-step lifecycle:
 | `moo_reopen_goal` | Reopen goal and its tasks |
 | `moo_create_task` | Create task under goal with acceptance criteria & declared files |
 | `moo_create_tasks_batch` | Batch create multiple tasks atomically |
+| `moo_quick_start` | ⚡ 1-call express vibe tool: Atomically creates and claims task with lease and declared files |
+| `moo_checkpoint` | ⚡ Fast progress checkpoint: Appends attempt note & extends heartbeat |
+| `moo_get_compact_context` | 🧠 Ultra-dense token-optimized context block (< 400 tokens) for prompt injection |
 | `moo_update_task` | Update title, criteria, priority, declared files, or goal |
 | `moo_link_dependencies` | Link prerequisite blockers with cycle validation |
 | `moo_unlink_dependencies` | Unlink prerequisite blocker |

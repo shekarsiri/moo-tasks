@@ -15,6 +15,8 @@ export type DecisionStatus = 'proposed' | 'accepted' | 'superseded' | 'rejected'
 export type NoteType =
   | 'general'
   | 'attempt_failure'
+  | 'attempt_log'
+  | 'checkpoint'
   | 'block_reason'
   | 'drop_reason'
   | 'reopen_reason'

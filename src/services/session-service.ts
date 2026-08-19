@@ -51,4 +51,75 @@ export class SessionService {
       orphanTasks,
     };
   }
+
+  getCompactContext(projectPath: string, agentId?: string): string {
+    const summary = this.whereDidILeaveOff(projectPath, agentId);
+    const lines: string[] = ['# 🐮 MOO TASKS CONTEXT'];
+
+    // 1. Active Goal
+    if (summary.activeGoals && summary.activeGoals.length > 0) {
+      const topGoal = summary.activeGoals[0];
+      lines.push('\n## 🎯 ACTIVE GOAL');
+      lines.push(`- **[${topGoal.id}]**: ${topGoal.title}`);
+      if (topGoal.verbatimPrompt) {
+        lines.push(`- *Prompt*: "${topGoal.verbatimPrompt.slice(0, 180)}"`);
+      }
+    }
+
+    // 2. In-Flight Claimed Task
+    const myDoing = agentId
+      ? summary.abandonedDoingTasks.find((t) => t.claimedByAgent === agentId)
+      : summary.abandonedDoingTasks[0];
+
+    if (myDoing) {
+      lines.push('\n## ⚡ CURRENT CLAIMED TASK');
+      lines.push(`- **[${myDoing.id}]** (${myDoing.priority}): ${myDoing.title}`);
+      lines.push(`- *Criteria*: ${myDoing.acceptanceCriteria || 'None declared'}`);
+      if (myDoing.declaredFiles && myDoing.declaredFiles.length > 0) {
+        lines.push(`- *Declared Files*: ${myDoing.declaredFiles.join(', ')}`);
+      }
+      if (myDoing.leaseExpiresAt) {
+        lines.push(`- *Lease Expires*: ${myDoing.leaseExpiresAt}`);
+      }
+    } else {
+      // Top unblocked
+      const nextTask = summary.unblockedReadyTasks[0];
+      if (nextTask) {
+        lines.push('\n## 📋 READY UNBLOCKED TASK');
+        lines.push(`- **[${nextTask.id}]** (${nextTask.priority}): ${nextTask.title}`);
+        lines.push(`- *Criteria*: ${nextTask.acceptanceCriteria}`);
+      }
+    }
+
+    // 3. Waiting on Human Alerts
+    if (summary.waitingOnHumanTasks && summary.waitingOnHumanTasks.length > 0) {
+      lines.push('\n## 🙋 WAITING ON HUMAN');
+      summary.waitingOnHumanTasks.slice(0, 3).forEach((t) => {
+        lines.push(`- **[${t.id}]**: ${t.title}`);
+      });
+    }
+
+    // 4. Settled Decisions
+    if (summary.settledDecisions && summary.settledDecisions.length > 0) {
+      lines.push('\n## 🏛️ SETTLED DECISIONS (ADR)');
+      summary.settledDecisions.slice(0, 3).forEach((d) => {
+        lines.push(`- **${d.title}**: ${d.choice} (*${d.rationale.slice(0, 80)}*)`);
+      });
+    }
+
+    // 5. Active File Locks across all active tasks
+    const activeTasks = summary.abandonedDoingTasks;
+    const locks: string[] = [];
+    activeTasks.forEach((t) => {
+      if (t.declaredFiles && t.declaredFiles.length > 0) {
+        locks.push(`- \`${t.declaredFiles.join(', ')}\` (held by ${t.claimedByAgent || 'agent'})`);
+      }
+    });
+    if (locks.length > 0) {
+      lines.push('\n## 🔒 ACTIVE FILE LOCKS');
+      lines.push(...locks);
+    }
+
+    return lines.join('\n');
+  }
 }

@@ -209,6 +209,71 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(reopenData.success).toBe(true);
       expect(reopenData.reopenedCount).toBe(2);
     });
+
+    it('executes moo_quick_start, moo_checkpoint, and moo_get_compact_context vibe coding tools', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      const goal = container.goalService.createGoal('Vibe Feature', 'Build instant search', container.projectPath);
+
+      // 1. moo_quick_start (create + claim in 1 call)
+      const quickRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_quick_start',
+          arguments: {
+            goalId: goal.id,
+            title: 'Build Search Input Component',
+            acceptanceCriteria: 'Input debounces by 300ms',
+            priority: 'high',
+            declaredFiles: ['src/ui/search.ts'],
+            agentId: 'vibe-agent-1',
+          },
+        },
+      });
+
+      const quickData = JSON.parse(quickRes.content[0].text);
+      expect(quickData.success).toBe(true);
+      expect(quickData.task.status).toBe('doing');
+      expect(quickData.task.claimedByAgent).toBe('vibe-agent-1');
+      expect(quickData.task.declaredFiles).toContain('src/ui/search.ts');
+
+      // 2. moo_checkpoint (progress note + heartbeat)
+      const checkRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_checkpoint',
+          arguments: {
+            taskId: quickData.task.id,
+            note: 'Implemented debounce helper and tested key events',
+            agentId: 'vibe-agent-1',
+          },
+        },
+      });
+
+      const checkData = JSON.parse(checkRes.content[0].text);
+      expect(checkData.success).toBe(true);
+      expect(checkData.taskId).toBe(quickData.task.id);
+      expect(checkData.noteId).toBeDefined();
+
+      // 3. moo_get_compact_context
+      const compactRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_get_compact_context',
+          arguments: {
+            agentId: 'vibe-agent-1',
+          },
+        },
+      });
+
+      const compactText = compactRes.content[0].text;
+      expect(compactText).toContain('# 🐮 MOO TASKS CONTEXT');
+      expect(compactText).toContain('ACTIVE GOAL');
+      expect(compactText).toContain('CURRENT CLAIMED TASK');
+      expect(compactText).toContain('Build Search Input Component');
+      expect(compactText).toContain('src/ui/search.ts');
+    });
   });
 
   describe('Fastify REST Server Endpoints', () => {

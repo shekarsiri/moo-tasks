@@ -545,6 +545,49 @@ export function setupMcpServer(container: ServiceContainer): Server {
           },
         },
         {
+          name: 'moo_get_compact_context',
+          description: 'Ultra-dense token-optimized context block (< 400 tokens) with active goal, claimed task, acceptance criteria, settled decisions, and file locks. Ideal for system prompt injection.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              agentId: { type: 'string', description: 'Optional agent ID filter' },
+            },
+          },
+        },
+        {
+          name: 'moo_quick_start',
+          description: 'Fast-path vibe coding tool: Atomically creates a task under a goal and claims it exclusively in a single round-trip, setting declared files and lease duration.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              goalId: { type: 'string', description: 'Goal ID to anchor this task under' },
+              title: { type: 'string', description: 'Task title' },
+              acceptanceCriteria: { type: 'string', description: 'Definition of done in Markdown (mandatory)' },
+              priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Priority level (default: medium)' },
+              declaredFiles: { type: 'array', items: { type: 'string' }, description: 'Files you will modify to detect file collisions' },
+              description: { type: 'string', description: 'Optional detailed description' },
+              agentId: { type: 'string', description: 'Agent identifier claiming the task (default: agent)' },
+              sessionId: { type: 'string', description: 'Session ID' },
+              leaseDurationMinutes: { type: 'number', description: 'Lease timeout in minutes (default: 5)' },
+            },
+            required: ['goalId', 'title', 'acceptanceCriteria'],
+          },
+        },
+        {
+          name: 'moo_checkpoint',
+          description: 'Fast progress checkpoint: Appends a timestamped progress note to the in-flight task and optionally extends lease heartbeat in one call.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Active in-flight task ID' },
+              note: { type: 'string', description: 'Progress note / thought snippet' },
+              agentId: { type: 'string', description: 'Agent identifier (default: agent)' },
+              heartbeat: { type: 'boolean', description: 'Whether to extend lease timeout (default: true)' },
+            },
+            required: ['taskId', 'note'],
+          },
+        },
+        {
           name: 'moo_export_project',
           description: 'Export all goals, tasks, notes, and decisions in Markdown, JSON, or Plain Text format.',
           inputSchema: {
@@ -1004,6 +1047,84 @@ export function setupMcpServer(container: ServiceContainer): Server {
           const { agentId } = args as any;
           const summary = container.sessionService.whereDidILeaveOff(container.projectPath, agentId);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, summary }, null, 2) }] };
+        }
+
+        case 'moo_get_compact_context': {
+          const { agentId } = args as any;
+          const compact = container.sessionService.getCompactContext(container.projectPath, agentId);
+          return { content: [{ type: 'text', text: compact }] };
+        }
+
+        case 'moo_quick_start': {
+          const { goalId, title, acceptanceCriteria, priority, declaredFiles, description, agentId, sessionId, leaseDurationMinutes } = args as any;
+          const aid = agentId || 'agent';
+          const created = container.taskLifecycleService.createTask(
+            {
+              goalId,
+              title,
+              acceptanceCriteria,
+              priority: priority || 'medium',
+              declaredFiles,
+              description,
+            },
+            aid,
+            'agent'
+          );
+
+          const claimed = container.claimService.claimTask(
+            created.task.id,
+            aid,
+            sessionId || `sess-${Date.now()}`,
+            {
+              declaredFiles,
+              leaseDurationSeconds: (leaseDurationMinutes || 5) * 60,
+            }
+          );
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                task: claimed.task,
+                conflictWarnings: claimed.conflictWarnings,
+                hint: `Task ${claimed.task.id} created and exclusively claimed. You may proceed with implementation.`,
+              }, null, 2)
+            }],
+          };
+        }
+
+        case 'moo_checkpoint': {
+          const { taskId, note, agentId, heartbeat } = args as any;
+          const aid = agentId || 'agent';
+          if (heartbeat !== false) {
+            container.claimService.heartbeatTask(taskId, aid);
+          }
+
+          const savedNote = container.noteRepo.create({
+            id: `note-${Math.random().toString(36).slice(2, 9)}`,
+            taskId,
+            authorType: 'agent',
+            authorId: aid,
+            noteType: 'attempt_log',
+            content: note,
+            createdAt: new Date().toISOString(),
+          });
+
+          const task = container.taskRepo.findById(taskId);
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                taskId,
+                leaseExpiresAt: task?.leaseExpiresAt,
+                noteId: savedNote.id,
+                hint: `Checkpoint saved. Task lease extended.`,
+              }, null, 2)
+            }],
+          };
         }
 
         case 'moo_export_project': {
