@@ -15,6 +15,22 @@ const state = {
   paletteSelectedIndex: 0,
 };
 
+// Markdown Parser Helper
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (window.marked && typeof window.marked.parse === 'function') {
+    try {
+      return window.marked.parse(text, { breaks: true, gfm: true });
+    } catch {
+      // fallback
+    }
+  }
+  // Safe basic fallback
+  const div = document.createElement('div');
+  div.textContent = text;
+  return `<p>${div.innerHTML.replace(/\n/g, '<br>')}</p>`;
+}
+
 // DOM References
 const navItems = document.querySelectorAll('.nav-item');
 const viewPanes = document.querySelectorAll('.view-pane');
@@ -467,7 +483,6 @@ function renderBoardView(tasks) {
     colEl.className = 'board-column';
     colEl.setAttribute('data-col-status', col.status);
 
-    // HTML5 Drag and drop over column
     colEl.ondragover = (e) => {
       e.preventDefault();
       colEl.style.borderColor = '#5e6ad2';
@@ -628,13 +643,26 @@ async function openInspector(taskId, showDrawer = true) {
         ` : ''}
       </div>
 
-      <!-- Editable Acceptance Criteria -->
+      <!-- Acceptance Criteria (Rich Markdown View & Edit) -->
       <div class="bg-surface border border-subtle rounded-lg p-3">
-        <div class="flex items-center justify-between mb-1.5">
+        <div class="flex items-center justify-between mb-2 pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">ACCEPTANCE CRITERIA</div>
-          <span class="text-[10px] text-slate-500 font-mono">Auto-saves on change</span>
+          <div class="flex items-center gap-1">
+            <button id="btnTabCriteriaPreview" class="markdown-tab-btn active" onclick="toggleCriteriaView('preview')">Preview</button>
+            <button id="btnTabCriteriaEdit" class="markdown-tab-btn" onclick="toggleCriteriaView('edit')">Edit Markdown</button>
+          </div>
         </div>
-        <textarea id="drawerInputAC" rows="3" class="input-field text-xs text-slate-200" onchange="handleSaveInlineField('${task.id}', 'acceptanceCriteria', this.value)">${task.acceptanceCriteria || ''}</textarea>
+
+        <!-- Rendered View -->
+        <div id="criteriaPreviewBox" class="markdown-body text-xs text-slate-200">
+          ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">No criteria specified.</p>'}
+        </div>
+
+        <!-- Raw Edit View -->
+        <div id="criteriaEditBox" class="hidden">
+          <textarea id="drawerInputAC" rows="6" class="input-field text-xs font-mono text-slate-200" onchange="handleSaveInlineField('${task.id}', 'acceptanceCriteria', this.value)">${task.acceptanceCriteria || ''}</textarea>
+          <div class="text-[10px] text-slate-500 font-mono mt-1">Changes are automatically saved when you click out.</div>
+        </div>
       </div>
 
       <!-- Subtasks Section -->
@@ -710,10 +738,10 @@ async function openInspector(taskId, showDrawer = true) {
         <!-- Human Question -->
         <div class="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3">
           <div class="text-[10px] font-bold tracking-wider uppercase text-purple-400 mb-1 font-mono">HUMAN QUESTION (${task.humanQuestionType || 'clarification'})</div>
-          <div class="text-xs text-purple-200 mb-2 font-medium">${task.humanQuestion}</div>
+          <div class="markdown-body text-xs text-purple-200 mb-2">${renderMarkdown(task.humanQuestion)}</div>
           ${task.humanAnswer ? `
-            <div class="text-xs text-emerald-300 bg-emerald-950/30 p-2 rounded border border-emerald-800/40">
-              <span class="font-bold">Answer:</span> ${task.humanAnswer}
+            <div class="text-xs text-emerald-300 bg-emerald-950/30 p-2 rounded border border-emerald-800/40 markdown-body">
+              <span class="font-bold">Answer:</span> ${renderMarkdown(task.humanAnswer)}
             </div>
           ` : `
             <form onsubmit="handleDrawerAnswer(event, '${task.id}')" class="flex gap-2 mt-2">
@@ -757,7 +785,7 @@ async function openInspector(taskId, showDrawer = true) {
                 <span class="text-indigo-400 font-bold text-[11px]">${n.authorId} (${n.authorType})</span>
                 <span class="text-slate-500 text-[10px]">${new Date(n.createdAt).toLocaleTimeString()}</span>
               </div>
-              <div class="text-slate-300 text-xs font-sans whitespace-pre-wrap">${n.content}</div>
+              <div class="text-slate-300 text-xs font-sans markdown-body">${renderMarkdown(n.content)}</div>
             </div>
           `).join('')}
         </div>
@@ -771,6 +799,26 @@ async function openInspector(taskId, showDrawer = true) {
     console.error('Failed to load issue details:', err);
   }
 }
+
+// Criteria Toggle
+window.toggleCriteriaView = (mode) => {
+  const previewBtn = document.getElementById('btnTabCriteriaPreview');
+  const editBtn = document.getElementById('btnTabCriteriaEdit');
+  const previewBox = document.getElementById('criteriaPreviewBox');
+  const editBox = document.getElementById('criteriaEditBox');
+
+  if (mode === 'preview') {
+    previewBtn?.classList.add('active');
+    editBtn?.classList.remove('active');
+    previewBox?.classList.remove('hidden');
+    editBox?.classList.add('hidden');
+  } else {
+    previewBtn?.classList.remove('active');
+    editBtn?.classList.add('active');
+    previewBox?.classList.add('hidden');
+    editBox?.classList.remove('hidden');
+  }
+};
 
 // Inline Field Save Handler
 window.handleSaveInlineField = async (taskId, field, value) => {
@@ -950,8 +998,8 @@ function renderGoalsView() {
           <span class="font-mono text-slate-500 text-xs">${g.id}</span>
         </div>
         <h3 class="text-sm font-bold text-slate-100 mb-1.5">${g.title}</h3>
-        <div class="bg-card p-3 rounded border border-subtle text-xs text-slate-300 mb-3 italic">
-          "${g.verbatimPrompt}"
+        <div class="bg-card p-3 rounded border border-subtle text-xs text-slate-300 mb-3 markdown-body">
+          ${renderMarkdown(g.verbatimPrompt)}
         </div>
 
         <!-- Progress Bar -->
@@ -1042,9 +1090,9 @@ function renderHumanInbox() {
         <span class="text-xs font-mono text-slate-500">${task.id}</span>
       </div>
       <h3 class="text-sm font-bold text-slate-100 mb-2">${task.title}</h3>
-      <div class="bg-purple-950/25 border border-purple-900/40 p-3 rounded text-xs text-purple-200 mb-3">
+      <div class="bg-purple-950/25 border border-purple-900/40 p-3 rounded text-xs text-purple-200 mb-3 markdown-body">
         <div class="font-semibold mb-1">❓ ${task.humanQuestionType || 'Question'}:</div>
-        <div>${task.humanQuestion}</div>
+        <div>${renderMarkdown(task.humanQuestion)}</div>
       </div>
       <form onsubmit="handleAnswerQuestion(event, '${task.id}')" class="flex gap-2">
         <input type="text" id="inbox-answer-${task.id}" required placeholder="Type answer or decision to resume agent..." class="input-field text-xs flex-1">
@@ -1132,10 +1180,10 @@ function renderDecisionsView() {
         <span class="text-xs font-mono text-slate-500">${dec.id}</span>
       </div>
       <h3 class="text-sm font-bold text-slate-100 mb-2">${dec.title}</h3>
-      <div class="space-y-1.5 text-xs mb-3">
-        <div><span class="text-slate-500 font-semibold">Context:</span> <span class="text-slate-300">${dec.context}</span></div>
-        <div><span class="text-slate-500 font-semibold">Choice:</span> <span class="text-slate-200 font-medium">${dec.choice}</span></div>
-        <div><span class="text-slate-500 font-semibold">Rationale:</span> <span class="text-slate-300 italic">${dec.rationale}</span></div>
+      <div class="space-y-2 text-xs mb-3">
+        <div><span class="text-slate-500 font-semibold">Context:</span> <div class="text-slate-300 markdown-body">${renderMarkdown(dec.context)}</div></div>
+        <div><span class="text-slate-500 font-semibold">Choice:</span> <div class="text-slate-200 font-medium">${dec.choice}</div></div>
+        <div><span class="text-slate-500 font-semibold">Rationale:</span> <div class="text-slate-300 markdown-body">${renderMarkdown(dec.rationale)}</div></div>
       </div>
       <div class="flex items-center justify-between border-t border-subtle pt-2">
         <div class="flex items-center gap-1.5">${tagsHtml}</div>
@@ -1207,7 +1255,7 @@ function renderActivityFeed() {
           <span class="text-indigo-400 font-bold">${note.authorId} (${note.authorType})</span>
           <span class="text-slate-500 font-mono text-[10px]">task:${note.taskId}</span>
         </div>
-        <div class="text-slate-300 whitespace-pre-wrap text-xs font-sans">${note.content}</div>
+        <div class="text-slate-300 text-xs markdown-body">${renderMarkdown(note.content)}</div>
       </div>
     `;
     container.appendChild(row);
