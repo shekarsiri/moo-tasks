@@ -178,6 +178,7 @@
         <div class="filter-group flex items-center gap-2">
           <select id="filterGoal" class="filter-select">
             <option value="">All Goals</option>
+            <option value="__orphans__">⚠️ Scope Drift (Orphans)</option>
           </select>
 
           <select id="filterPriority" class="filter-select">
@@ -376,6 +377,34 @@
         <div class="flex justify-end gap-2 pt-2 border-t border-borderSubtle">
           <button type="button" class="modal-close btn-secondary">Cancel</button>
           <button type="submit" class="btn-primary">Add Subtask</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Merge Task -->
+  <div id="modalMergeTask" class="modal-backdrop hidden">
+    <div class="modal-card max-w-md">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">🔀 Merge Issue into Another</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <form id="formMergeTask" class="space-y-3 text-xs">
+        <input type="hidden" id="inputMergeSourceId">
+        <div class="text-slate-400">
+          Source issue <span id="labelMergeSourceId" class="font-mono text-indigo-300 font-semibold"></span> will be marked as dropped/merged. Its subtasks, dependencies, and audit notes will transfer to the target issue.
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Target Issue to Keep</label>
+          <select id="selectMergeTargetId" required class="select-field"></select>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Reason for Merging</label>
+          <input type="text" id="inputMergeReason" class="input-field" placeholder="e.g. Duplicate issue found during implementation">
+        </div>
+        <div class="flex justify-end gap-2 pt-2 border-t border-borderSubtle">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Confirm Merge</button>
         </div>
       </form>
     </div>

@@ -47,10 +47,28 @@ const drawerInspector = document.getElementById('drawerInspector');
 const drawerBody = document.getElementById('drawerBody');
 const modalCreateTask = document.getElementById('modalCreateTask');
 const modalCreateSubtask = document.getElementById('modalCreateSubtask');
+const modalMergeTask = document.getElementById('modalMergeTask');
 const modalCreateGoal = document.getElementById('modalCreateGoal');
 const modalCreateDecision = document.getElementById('modalCreateDecision');
 const modalReasonPrompt = document.getElementById('modalReasonPrompt');
 const toastContainer = document.getElementById('toastContainer');
+
+// Time Helpers
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return '';
+  const now = new Date();
+  const date = new Date(dateStr);
+  const diffMs = now - date;
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHrs = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHrs / 24);
+
+  if (diffSec < 60) return `${Math.max(1, diffSec)}s ago`;
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  return `${diffDays}d ago`;
+}
 
 // Toast Notification System
 function showToast(message, type = 'info') {
@@ -198,9 +216,12 @@ function setViewMode(mode) {
 function getFilteredTasks() {
   let list = state.tasks.filter((t) => !t.isArchived);
 
-  if (state.filterGoal) {
+  if (state.filterGoal === '__orphans__') {
+    list = list.filter((t) => !t.goalId);
+  } else if (state.filterGoal) {
     list = list.filter((t) => t.goalId === state.filterGoal);
   }
+
   if (state.filterPriority) {
     list = list.filter((t) => t.priority === state.filterPriority);
   }
@@ -248,7 +269,7 @@ if (filterSearch) {
 function renderGoalFilters() {
   if (!filterGoal) return;
   const cur = filterGoal.value;
-  filterGoal.innerHTML = '<option value="">All Goals</option>';
+  filterGoal.innerHTML = '<option value="">All Goals</option><option value="__orphans__">⚠️ Scope Drift (Orphans)</option>';
   const inputTaskGoal = document.getElementById('inputTaskGoal');
   if (inputTaskGoal) inputTaskGoal.innerHTML = '<option value="">(None / Standalone)</option>';
 
@@ -390,12 +411,19 @@ function renderListView(tasks) {
         row.setAttribute('data-id', task.id);
 
         const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
+        const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
 
         row.innerHTML = `
-          <div class="list-col-id">${task.id}</div>
+          <div class="list-col-id flex items-center gap-1">
+            <span>${task.id}</span>
+            ${isStalled ? `<span title="High Thrash/Attempts" class="text-[10px]">⚠️</span>` : ''}
+          </div>
           <div class="list-col-priority">${getPriorityIcon(task.priority)}</div>
-          <div class="list-col-title">${task.title}</div>
-          ${goal ? `<div class="list-col-goal">${goal.title}</div>` : ''}
+          <div class="list-col-title">
+            <span>${task.title}</span>
+            <span class="text-[10.5px] text-slate-500 font-mono ml-2 font-normal">(${formatRelativeTime(task.lastStateChangeAt)})</span>
+          </div>
+          ${goal ? `<div class="list-col-goal">${goal.title}</div>` : `<div class="list-col-goal border-amber-900/40 text-amber-400 bg-amber-950/20">Scope Drift</div>`}
           <div class="list-col-agent">
             ${task.claimedByAgent ? `<span>🤖 ${task.claimedByAgent}</span>` : `<span class="text-slate-600 font-sans">Unassigned</span>`}
           </div>
@@ -456,16 +484,20 @@ function renderBoardView(tasks) {
       card.setAttribute('data-id', task.id);
 
       const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
+      const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
 
       card.innerHTML = `
         <div class="board-card-header">
-          <span class="font-mono text-[11px] text-slate-500">${task.id}</span>
+          <div class="flex items-center gap-1 font-mono text-[11px] text-slate-500">
+            <span>${task.id}</span>
+            ${isStalled ? `<span title="Stalled/High Attempts">⚠️</span>` : ''}
+          </div>
           ${getPriorityIcon(task.priority)}
         </div>
         <div class="board-card-title">${task.title}</div>
         <div class="board-card-footer">
           ${task.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10.5px]">🤖 ${task.claimedByAgent}</span>` : `<span class="text-slate-600 text-[10px]">Unassigned</span>`}
-          ${goal ? `<span class="text-slate-500 text-[10px] truncate max-w-[100px]">${goal.title}</span>` : ''}
+          <span class="text-slate-500 text-[10px] font-mono">${formatRelativeTime(task.lastStateChangeAt)}</span>
         </div>
       `;
 
@@ -500,10 +532,13 @@ async function openInspector(taskId, showDrawer = true) {
 
     const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
 
+    const candidateBlockers = state.tasks.filter((t) => t.id !== task.id && !dependencies.includes(t.id) && t.parentId !== task.id);
+
     if (!drawerBody) return;
     drawerBody.innerHTML = `
       <div>
-        <h1 class="text-base font-bold text-slate-100 mb-2">${task.title}</h1>
+        <h1 class="text-base font-bold text-slate-100 mb-1">${task.title}</h1>
+        <div class="text-[11px] text-slate-500 font-mono">Last changed: ${formatRelativeTime(task.lastStateChangeAt)} (${task.lastStateChangeAt})</div>
       </div>
 
       <!-- Properties Grid -->
@@ -530,7 +565,7 @@ async function openInspector(taskId, showDrawer = true) {
 
         <span class="property-label">Linked Goal</span>
         <div class="property-value">
-          ${goal ? `<span class="text-indigo-300 font-medium">${goal.title}</span> <span class="font-mono text-slate-500 text-[10px]">(${goal.id})</span>` : '<span class="text-slate-500">None (Orphan Task)</span>'}
+          ${goal ? `<span class="text-indigo-300 font-medium">${goal.title}</span> <span class="font-mono text-slate-500 text-[10px]">(${goal.id})</span>` : '<span class="text-amber-400">Scope Drift (No linked goal)</span>'}
         </div>
 
         <span class="property-label">Claimed Agent</span>
@@ -588,26 +623,37 @@ async function openInspector(taskId, showDrawer = true) {
       `}
 
       <!-- Dependencies & Blockers -->
-      ${(dependencies.length > 0 || dependents.length > 0) ? `
-        <div class="bg-surface border border-subtle rounded-lg p-3 space-y-2">
-          ${dependencies.length > 0 ? `
-            <div>
-              <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 mb-1 font-mono">BLOCKERS (Depends on)</div>
-              <div class="flex flex-wrap gap-1.5">
-                ${dependencies.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-amber-950/40 border border-amber-800/40 text-amber-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${d}</span>`).join('')}
-              </div>
-            </div>
-          ` : ''}
-          ${dependents.length > 0 ? `
-            <div>
-              <div class="text-[10px] font-bold tracking-wider uppercase text-blue-400 mb-1 font-mono">BLOCKS DOWNSTREAM</div>
-              <div class="flex flex-wrap gap-1.5">
-                ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${d}</span>`).join('')}
-              </div>
-            </div>
-          ` : ''}
+      <div class="bg-surface border border-subtle rounded-lg p-3 space-y-2.5">
+        <div class="flex items-center justify-between">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 font-mono">BLOCKERS (Depends on)</div>
+          <div class="flex items-center gap-1">
+            <select id="selectAddBlocker" class="filter-select text-[11px]">
+              <option value="">+ Add Blocker...</option>
+              ${candidateBlockers.map((c) => `<option value="${c.id}">${c.id} - ${c.title.slice(0, 30)}</option>`).join('')}
+            </select>
+            <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="handleAddBlocker('${task.id}')">Link</button>
+          </div>
         </div>
-      ` : ''}
+        
+        <div class="flex flex-wrap gap-1.5">
+          ${dependencies.length === 0 ? `<div class="text-xs text-slate-500 italic">No direct blockers.</div>` : ''}
+          ${dependencies.map((d) => `
+            <span class="font-mono text-xs px-2 py-0.5 bg-amber-950/40 border border-amber-800/40 text-amber-300 rounded flex items-center gap-1.5">
+              <span class="cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${d}</span>
+              <button class="text-amber-500 hover:text-rose-400 text-xs ml-1" onclick="handleRemoveBlocker('${task.id}', '${d}')">&times;</button>
+            </span>
+          `).join('')}
+        </div>
+
+        ${dependents.length > 0 ? `
+          <div class="pt-2 border-t border-subtle">
+            <div class="text-[10px] font-bold tracking-wider uppercase text-blue-400 mb-1 font-mono">BLOCKS DOWNSTREAM</div>
+            <div class="flex flex-wrap gap-1.5">
+              ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${d}</span>`).join('')}
+            </div>
+          </div>
+        ` : ''}
+      </div>
 
       ${task.evidence ? `
         <!-- Completion Proof -->
@@ -638,6 +684,7 @@ async function openInspector(taskId, showDrawer = true) {
       <!-- Actions Bar -->
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
         <div class="flex gap-2">
+          <button class="btn-secondary text-xs" onclick="promptMergeTask('${task.id}')">Merge into...</button>
           <button class="btn-danger text-xs" onclick="promptDropTask('${task.id}')">Drop Issue</button>
           <button class="btn-secondary text-xs" onclick="undoTask('${task.id}')">Undo Status</button>
           ${task.status === 'done' || task.status === 'dropped' ? `<button class="btn-primary text-xs" onclick="reopenTask('${task.id}')">Reopen Issue</button>` : ''}
@@ -682,6 +729,39 @@ async function openInspector(taskId, showDrawer = true) {
   }
 }
 
+// Blocker Linking Handlers
+window.handleAddBlocker = async (taskId) => {
+  const select = document.getElementById('selectAddBlocker');
+  if (!select || !select.value) return;
+  const dependsOnTaskId = select.value;
+
+  const res = await fetch(`/api/tasks/${taskId}/dependencies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dependsOnTaskId }),
+  });
+
+  if (res.ok) {
+    showToast('Blocker dependency linked', 'success');
+    openInspector(taskId, false);
+    refreshAll();
+  } else {
+    showToast('Failed to link blocker', 'error');
+  }
+};
+
+window.handleRemoveBlocker = async (taskId, dependsOnTaskId) => {
+  const res = await fetch(`/api/tasks/${taskId}/dependencies/${dependsOnTaskId}`, {
+    method: 'DELETE',
+  });
+
+  if (res.ok) {
+    showToast('Blocker removed', 'info');
+    openInspector(taskId, false);
+    refreshAll();
+  }
+};
+
 // Subtask Modal
 window.promptAddSubtask = (parentId) => {
   const hiddenId = document.getElementById('inputSubtaskParentId');
@@ -712,6 +792,57 @@ if (formCreateSubtask) {
     showToast('Subtask created successfully', 'success');
     if (modalCreateSubtask) modalCreateSubtask.classList.add('hidden');
     formCreateSubtask.reset();
+    refreshAll();
+  };
+}
+
+// Merge Task Modal
+window.promptMergeTask = (sourceId) => {
+  const hiddenSource = document.getElementById('inputMergeSourceId');
+  const labelSource = document.getElementById('labelMergeSourceId');
+  const selectTarget = document.getElementById('selectMergeTargetId');
+
+  if (hiddenSource) hiddenSource.value = sourceId;
+  if (labelSource) labelSource.textContent = sourceId;
+
+  if (selectTarget) {
+    selectTarget.innerHTML = '';
+    const otherTasks = state.tasks.filter((t) => t.id !== sourceId && t.status !== 'dropped');
+    otherTasks.forEach((t) => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.id} - ${t.title.slice(0, 40)}`;
+      selectTarget.appendChild(opt);
+    });
+  }
+
+  if (modalMergeTask) modalMergeTask.classList.remove('hidden');
+};
+
+const formMergeTask = document.getElementById('formMergeTask');
+if (formMergeTask) {
+  formMergeTask.onsubmit = async (e) => {
+    e.preventDefault();
+    const sourceId = document.getElementById('inputMergeSourceId').value;
+    const targetTaskId = document.getElementById('selectMergeTargetId').value;
+    const reason = document.getElementById('inputMergeReason').value;
+
+    const res = await fetch(`/api/tasks/${sourceId}/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetTaskId, reason }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Failed to merge issues', 'error');
+      return;
+    }
+
+    showToast(`Merged issue ${sourceId} into ${targetTaskId}`, 'success');
+    if (modalMergeTask) modalMergeTask.classList.add('hidden');
+    if (drawerInspector) drawerInspector.classList.add('hidden');
+    state.selectedTaskId = null;
     refreshAll();
   };
 }

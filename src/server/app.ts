@@ -179,6 +179,43 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     return { success: true, task };
   });
 
+  app.post('/api/tasks/:id/merge', async (req, reply) => {
+    const { id } = req.params as any;
+    const { targetTaskId, reason } = req.body as any;
+    const result = container.duplicateMergeService.mergeTasks(targetTaskId, id, 'human', reason);
+    broadcast('tasks_updated', { action: 'merged', targetTaskId, sourceTaskId: id });
+    return { success: true, ...result };
+  });
+
+  app.post('/api/tasks/:id/dependencies', async (req, reply) => {
+    const { id } = req.params as any;
+    const { dependsOnTaskId } = req.body as any;
+    container.taskRepo.addDependency(id, dependsOnTaskId);
+    broadcast('tasks_updated', { action: 'dependency_added', taskId: id, dependsOnTaskId });
+    return { success: true };
+  });
+
+  app.delete('/api/tasks/:id/dependencies/:dependsOnTaskId', async (req, reply) => {
+    const { id, dependsOnTaskId } = req.params as any;
+    container.taskRepo.removeDependency(id, dependsOnTaskId);
+    broadcast('tasks_updated', { action: 'dependency_removed', taskId: id, dependsOnTaskId });
+    return { success: true };
+  });
+
+  app.post('/api/tasks/bulk/drop', async (req, reply) => {
+    const { taskIds, reason } = req.body as any;
+    const count = container.taskLifecycleService.bulkDrop(taskIds, reason, 'human', 'human');
+    broadcast('tasks_updated', { action: 'bulk_dropped', count });
+    return { success: true, droppedCount: count };
+  });
+
+  app.post('/api/tasks/bulk/reopen', async (req, reply) => {
+    const { taskIds, reason } = req.body as any;
+    const count = container.taskLifecycleService.bulkReopen(taskIds, reason, 'human', 'human');
+    broadcast('tasks_updated', { action: 'bulk_reopened', count });
+    return { success: true, reopenedCount: count };
+  });
+
   app.post('/api/tasks/reorder', async (req, reply) => {
     const { updates } = req.body as any;
     container.taskLifecycleService.reorderTasks(updates);
