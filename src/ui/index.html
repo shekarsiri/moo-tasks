@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Moo Tasks — Agentic Task Orchestration & Visibility</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
+  <!-- Top Navigation -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30 px-6 py-3.5 flex items-center justify-between">
+    <div class="flex items-center space-x-4">
+      <div class="flex items-center space-x-2">
+        <span class="text-2xl">🐮</span>
+        <span class="font-bold text-lg tracking-tight bg-gradient-to-r from-blue-400 to-indigo-300 bg-clip-text text-transparent">Moo Tasks</span>
+      </div>
+      <span class="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">MCP Engine</span>
+      <div id="connectionStatus" class="flex items-center space-x-1.5 text-xs text-emerald-400 font-mono">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span>Live SSE</span>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="flex items-center space-x-1 bg-slate-950/60 p-1 rounded-lg border border-slate-800 text-sm">
+      <button class="nav-btn active" data-tab="board">📋 Board</button>
+      <button class="nav-btn" data-tab="goals">🎯 Goals & Loose Ends</button>
+      <button class="nav-btn" data-tab="human">
+        🙋 Human Inbox <span id="humanInboxBadge" class="badge-count hidden">0</span>
+      </button>
+      <button class="nav-btn" data-tab="review">
+        🔍 Review Feed <span id="reviewBadge" class="badge-count hidden">0</span>
+      </button>
+      <button class="nav-btn" data-tab="decisions">🏛️ Decisions</button>
+      <button class="nav-btn" data-tab="activity">⚡ Activity</button>
+      <button class="nav-btn" data-tab="resume">🧭 Where Did I Leave Off</button>
+    </nav>
+
+    <!-- Action Buttons -->
+    <div class="flex items-center space-x-2">
+      <button id="btnNewGoal" class="btn-secondary text-xs">+ Goal</button>
+      <button id="btnNewTask" class="btn-primary text-xs">+ Task</button>
+      <button id="btnExport" class="btn-secondary text-xs">Export</button>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 p-6 overflow-x-hidden">
+    <!-- Tab 1: Board View -->
+    <section id="tab-board" class="tab-pane active">
+      <!-- Filter Bar -->
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center space-x-3 text-xs">
+          <label class="text-slate-400">Filter Goal:</label>
+          <select id="boardGoalFilter" class="select-field">
+            <option value="">All Goals</option>
+          </select>
+          <input type="text" id="boardSearchInput" placeholder="Search tasks..." class="input-field w-56">
+        </div>
+        <div class="flex items-center space-x-2 text-xs text-slate-400 font-mono">
+          <span id="totalTasksCount">0 Tasks</span>
+        </div>
+      </div>
+
+      <!-- Kanban Columns -->
+      <div class="grid grid-cols-6 gap-3.5 min-h-[calc(100vh-210px)]">
+        <!-- Todo -->
+        <div class="kanban-column" data-status="todo">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-slate-400"></span> Todo</span>
+            <span class="column-count" id="count-todo">0</span>
+          </div>
+          <div class="column-cards" id="cards-todo"></div>
+        </div>
+
+        <!-- Doing -->
+        <div class="kanban-column" data-status="doing">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-blue-400"></span> In Progress</span>
+            <span class="column-count" id="count-doing">0</span>
+          </div>
+          <div class="column-cards" id="cards-doing"></div>
+        </div>
+
+        <!-- Blocked on Dependency -->
+        <div class="kanban-column" data-status="blocked-on-dependency">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-amber-400"></span> Blocked (Dep)</span>
+            <span class="column-count" id="count-blocked-on-dependency">0</span>
+          </div>
+          <div class="column-cards" id="cards-blocked-on-dependency"></div>
+        </div>
+
+        <!-- Waiting on Human -->
+        <div class="kanban-column" data-status="waiting-on-human">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-purple-400"></span> Waiting on Human</span>
+            <span class="column-count" id="count-waiting-on-human">0</span>
+          </div>
+          <div class="column-cards" id="cards-waiting-on-human"></div>
+        </div>
+
+        <!-- Done -->
+        <div class="kanban-column" data-status="done">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-emerald-400"></span> Done</span>
+            <span class="column-count" id="count-done">0</span>
+          </div>
+          <div class="column-cards" id="cards-done"></div>
+        </div>
+
+        <!-- Dropped -->
+        <div class="kanban-column" data-status="dropped">
+          <div class="column-header">
+            <span class="column-title"><span class="w-2 h-2 rounded-full bg-rose-400"></span> Dropped</span>
+            <span class="column-count" id="count-dropped">0</span>
+          </div>
+          <div class="column-cards" id="cards-dropped"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 2: Goals & Loose Ends -->
+    <section id="tab-goals" class="tab-pane hidden">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">Project Goals & Loose Ends</h2>
+        <button id="btnNewGoal2" class="btn-primary text-xs">+ Create Goal</button>
+      </div>
+      <div id="goalsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+    </section>
+
+    <!-- Tab 3: Human Inbox -->
+    <section id="tab-human" class="tab-pane hidden">
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold">🙋 Waiting on Human Guidance</h2>
+        <p class="text-xs text-slate-400">Questions or approvals escalated by coding agents. Answering instantly unblocks the agent without restarting.</p>
+      </div>
+      <div id="humanInboxContainer" class="space-y-3 max-w-4xl"></div>
+    </section>
+
+    <!-- Tab 4: Review Feed -->
+    <section id="tab-review" class="tab-pane hidden">
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold">🔍 Review & Verification Feed</h2>
+        <p class="text-xs text-slate-400">Inspect evidence for agent-completed tasks and review dropped tasks. Verify or reject with feedback.</p>
+      </div>
+      <div id="reviewContainer" class="space-y-4 max-w-4xl"></div>
+    </section>
+
+    <!-- Tab 5: Decisions -->
+    <section id="tab-decisions" class="tab-pane hidden">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-lg font-semibold">🏛️ Settled Architectural Decisions</h2>
+          <p class="text-xs text-slate-400">Agents consult these decisions before planning to keep settled choices firm.</p>
+        </div>
+        <button id="btnNewDecision" class="btn-primary text-xs">+ Record Decision</button>
+      </div>
+      <div id="decisionsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+    </section>
+
+    <!-- Tab 6: Activity Feed -->
+    <section id="tab-activity" class="tab-pane hidden">
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold">⚡ Real-time Agent Activity Feed</h2>
+      </div>
+      <div id="activityContainer" class="space-y-2 max-w-3xl font-mono text-xs"></div>
+    </section>
+
+    <!-- Tab 7: Where Did I Leave Off -->
+    <section id="tab-resume" class="tab-pane hidden">
+      <div class="mb-4">
+        <h2 class="text-lg font-semibold">🧭 Session Resume Overview</h2>
+        <p class="text-xs text-slate-400">Instant snapshot of active in-flight tasks, pending answers, and ready tasks.</p>
+      </div>
+      <div id="resumeContainer" class="max-w-4xl space-y-4"></div>
+    </section>
+  </main>
+
+  <!-- Task Detail Modal -->
+  <div id="modalTaskDetail" class="modal-backdrop hidden">
+    <div class="modal-card max-w-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+        <div class="flex items-center space-x-2">
+          <span id="modalTaskBadge" class="status-badge">todo</span>
+          <span id="modalTaskId" class="font-mono text-xs text-slate-400">task-xxx</span>
+        </div>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+
+      <div id="modalTaskBody" class="space-y-4 text-sm max-h-[70vh] overflow-y-auto pr-1"></div>
+
+      <div class="flex items-center justify-between border-t border-slate-800 pt-3 mt-4">
+        <div class="flex items-center space-x-2" id="modalTaskActions"></div>
+        <button class="modal-close btn-secondary text-xs">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create Goal Modal -->
+  <div id="modalCreateGoal" class="modal-backdrop hidden">
+    <div class="modal-card max-w-lg">
+      <h3 class="text-base font-semibold mb-3">🎯 Create New Goal</h3>
+      <form id="formCreateGoal" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Goal Title</label>
+          <input type="text" id="inputGoalTitle" required class="input-field w-full" placeholder="e.g. Implement User Authentication">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Verbatim Human Request</label>
+          <textarea id="inputGoalVerbatim" required rows="4" class="input-field w-full" placeholder="Paste the original user request verbatim here..."></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Open Tasks Cap (Enforces execution over planning)</label>
+          <input type="number" id="inputGoalCap" value="10" min="1" max="50" class="input-field w-24">
+        </div>
+        <div class="flex justify-end space-x-2 pt-2">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Create Goal</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Create Task Modal -->
+  <div id="modalCreateTask" class="modal-backdrop hidden">
+    <div class="modal-card max-w-lg">
+      <h3 class="text-base font-semibold mb-3">📋 Create New Task</h3>
+      <form id="formCreateTask" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Task Title</label>
+          <input type="text" id="inputTaskTitle" required class="input-field w-full" placeholder="e.g. Create JWT token generator utility">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-400 mb-1">Linked Goal</label>
+            <select id="inputTaskGoal" class="select-field w-full"></select>
+          </div>
+          <div>
+            <label class="block text-slate-400 mb-1">Priority</label>
+            <select id="inputTaskPriority" class="select-field w-full">
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Acceptance Criteria (Mandatory before starting)</label>
+          <textarea id="inputTaskAC" required rows="3" class="input-field w-full" placeholder="Specify concrete verifiable criteria (e.g. unit tests pass, endpoint returns 200)"></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Declared Files / Touch Paths (Optional, comma-separated)</label>
+          <input type="text" id="inputTaskFiles" class="input-field w-full" placeholder="e.g. src/auth/jwt.ts, tests/jwt.test.ts">
+        </div>
+        <div class="flex items-center space-x-2 pt-1">
+          <input type="checkbox" id="inputTaskDeferred">
+          <label for="inputTaskDeferred" class="text-slate-300">Defer to backlog pile (exclude from ready queue)</label>
+        </div>
+        <div class="flex justify-end space-x-2 pt-2">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Create Task</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Create Decision Modal -->
+  <div id="modalCreateDecision" class="modal-backdrop hidden">
+    <div class="modal-card max-w-lg">
+      <h3 class="text-base font-semibold mb-3">🏛️ Record Architectural Decision</h3>
+      <form id="formCreateDecision" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-400 mb-1">Decision Title</label>
+          <input type="text" id="inputDecTitle" required class="input-field w-full" placeholder="e.g. Use SQLite for local persistence">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Context</label>
+          <textarea id="inputDecContext" required rows="2" class="input-field w-full" placeholder="What is the problem or background?"></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Choice Made</label>
+          <input type="text" id="inputDecChoice" required class="input-field w-full" placeholder="e.g. better-sqlite3 with WAL mode">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Rationale</label>
+          <textarea id="inputDecRationale" required rows="2" class="input-field w-full" placeholder="Why was this choice selected over alternatives?"></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Tags (comma-separated)</label>
+          <input type="text" id="inputDecTags" class="input-field w-full" placeholder="e.g. storage, database, architecture">
+        </div>
+        <div class="flex justify-end space-x-2 pt-2">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Save Decision</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Prompt Modal (Drop/Reject reason) -->
+  <div id="modalReasonPrompt" class="modal-backdrop hidden">
+    <div class="modal-card max-w-md">
+      <h3 id="modalReasonTitle" class="text-sm font-semibold mb-2">Mandatory Reason</h3>
+      <form id="formReasonPrompt" class="space-y-3 text-xs">
+        <textarea id="inputReasonText" required rows="3" class="input-field w-full" placeholder="Provide explanation..."></textarea>
+        <div class="flex justify-end space-x-2">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary" id="btnSubmitReason">Confirm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

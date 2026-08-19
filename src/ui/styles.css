@@ -1,0 +1,225 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-main: #030712;
+  --bg-card: #0f172a;
+  --border: #1e293b;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
+code, pre, .font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Nav Button */
+.nav-btn {
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.375rem;
+  color: #94a3b8;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.nav-btn:hover {
+  color: #f8fafc;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.nav-btn.active {
+  color: #60a5fa;
+  background-color: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: #2563eb;
+  color: #ffffff;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  transition: background-color 0.15s;
+}
+.btn-primary:hover {
+  background-color: #1d4ed8;
+}
+
+.btn-secondary {
+  background-color: #1e293b;
+  color: #e2e8f0;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  border: 1px solid #334155;
+  transition: background-color 0.15s;
+}
+.btn-secondary:hover {
+  background-color: #334155;
+}
+
+.btn-danger {
+  background-color: rgba(225, 29, 72, 0.15);
+  color: #fb7185;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(225, 29, 72, 0.3);
+  transition: all 0.15s;
+}
+.btn-danger:hover {
+  background-color: rgba(225, 29, 72, 0.3);
+}
+
+.btn-success {
+  background-color: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.375rem;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  transition: all 0.15s;
+}
+.btn-success:hover {
+  background-color: rgba(16, 185, 129, 0.3);
+}
+
+/* Inputs & Selects */
+.input-field, .select-field {
+  background-color: #0f172a;
+  border: 1px solid #334155;
+  color: #f8fafc;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  outline: none;
+}
+.input-field:focus, .select-field:focus {
+  border-color: #3b82f6;
+}
+
+/* Kanban Columns */
+.kanban-column {
+  background-color: rgba(15, 23, 42, 0.5);
+  border: 1px solid #1e293b;
+  border-radius: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.column-header {
+  padding: 0.75rem;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+.column-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.column-count {
+  background-color: #1e293b;
+  padding: 0.125rem 0.4rem;
+  border-radius: 9999px;
+  font-family: monospace;
+}
+
+.column-cards {
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 250px);
+}
+
+/* Task Card */
+.task-card {
+  background-color: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 0.375rem;
+  padding: 0.65rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.task-card:hover {
+  border-color: #3b82f6;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.task-card.priority-critical {
+  border-left: 3px solid #ef4444;
+}
+.task-card.priority-high {
+  border-left: 3px solid #f97316;
+}
+.task-card.priority-medium {
+  border-left: 3px solid #3b82f6;
+}
+.task-card.priority-low {
+  border-left: 3px solid #64748b;
+}
+
+/* Badges */
+.status-badge {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.badge-count {
+  background-color: #ef4444;
+  color: #ffffff;
+  padding: 0.1rem 0.35rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+/* Modals */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.modal-card {
+  background-color: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  width: 100%;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+}
+
+.hidden {
+  display: none !important;
+}
