@@ -146,9 +146,9 @@
 
       <!-- Sidebar Footer -->
       <div class="sidebar-footer p-3 border-t border-borderSubtle flex items-center justify-between text-xs text-slate-500">
-        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>Live Sync</span>
+        <div class="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono transition-colors" id="liveSyncIndicator" title="Real-time multi-agent SQLite synchronization active">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" id="liveSyncDot"></span>
+          <span id="liveSyncLabel">Live Sync</span>
         </div>
         <div class="flex items-center gap-1">
           <kbd class="kbd-key">C</kbd>

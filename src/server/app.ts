@@ -36,8 +36,44 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     }
   }
 
+  // Native SQLite WAL File Watcher for Instant Cross-Process Multi-Agent Sync
+  const mooDir = path.join(container.projectPath, '.moo');
+  let walDebounceTimer: NodeJS.Timeout | null = null;
+  let watcher: fs.FSWatcher | null = null;
+
+  if (fs.existsSync(mooDir)) {
+    try {
+      watcher = fs.watch(mooDir, (eventType, filename) => {
+        if (
+          filename &&
+          (filename.endsWith('.db') ||
+            filename.endsWith('.db-wal') ||
+            filename.endsWith('.db-shm') ||
+            filename === 'tasks.db' ||
+            filename === 'tasks.db-wal')
+        ) {
+          if (walDebounceTimer) clearTimeout(walDebounceTimer);
+          walDebounceTimer = setTimeout(() => {
+            broadcast('tasks_updated', {
+              source: 'sqlite_wal_change',
+              filename,
+              timestamp: Date.now(),
+            });
+            broadcast('goals_updated', {
+              source: 'sqlite_wal_change',
+              filename,
+              timestamp: Date.now(),
+            });
+          }, 75);
+        }
+      });
+    } catch {
+      // Ignore if filesystem watch not supported in environment
+    }
+  }
+
   // Periodic lease cleanup & background broadcast
-  setInterval(() => {
+  const leaseCleanupInterval = setInterval(() => {
     try {
       const released = container.claimService.cleanupExpiredLeases();
       if (released > 0) {
@@ -47,6 +83,24 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
       // ignore
     }
   }, 15000);
+
+  // SSE Keep-Alive Heartbeat Ping every 15s
+  const heartbeatInterval = setInterval(() => {
+    for (const send of sseClients) {
+      try {
+        send('ping', { timestamp: Date.now() });
+      } catch {
+        // ignore dead clients
+      }
+    }
+  }, 15000);
+
+  app.addHook('onClose', (instance, done) => {
+    if (watcher) watcher.close();
+    clearInterval(leaseCleanupInterval);
+    clearInterval(heartbeatInterval);
+    done();
+  });
 
   // SSE Endpoint
   app.get('/api/events', (req, reply) => {

@@ -192,9 +192,54 @@ function showToast(message, type = 'info') {
   }, 3500);
 }
 
-// SSE Sync
+// SSE Sync & Resilient Connection Engine
+let sseReconnectTimer = null;
+let sseReconnectAttempts = 0;
+let sseInstance = null;
+
+function setLiveSyncState(status) {
+  const indicator = document.getElementById('liveSyncIndicator');
+  const dot = document.getElementById('liveSyncDot');
+  const label = document.getElementById('liveSyncLabel');
+  if (!indicator || !dot || !label) return;
+
+  if (status === 'connected') {
+    indicator.className = 'flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono transition-colors';
+    dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
+    label.textContent = 'Live Sync';
+  } else if (status === 'reconnecting') {
+    indicator.className = 'flex items-center gap-1.5 text-[11px] text-amber-400 font-mono transition-colors';
+    dot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping';
+    label.textContent = 'Reconnecting...';
+  } else {
+    indicator.className = 'flex items-center gap-1.5 text-[11px] text-rose-400 font-mono transition-colors';
+    dot.className = 'w-1.5 h-1.5 rounded-full bg-rose-400';
+    label.textContent = 'Offline';
+  }
+}
+
 function initSSE() {
+  if (sseInstance) {
+    sseInstance.close();
+    sseInstance = null;
+  }
+
   const eventSource = new EventSource('/api/events');
+  sseInstance = eventSource;
+
+  eventSource.onopen = () => {
+    sseReconnectAttempts = 0;
+    setLiveSyncState('connected');
+    refreshAll();
+  };
+
+  eventSource.addEventListener('connected', () => {
+    setLiveSyncState('connected');
+  });
+
+  eventSource.addEventListener('ping', () => {
+    setLiveSyncState('connected');
+  });
 
   eventSource.addEventListener('tasks_updated', () => refreshAll());
   eventSource.addEventListener('goals_updated', () => refreshAll());
@@ -202,7 +247,16 @@ function initSSE() {
   eventSource.addEventListener('activity_updated', () => fetchActivity());
 
   eventSource.onerror = () => {
-    console.warn('[SSE] Reconnecting...');
+    eventSource.close();
+    sseInstance = null;
+    sseReconnectAttempts++;
+    setLiveSyncState('reconnecting');
+
+    const delay = Math.min(1000 * Math.pow(1.5, sseReconnectAttempts), 10000);
+    if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+    sseReconnectTimer = setTimeout(() => {
+      initSSE();
+    }, delay);
   };
 }
 
@@ -292,7 +346,14 @@ async function fetchActivity() {
 async function refreshAll() {
   await Promise.all([fetchProjectInfo(), fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
   if (state.selectedTaskId) {
-    openInspector(state.selectedTaskId, false);
+    const isTyping =
+      document.activeElement &&
+      (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') &&
+      document.getElementById('drawerInspector')?.contains(document.activeElement);
+
+    if (!isTyping) {
+      openInspector(state.selectedTaskId, false, false);
+    }
   }
   refreshLucideIcons();
 }
