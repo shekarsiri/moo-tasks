@@ -218,8 +218,16 @@ navItems.forEach((btn) => {
   });
 });
 
-function switchView(viewName) {
+function switchView(viewName, updateHash = true) {
   state.currentView = viewName;
+  if (updateHash) {
+    if (state.selectedTaskId && viewName === 'tasks') {
+      window.location.hash = `#/tasks/${state.selectedTaskId}`;
+    } else {
+      window.location.hash = `#/${viewName}`;
+    }
+  }
+
   navItems.forEach((b) => b.classList.toggle('active', b.getAttribute('data-view') === viewName));
   viewPanes.forEach((pane) => {
     pane.classList.toggle('hidden', pane.id !== `pane-${viewName}`);
@@ -589,8 +597,11 @@ function renderBoardView(tasks) {
 }
 
 // Slide-Over Inspector Drawer
-async function openInspector(taskId, showDrawer = true) {
+async function openInspector(taskId, showDrawer = true, updateHash = true) {
   state.selectedTaskId = taskId;
+  if (updateHash) {
+    window.location.hash = `#/tasks/${taskId}`;
+  }
   try {
     const res = await fetch(`/api/tasks/${taskId}`);
     const data = await res.json();
@@ -1019,18 +1030,22 @@ if (formMergeTask) {
 }
 
 // Drawer Closers
+function closeInspector(updateHash = true) {
+  if (drawerInspector) drawerInspector.classList.add('hidden');
+  state.selectedTaskId = null;
+  if (updateHash) {
+    window.location.hash = `#/${state.currentView}`;
+  }
+}
+
 document.querySelectorAll('.drawer-close').forEach((btn) => {
-  btn.onclick = () => {
-    if (drawerInspector) drawerInspector.classList.add('hidden');
-    state.selectedTaskId = null;
-  };
+  btn.onclick = () => closeInspector(true);
 });
 
 if (drawerInspector) {
   drawerInspector.onclick = (e) => {
     if (e.target === drawerInspector) {
-      drawerInspector.classList.add('hidden');
-      state.selectedTaskId = null;
+      closeInspector(true);
     }
   };
 }
@@ -1803,6 +1818,38 @@ async function exportProject() {
 const btnHeaderExport = document.getElementById('btnHeaderExport');
 if (btnHeaderExport) btnHeaderExport.onclick = exportProject;
 
+// Route & Hash Management
+function handleRouteFromHash() {
+  const hash = window.location.hash.replace(/^#\/?/, '').trim();
+  if (!hash) {
+    if (state.currentView !== 'tasks') {
+      switchView('tasks', false);
+    }
+    return;
+  }
+
+  const parts = hash.split('/');
+  const primaryView = parts[0] || 'tasks';
+  const targetId = parts[1] || null;
+
+  const validViews = ['tasks', 'goals', 'human', 'review', 'decisions', 'activity', 'resume'];
+  const viewToOpen = validViews.includes(primaryView) ? primaryView : 'tasks';
+
+  if (state.currentView !== viewToOpen) {
+    switchView(viewToOpen, false);
+  }
+
+  if (targetId) {
+    openInspector(targetId, true, false);
+  } else if (state.selectedTaskId) {
+    if (drawerInspector) drawerInspector.classList.add('hidden');
+    state.selectedTaskId = null;
+  }
+}
+
 // Start Engine
 initSSE();
-refreshAll();
+window.addEventListener('hashchange', handleRouteFromHash);
+refreshAll().then(() => {
+  handleRouteFromHash();
+});
