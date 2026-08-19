@@ -31,7 +31,7 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
       try {
         send(event, data);
       } catch {
-        // ignore dead clients
+        sseClients.delete(send);
       }
     }
   }
@@ -82,18 +82,18 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     } catch {
       // ignore
     }
-  }, 15000);
+  }, 10000);
 
-  // SSE Keep-Alive Heartbeat Ping every 15s
+  // SSE Keep-Alive Heartbeat Ping every 10s
   const heartbeatInterval = setInterval(() => {
     for (const send of sseClients) {
       try {
         send('ping', { timestamp: Date.now() });
       } catch {
-        // ignore dead clients
+        sseClients.delete(send);
       }
     }
-  }, 15000);
+  }, 10000);
 
   app.addHook('onClose', (instance, done) => {
     if (watcher) watcher.close();
@@ -102,21 +102,41 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     done();
   });
 
-  // SSE Endpoint
+  // SSE Endpoint with Cross-Device & LAN Support
   app.get('/api/events', (req, reply) => {
-    reply.raw.setHeader('Content-Type', 'text/event-stream');
-    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    reply.raw.setHeader('Cache-Control', 'no-cache, no-transform, no-store, must-revalidate');
     reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.setHeader('Pragma', 'no-cache');
+    reply.raw.setHeader('Expires', '0');
+    reply.raw.setHeader('X-Accel-Buffering', 'no');
+    reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+    reply.raw.setHeader('Access-Control-Allow-Headers', '*');
     reply.raw.flushHeaders();
 
+    // 2KB initial comment padding to bypass buffering on mobile browsers / routers
+    reply.raw.write(`: ${' '.repeat(2048)}\n\n`);
+
     const sendEvent = (event: string, data: any) => {
-      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      if (reply.raw.writableEnded || reply.raw.destroyed) {
+        sseClients.delete(sendEvent);
+        return;
+      }
+      try {
+        reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        sseClients.delete(sendEvent);
+      }
     };
 
     sseClients.add(sendEvent);
     sendEvent('connected', { timestamp: new Date().toISOString() });
 
     req.raw.on('close', () => {
+      sseClients.delete(sendEvent);
+    });
+
+    req.raw.on('error', () => {
       sseClients.delete(sendEvent);
     });
   });

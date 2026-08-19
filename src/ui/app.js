@@ -252,6 +252,7 @@ function showToast(message, type = 'info') {
 let sseReconnectTimer = null;
 let sseReconnectAttempts = 0;
 let sseInstance = null;
+let lastPingReceivedAt = Date.now();
 
 function setLiveSyncState(status) {
   const indicator = document.getElementById('liveSyncIndicator');
@@ -276,7 +277,9 @@ function setLiveSyncState(status) {
 
 function initSSE() {
   if (sseInstance) {
-    sseInstance.close();
+    try {
+      sseInstance.close();
+    } catch {}
     sseInstance = null;
   }
 
@@ -285,15 +288,18 @@ function initSSE() {
 
   eventSource.onopen = () => {
     sseReconnectAttempts = 0;
+    lastPingReceivedAt = Date.now();
     setLiveSyncState('connected');
     refreshAll();
   };
 
   eventSource.addEventListener('connected', () => {
+    lastPingReceivedAt = Date.now();
     setLiveSyncState('connected');
   });
 
   eventSource.addEventListener('ping', () => {
+    lastPingReceivedAt = Date.now();
     setLiveSyncState('connected');
   });
 
@@ -303,18 +309,46 @@ function initSSE() {
   eventSource.addEventListener('activity_updated', () => fetchActivity());
 
   eventSource.onerror = () => {
-    eventSource.close();
+    try {
+      eventSource.close();
+    } catch {}
     sseInstance = null;
     sseReconnectAttempts++;
     setLiveSyncState('reconnecting');
 
-    const delay = Math.min(1000 * Math.pow(1.5, sseReconnectAttempts), 10000);
+    const delay = Math.min(1000 * Math.pow(1.5, sseReconnectAttempts), 8000);
     if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
     sseReconnectTimer = setTimeout(() => {
       initSSE();
     }, delay);
   };
 }
+
+// Multi-Device & Mobile Screen Wake Listeners
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    refreshAll();
+    if (!sseInstance || Date.now() - lastPingReceivedAt > 20000) {
+      initSSE();
+    }
+  }
+});
+
+window.addEventListener('online', () => {
+  refreshAll();
+  initSSE();
+});
+
+// Periodic fallback polling (every 6s if offline/reconnecting, or every 20s as heartbeat check)
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    if (!sseInstance || sseReconnectAttempts > 0) {
+      refreshAll();
+    } else if (Date.now() - lastPingReceivedAt > 25000) {
+      initSSE();
+    }
+  }
+}, 6000);
 
 // API Fetching
 async function fetchProjectInfo() {
@@ -2219,6 +2253,15 @@ window.handleStatusChangePrompt = async (taskId, newStatus) => {
     return;
   }
 
+  // Optimistic UI update for instantaneous visual feedback
+  const targetTask = state.tasks.find((t) => t.id === taskId);
+  const oldStatus = targetTask ? targetTask.status : null;
+  if (targetTask) {
+    targetTask.status = newStatus;
+    renderTasks();
+    updateSidebarCounters();
+  }
+
   const res = await fetch(`/api/tasks/${taskId}/status`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2227,6 +2270,11 @@ window.handleStatusChangePrompt = async (taskId, newStatus) => {
 
   const data = await res.json();
   if (!res.ok || data.error) {
+    if (targetTask && oldStatus) {
+      targetTask.status = oldStatus;
+      renderTasks();
+      updateSidebarCounters();
+    }
     showToast(data.error || 'Failed to change status', 'error');
     openInspector(taskId, false);
     return;
