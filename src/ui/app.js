@@ -114,6 +114,62 @@ function renderMarkdown(text) {
   return `<p>${div.innerHTML.replace(/\n/g, '<br>')}</p>`;
 }
 
+// HTML to Markdown Converter Engine
+let turndownInstance = null;
+function getTurndownEngine() {
+  if (!turndownInstance && window.TurndownService) {
+    turndownInstance = new window.TurndownService({
+      headingStyle: 'atx',
+      hr: '---',
+      codeBlockStyle: 'fenced',
+      emDelimiter: '*',
+      bulletListMarker: '-',
+    });
+    if (window.turndownPluginGfm && window.turndownPluginGfm.gfm) {
+      turndownInstance.use(window.turndownPluginGfm.gfm);
+    }
+  }
+  return turndownInstance;
+}
+
+function htmlToMarkdown(html) {
+  if (!html || !html.trim()) return '';
+  const engine = getTurndownEngine();
+  if (engine) {
+    try {
+      return engine.turndown(html);
+    } catch {
+      // fallback
+    }
+  }
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  return div.innerText || '';
+}
+
+// Direct In-Place Visual Editing Handlers
+window.handleDirectDocBlur = async (element, targetId, field, isGoal = false) => {
+  const markdown = htmlToMarkdown(element.innerHTML);
+  if (isGoal) {
+    await fetch(`/api/goals/${targetId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [field]: markdown }),
+    });
+    showToast('Saved specification', 'success');
+    fetchGoals();
+  } else {
+    await handleSaveInlineField(targetId, field, markdown);
+  }
+};
+
+window.handleDirectDocKeydown = (event, element, targetId, field, isGoal = false) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    element.blur();
+  }
+};
+
 // DOM References
 const navItems = document.querySelectorAll('.nav-item');
 const viewPanes = document.querySelectorAll('.view-pane');
@@ -832,64 +888,42 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         ` : ''}
       </div>
 
-      <!-- Issue Description (Full Rich Markdown with Direct Click-to-Edit) -->
+      <!-- Issue Description (Direct In-Place Visual Markdown Editing) -->
       <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
         <div class="flex items-center justify-between pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
             <i data-lucide="align-left" class="w-3.5 h-3.5 text-indigo-400"></i> Description & Context
           </div>
-          <span class="text-[10px] text-slate-500 font-mono">Click to edit inline</span>
+          <span class="text-[10px] text-slate-500 font-mono">Type directly to edit • ⌘Enter to save</span>
         </div>
         
-        <div id="taskDescPreview-${task.id}" class="editable-markdown-block group" onclick="startTaskDocEdit('${task.id}', 'description')">
-          <div class="absolute top-2 right-2 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
-            <i data-lucide="edit-2" class="w-2.5 h-2.5"></i> Click to edit
-          </div>
-          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
-            ${task.description ? renderMarkdown(task.description) : '<p class="text-slate-500 italic">+ Click here to add a detailed description or context...</p>'}
-          </div>
-        </div>
-
-        <div id="taskDescEdit-${task.id}" class="hidden space-y-2">
-          <textarea id="taskDescInput-${task.id}" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleDocKeydown(event, '${task.id}', 'description')">${task.description || ''}</textarea>
-          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
-            <span>⌘ + Enter to save • Esc to cancel</span>
-            <div class="flex gap-1.5">
-              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelTaskDocEdit('${task.id}', 'description')">Cancel</button>
-              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="saveTaskDocEdit('${task.id}', 'description')">Save</button>
-            </div>
-          </div>
-        </div>
+        <div
+          contenteditable="true"
+          spellcheck="false"
+          data-placeholder="+ Click here to type description directly..."
+          class="markdown-body rich-editable-doc text-xs text-slate-200 leading-relaxed"
+          onblur="handleDirectDocBlur(this, '${task.id}', 'description', false)"
+          onkeydown="handleDirectDocKeydown(event, this, '${task.id}', 'description', false)"
+        >${renderMarkdown(task.description || '')}</div>
       </div>
 
-      <!-- Acceptance Criteria & Definition of Done (Full Rich Markdown with Direct Click-to-Edit) -->
+      <!-- Acceptance Criteria & Definition of Done (Direct In-Place Visual Markdown Editing) -->
       <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
         <div class="flex items-center justify-between pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
             <i data-lucide="check-circle" class="w-3.5 h-3.5 text-indigo-400"></i> Acceptance Criteria & Requirements
           </div>
-          <span class="text-[10px] text-slate-500 font-mono">Click to edit inline</span>
+          <span class="text-[10px] text-slate-500 font-mono">Type directly to edit • ⌘Enter to save</span>
         </div>
 
-        <div id="taskCriteriaPreview-${task.id}" class="editable-markdown-block group" onclick="startTaskDocEdit('${task.id}', 'criteria')">
-          <div class="absolute top-2 right-2 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
-            <i data-lucide="edit-2" class="w-2.5 h-2.5"></i> Click to edit
-          </div>
-          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
-            ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">+ Click here to add acceptance criteria and definition of done...</p>'}
-          </div>
-        </div>
-
-        <div id="taskCriteriaEdit-${task.id}" class="hidden space-y-2">
-          <textarea id="taskCriteriaInput-${task.id}" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleDocKeydown(event, '${task.id}', 'criteria')">${task.acceptanceCriteria || ''}</textarea>
-          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
-            <span>⌘ + Enter to save • Esc to cancel</span>
-            <div class="flex gap-1.5">
-              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelTaskDocEdit('${task.id}', 'criteria')">Cancel</button>
-              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="saveTaskDocEdit('${task.id}', 'criteria')">Save</button>
-            </div>
-          </div>
-        </div>
+        <div
+          contenteditable="true"
+          spellcheck="false"
+          data-placeholder="+ Click here to type acceptance criteria directly..."
+          class="markdown-body rich-editable-doc text-xs text-slate-200 leading-relaxed"
+          onblur="handleDirectDocBlur(this, '${task.id}', 'acceptanceCriteria', false)"
+          onkeydown="handleDirectDocKeydown(event, this, '${task.id}', 'acceptanceCriteria', false)"
+        >${renderMarkdown(task.acceptanceCriteria || '')}</div>
       </div>
 
       <!-- Subtasks Section -->
@@ -1585,35 +1619,24 @@ async function renderGoalDetails(goalId) {
         </div>
       </div>
 
-      <!-- Specification & PRD Section (Full Markdown with Direct Click-to-Edit) -->
+      <!-- Specification & PRD Section (Direct In-Place Visual Markdown Editing) -->
       <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
         <div class="flex items-center justify-between border-b border-subtle pb-2">
           <div class="flex items-center gap-2">
             <i data-lucide="file-text" class="w-4 h-4 text-indigo-400"></i>
             <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Specification & Definition of Done (PRD)</span>
           </div>
-          <span class="text-[10px] text-slate-500 font-mono">Click document to edit inline</span>
+          <span class="text-[10px] text-slate-500 font-mono">Type directly into document • ⌘Enter to save</span>
         </div>
 
-        <div id="goalSpecPreviewBox" class="editable-markdown-block group bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px]" onclick="startGoalSpecInlineEdit('${g.id}')">
-          <div class="absolute top-3 right-3 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-2 py-0.5 rounded font-mono flex items-center gap-1">
-            <i data-lucide="edit-2" class="w-3 h-3"></i> Click to edit spec
-          </div>
-          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
-            ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">+ Click here to write full product specifications, architecture design, and user stories in Markdown...</div>'}
-          </div>
-        </div>
-
-        <div id="goalSpecEditBox" class="hidden space-y-2">
-          <textarea id="goalSpecTextarea" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleGoalSpecKeydown(event, '${g.id}')" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
-          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
-            <span>⌘ + Enter to save • Esc to cancel</span>
-            <div class="flex gap-1.5">
-              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelGoalSpecInlineEdit('${g.id}')">Cancel</button>
-              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="handleSaveGoalSpec('${g.id}')">Save Specification</button>
-            </div>
-          </div>
-        </div>
+        <div
+          contenteditable="true"
+          spellcheck="false"
+          data-placeholder="+ Click here to write full specification directly into the document..."
+          class="markdown-body rich-editable-doc bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px] text-xs text-slate-200 leading-relaxed"
+          onblur="handleDirectDocBlur(this, '${g.id}', 'description', true)"
+          onkeydown="handleDirectDocKeydown(event, this, '${g.id}', 'description', true)"
+        >${renderMarkdown(g.description || '')}</div>
       </div>
 
       <!-- Verbatim Human Request Card -->
