@@ -50,6 +50,7 @@ const modalCreateSubtask = document.getElementById('modalCreateSubtask');
 const modalMergeTask = document.getElementById('modalMergeTask');
 const modalCreateGoal = document.getElementById('modalCreateGoal');
 const modalCreateDecision = document.getElementById('modalCreateDecision');
+const modalSupersedeDecision = document.getElementById('modalSupersedeDecision');
 const modalReasonPrompt = document.getElementById('modalReasonPrompt');
 const toastContainer = document.getElementById('toastContainer');
 
@@ -444,7 +445,7 @@ function renderListView(tasks) {
   });
 }
 
-// Mode 2: Board View
+// Mode 2: Board View with Drag & Drop
 function renderBoardView(tasks) {
   if (!tasksBoardView) return;
   tasksBoardView.innerHTML = '';
@@ -464,6 +465,29 @@ function renderBoardView(tasks) {
 
     const colEl = document.createElement('div');
     colEl.className = 'board-column';
+    colEl.setAttribute('data-col-status', col.status);
+
+    // HTML5 Drag and drop over column
+    colEl.ondragover = (e) => {
+      e.preventDefault();
+      colEl.style.borderColor = '#5e6ad2';
+      colEl.style.backgroundColor = 'rgba(94, 106, 210, 0.05)';
+    };
+
+    colEl.ondragleave = () => {
+      colEl.style.borderColor = '';
+      colEl.style.backgroundColor = '';
+    };
+
+    colEl.ondrop = async (e) => {
+      e.preventDefault();
+      colEl.style.borderColor = '';
+      colEl.style.backgroundColor = '';
+      const taskId = e.dataTransfer.getData('text/plain');
+      if (taskId) {
+        handleStatusChangePrompt(taskId, col.status);
+      }
+    };
 
     colEl.innerHTML = `
       <div class="board-column-header">
@@ -482,6 +506,16 @@ function renderBoardView(tasks) {
       const card = document.createElement('div');
       card.className = 'board-card';
       card.setAttribute('data-id', task.id);
+      card.draggable = true;
+
+      card.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', task.id);
+        card.style.opacity = '0.4';
+      };
+
+      card.ondragend = () => {
+        card.style.opacity = '1';
+      };
 
       const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
       const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
@@ -530,14 +564,13 @@ async function openInspector(taskId, showDrawer = true) {
     if (drawerStatusDot) drawerStatusDot.className = `status-dot ${cfg.class}`;
     if (drawerPriorityBadge) drawerPriorityBadge.textContent = task.priority;
 
-    const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
-
     const candidateBlockers = state.tasks.filter((t) => t.id !== task.id && !dependencies.includes(t.id) && t.parentId !== task.id);
 
     if (!drawerBody) return;
     drawerBody.innerHTML = `
-      <div>
-        <h1 class="text-base font-bold text-slate-100 mb-1">${task.title}</h1>
+      <!-- Inline Editable Title -->
+      <div class="space-y-1">
+        <input type="text" id="drawerInputTitle" value="${task.title.replace(/"/g, '&quot;')}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveInlineField('${task.id}', 'title', this.value)">
         <div class="text-[11px] text-slate-500 font-mono">Last changed: ${formatRelativeTime(task.lastStateChangeAt)} (${task.lastStateChangeAt})</div>
       </div>
 
@@ -559,13 +592,20 @@ async function openInspector(taskId, showDrawer = true) {
 
         <span class="property-label">Priority</span>
         <div class="property-value flex items-center gap-2">
-          ${getPriorityIcon(task.priority)}
-          <span class="capitalize">${task.priority}</span>
+          <select class="filter-select text-xs capitalize" onchange="handleSaveInlineField('${task.id}', 'priority', this.value)">
+            <option value="low" ${task.priority === 'low' ? 'selected' : ''}>Low</option>
+            <option value="medium" ${task.priority === 'medium' ? 'selected' : ''}>Medium</option>
+            <option value="high" ${task.priority === 'high' ? 'selected' : ''}>High</option>
+            <option value="critical" ${task.priority === 'critical' ? 'selected' : ''}>Critical</option>
+          </select>
         </div>
 
         <span class="property-label">Linked Goal</span>
         <div class="property-value">
-          ${goal ? `<span class="text-indigo-300 font-medium">${goal.title}</span> <span class="font-mono text-slate-500 text-[10px]">(${goal.id})</span>` : '<span class="text-amber-400">Scope Drift (No linked goal)</span>'}
+          <select class="filter-select text-xs w-full" onchange="handleSaveInlineField('${task.id}', 'goalId', this.value || null)">
+            <option value="">(None / Scope Drift)</option>
+            ${state.goals.map((g) => `<option value="${g.goal.id}" ${task.goalId === g.goal.id ? 'selected' : ''}>${g.goal.title}</option>`).join('')}
+          </select>
         </div>
 
         <span class="property-label">Claimed Agent</span>
@@ -588,10 +628,13 @@ async function openInspector(taskId, showDrawer = true) {
         ` : ''}
       </div>
 
-      <!-- Acceptance Criteria -->
+      <!-- Editable Acceptance Criteria -->
       <div class="bg-surface border border-subtle rounded-lg p-3">
-        <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 mb-1.5 font-mono">ACCEPTANCE CRITERIA</div>
-        <div class="text-xs text-slate-200 whitespace-pre-wrap">${task.acceptanceCriteria || 'No criteria specified'}</div>
+        <div class="flex items-center justify-between mb-1.5">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">ACCEPTANCE CRITERIA</div>
+          <span class="text-[10px] text-slate-500 font-mono">Auto-saves on change</span>
+        </div>
+        <textarea id="drawerInputAC" rows="3" class="input-field text-xs text-slate-200" onchange="handleSaveInlineField('${task.id}', 'acceptanceCriteria', this.value)">${task.acceptanceCriteria || ''}</textarea>
       </div>
 
       <!-- Subtasks Section -->
@@ -728,6 +771,23 @@ async function openInspector(taskId, showDrawer = true) {
     console.error('Failed to load issue details:', err);
   }
 }
+
+// Inline Field Save Handler
+window.handleSaveInlineField = async (taskId, field, value) => {
+  const payload = { [field]: value };
+  const res = await fetch(`/api/tasks/${taskId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.ok) {
+    showToast(`Updated ${field}`, 'success');
+    refreshAll();
+  } else {
+    showToast(`Failed to update ${field}`, 'error');
+  }
+};
 
 // Blocker Linking Handlers
 window.handleAddBlocker = async (taskId) => {
@@ -1077,11 +1137,53 @@ function renderDecisionsView() {
         <div><span class="text-slate-500 font-semibold">Choice:</span> <span class="text-slate-200 font-medium">${dec.choice}</span></div>
         <div><span class="text-slate-500 font-semibold">Rationale:</span> <span class="text-slate-300 italic">${dec.rationale}</span></div>
       </div>
-      <div class="flex items-center gap-1.5 border-t border-subtle pt-2">${tagsHtml}</div>
+      <div class="flex items-center justify-between border-t border-subtle pt-2">
+        <div class="flex items-center gap-1.5">${tagsHtml}</div>
+        ${dec.status === 'accepted' ? `<button class="btn-secondary text-[11px] py-0.5 px-2" onclick="promptSupersedeDecision('${dec.id}', '${dec.title.replace(/'/g, "\\'")}')">🔄 Supersede</button>` : ''}
+      </div>
     `;
 
     container.appendChild(card);
   });
+}
+
+// Supersede Decision Modal
+window.promptSupersedeDecision = (oldId, oldTitle) => {
+  const hiddenOldId = document.getElementById('inputSupersedeOldId');
+  const labelOldTitle = document.getElementById('labelSupersedeOldTitle');
+  if (hiddenOldId) hiddenOldId.value = oldId;
+  if (labelOldTitle) labelOldTitle.textContent = oldTitle;
+  if (modalSupersedeDecision) modalSupersedeDecision.classList.remove('hidden');
+};
+
+const formSupersedeDecision = document.getElementById('formSupersedeDecision');
+if (formSupersedeDecision) {
+  formSupersedeDecision.onsubmit = async (e) => {
+    e.preventDefault();
+    const oldId = document.getElementById('inputSupersedeOldId').value;
+    const title = document.getElementById('inputSuperNewTitle').value;
+    const context = document.getElementById('inputSuperNewContext').value;
+    const choice = document.getElementById('inputSuperNewChoice').value;
+    const rationale = document.getElementById('inputSuperNewRationale').value;
+    const reason = document.getElementById('inputSuperReason').value;
+
+    const res = await fetch(`/api/decisions/${oldId}/supersede`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, context, choice, rationale, reason }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      showToast(data.error || 'Failed to supersede decision', 'error');
+      return;
+    }
+
+    showToast('Decision superseded with new ADR', 'success');
+    if (modalSupersedeDecision) modalSupersedeDecision.classList.add('hidden');
+    formSupersedeDecision.reset();
+    fetchDecisions();
+  };
 }
 
 // Activity Feed

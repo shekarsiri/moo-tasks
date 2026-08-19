@@ -276,6 +276,27 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     return { success: true, decision: dec };
   });
 
+  app.post('/api/decisions/:id/supersede', async (req, reply) => {
+    const { id } = req.params as any;
+    const { title, context, choice, rationale, tags, reason } = req.body as any;
+    const result = container.decisionService.supersedeDecision(
+      id,
+      {
+        title,
+        context,
+        choice,
+        rationale,
+        tags,
+        projectPath: container.projectPath,
+        authorId: 'human',
+        authorType: 'human',
+      },
+      reason
+    );
+    broadcast('decisions_updated', { action: 'superseded', oldId: id, newId: result.newDecision.id });
+    return { success: true, ...result };
+  });
+
   // Activity Feed & Notes
   app.get('/api/activity', async (req, reply) => {
     const notes = container.noteRepo.listRecent(50);

@@ -474,6 +474,46 @@
     </div>
   </div>
 
+  <!-- Modal: Supersede Decision -->
+  <div id="modalSupersedeDecision" class="modal-backdrop hidden">
+    <div class="modal-card max-w-lg">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-100">🔄 Supersede Decision</h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <form id="formSupersedeDecision" class="space-y-3 text-xs">
+        <input type="hidden" id="inputSupersedeOldId">
+        <div class="text-slate-400 mb-1">
+          Superseding decision: <span id="labelSupersedeOldTitle" class="font-semibold text-slate-200"></span>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">New Decision Title</label>
+          <input type="text" id="inputSuperNewTitle" required class="input-field" placeholder="Updated title...">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">New Context</label>
+          <textarea id="inputSuperNewContext" required rows="2" class="input-field" placeholder="Why the change is needed..."></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">New Choice</label>
+          <input type="text" id="inputSuperNewChoice" required class="input-field" placeholder="New chosen approach...">
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">New Rationale</label>
+          <textarea id="inputSuperNewRationale" required rows="2" class="input-field" placeholder="Rationale for new choice..."></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Mandatory Reason for Superseding</label>
+          <input type="text" id="inputSuperReason" required class="input-field" placeholder="Explanation why previous decision was replaced...">
+        </div>
+        <div class="flex justify-end gap-2 pt-3 border-t border-borderSubtle">
+          <button type="button" class="modal-close btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Supersede Decision</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Modal: Mandatory Reason Prompt -->
   <div id="modalReasonPrompt" class="modal-backdrop hidden">
     <div class="modal-card max-w-md">
