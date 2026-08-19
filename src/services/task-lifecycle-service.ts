@@ -3,6 +3,7 @@ import {
   AuthorType,
   StatusHistoryEntry,
   Task,
+  TaskNote,
   TaskPriority,
   TaskStatus,
 } from '../domain/types.js';
@@ -38,6 +39,22 @@ export interface CreateTaskResult {
   task: Task;
   isDuplicate: boolean;
   duplicateWarnings: DuplicateMatch[];
+}
+
+export interface LogAttemptFailureDTO {
+  taskId: string;
+  agentId: string;
+  errorSnippet: string;
+  failureCategory?: string;
+  hypothesis?: string;
+  nextAttemptPlan?: string;
+}
+
+export interface LogAttemptFailureResult {
+  task: Task;
+  attemptCount: number;
+  autoEscalatedToHuman: boolean;
+  note: TaskNote;
 }
 
 export class TaskLifecycleService {
@@ -366,6 +383,11 @@ export class TaskLifecycleService {
     const updated = this.taskRepo.update(task);
     this.recordStatusHistory(taskId, prevStatus, 'todo', authorId, authorType, reason || 'Task reopened');
 
+    // If reopening a completed task, re-block downstream dependents that were unblocked
+    if (prevStatus === 'done') {
+      this.reblockDependents(taskId, authorId);
+    }
+
     this.noteRepo.create({
       id: `note-${crypto.randomUUID().slice(0, 8)}`,
       taskId,
@@ -400,7 +422,45 @@ export class TaskLifecycleService {
       authorType,
       `Undid transition from ${currentStatus} back to ${task.status}`
     );
+
+    if (currentStatus === 'done' && task.status !== 'done') {
+      this.reblockDependents(taskId, authorId);
+    } else if (task.status === 'done' || task.status === 'dropped') {
+      this.resolveDependents(taskId, authorId);
+    }
+
     return updated;
+  }
+
+  private reblockDependents(uncompletedTaskId: string, authorId: string = 'system'): void {
+    const dependentTaskIds = this.taskRepo.getDependents(uncompletedTaskId);
+    if (dependentTaskIds.length === 0) return;
+
+    const allTasks = this.taskRepo.list();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const allDeps = this.taskRepo.getAllDependencies();
+
+    for (const depId of dependentTaskIds) {
+      const depTask = taskMap.get(depId);
+      if (depTask && depTask.status === 'todo') {
+        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
+        if (!isUnblocked) {
+          depTask.status = 'blocked-on-dependency';
+          depTask.blockedReason = `Blocked on incomplete prerequisite: ${uncompletedTaskId}`;
+          depTask.updatedAt = new Date().toISOString();
+          depTask.lastStateChangeAt = new Date().toISOString();
+          this.taskRepo.update(depTask);
+          this.recordStatusHistory(
+            depId,
+            'todo',
+            'blocked-on-dependency',
+            authorId,
+            'system',
+            `Auto-reblocked: Prerequisite ${uncompletedTaskId} was reopened`
+          );
+        }
+      }
+    }
   }
 
   bulkDrop(taskIds: string[], reason: string, authorId: string, authorType: AuthorType = 'human'): number {
@@ -419,6 +479,63 @@ export class TaskLifecycleService {
       count++;
     }
     return count;
+  }
+
+  logAttemptFailure(dto: LogAttemptFailureDTO): LogAttemptFailureResult {
+    const task = this.getTask(dto.taskId);
+    const now = new Date().toISOString();
+    const prevStatus = task.status;
+
+    task.attemptCount += 1;
+    let autoEscalatedToHuman = false;
+
+    if (task.attemptCount > task.maxAttemptsAllowed) {
+      task.status = 'waiting-on-human';
+      task.humanQuestion = `Task exceeded ${task.maxAttemptsAllowed} max allowed attempts (${dto.failureCategory || 'failure'}). Automated looping halted for human guidance.`;
+      task.humanQuestionType = 'decision';
+      autoEscalatedToHuman = true;
+    }
+
+    task.updatedAt = now;
+    task.lastStateChangeAt = now;
+    this.taskRepo.update(task);
+
+    const noteLines = [
+      `### ⚠️ Attempt Failure Log (Attempt #${task.attemptCount})`,
+      dto.failureCategory ? `- **Category**: ${dto.failureCategory}` : '',
+      `- **Error**:\n\`\`\`\n${dto.errorSnippet.trim()}\n\`\`\``,
+      dto.hypothesis ? `- **Hypothesis**: ${dto.hypothesis.trim()}` : '',
+      dto.nextAttemptPlan ? `- **Next Plan**: ${dto.nextAttemptPlan.trim()}` : '',
+    ].filter(Boolean);
+
+    const note: TaskNote = {
+      id: `note-${crypto.randomUUID().slice(0, 8)}`,
+      taskId: task.id,
+      authorType: 'agent',
+      authorId: dto.agentId,
+      noteType: 'attempt_failure',
+      content: noteLines.join('\n'),
+      createdAt: now,
+    };
+    this.noteRepo.create(note);
+
+    if (autoEscalatedToHuman) {
+      this.recordStatusHistory(
+        task.id,
+        prevStatus,
+        'waiting-on-human',
+        dto.agentId,
+        'agent',
+        `Auto-escalated: Max attempts (${task.maxAttemptsAllowed}) exceeded after attempt #${task.attemptCount}`
+      );
+    }
+
+    return {
+      task,
+      attemptCount: task.attemptCount,
+      autoEscalatedToHuman,
+      note,
+    };
   }
 
   reorderTasks(updates: { id: string; orderIndex: number }[]): void {

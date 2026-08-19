@@ -13,12 +13,23 @@ import {
   IStatusHistoryRepository,
 } from '../infrastructure/repositories/interfaces.js';
 import { DependencyGraph } from '../domain/dependency.js';
+import { ClaimService, ClaimTaskOptions, ClaimTaskResult } from './claim-service.js';
+import { TaskLifecycleService } from './task-lifecycle-service.js';
+
+export interface CompleteAndClaimNextResult {
+  completedTask: Task;
+  nextTask: Task | null;
+  claimResult: ClaimTaskResult | null;
+  hint: string;
+}
 
 export class VerificationService {
   constructor(
     private taskRepo: ITaskRepository,
     private noteRepo: INoteRepository,
-    private statusHistoryRepo: IStatusHistoryRepository
+    private statusHistoryRepo: IStatusHistoryRepository,
+    private taskLifecycleService?: TaskLifecycleService,
+    private claimService?: ClaimService
   ) {}
 
   completeTask(
@@ -54,7 +65,8 @@ export class VerificationService {
 
     const now = new Date().toISOString();
     const prevStatus = task.status;
-    const gitContext = GitContextService.getContext();
+    const gitContext = evidence.gitContext || GitContextService.getContext();
+    evidence.gitContext = gitContext;
 
     // Set completion fields
     task.status = 'done';
@@ -70,13 +82,18 @@ export class VerificationService {
 
     const updated = this.taskRepo.update(task);
 
+    let gitInfo = '';
+    if (gitContext.commitHash) {
+      gitInfo = `\nGit: ${gitContext.commitHash}${gitContext.commitSubject ? ` - "${gitContext.commitSubject}"` : ''}${gitContext.branch ? ` on [${gitContext.branch}]` : ''}${gitContext.isDirty ? ' [dirty]' : ''}`;
+    }
+
     this.noteRepo.create({
       id: `note-${crypto.randomUUID().slice(0, 8)}`,
       taskId,
       authorType: 'agent',
       authorId: agentId,
       noteType: 'verification_note',
-      content: `Completed by agent ${agentId}.\nCommands: ${evidence.commandsRun?.join(', ') || 'N/A'}\nProof: ${evidence.testProof || evidence.outputSnippet || 'Provided'}\n${notes ? `Notes: ${notes}` : ''}`,
+      content: `Completed by agent ${agentId}.\nCommands: ${evidence.commandsRun?.join(', ') || 'N/A'}\nProof: ${evidence.testProof || evidence.outputSnippet || 'Provided'}${gitInfo}\n${notes ? `Notes: ${notes}` : ''}`.trim(),
       gitContext,
       createdAt: now,
     });
@@ -96,6 +113,52 @@ export class VerificationService {
     this.resolveDependents(taskId);
 
     return updated;
+  }
+
+  completeAndClaimNext(
+    taskId: string,
+    agentId: string,
+    sessionId: string,
+    evidence: TaskEvidence,
+    options: {
+      nextClaimOptions?: ClaimTaskOptions;
+      notes?: string;
+    } = {}
+  ): CompleteAndClaimNextResult {
+    const completedTask = this.completeTask(taskId, agentId, evidence, options.notes);
+
+    if (!this.taskLifecycleService || !this.claimService) {
+      return {
+        completedTask,
+        nextTask: null,
+        claimResult: null,
+        hint: `Completed task ${taskId}. ClaimService or TaskLifecycleService not configured for auto-claim.`,
+      };
+    }
+
+    const nextTask = this.taskLifecycleService.getNextUnblockedTask(completedTask.goalId, agentId);
+    if (!nextTask) {
+      return {
+        completedTask,
+        nextTask: null,
+        claimResult: null,
+        hint: `Completed task ${taskId}. No further unblocked tasks ready in goal.`,
+      };
+    }
+
+    const claimResult = this.claimService.claimTask(
+      nextTask.id,
+      agentId,
+      sessionId,
+      options.nextClaimOptions
+    );
+
+    return {
+      completedTask,
+      nextTask: claimResult.task,
+      claimResult,
+      hint: `Completed task ${taskId} and atomically claimed next task ${nextTask.id}: "${nextTask.title}"`,
+    };
   }
 
   verifyTask(
@@ -179,7 +242,43 @@ export class VerificationService {
       timestamp: now,
     });
 
+    // Re-block downstream dependents that relied on this rejected task
+    this.reblockDependents(taskId, rejecterId);
+
     return updated;
+  }
+
+  private reblockDependents(uncompletedTaskId: string, rejecterId: string = 'system'): void {
+    const dependentTaskIds = this.taskRepo.getDependents(uncompletedTaskId);
+    if (dependentTaskIds.length === 0) return;
+
+    const allTasks = this.taskRepo.list();
+    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+    const allDeps = this.taskRepo.getAllDependencies();
+
+    for (const depId of dependentTaskIds) {
+      const depTask = taskMap.get(depId);
+      if (depTask && depTask.status === 'todo') {
+        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
+        if (!isUnblocked) {
+          depTask.status = 'blocked-on-dependency';
+          depTask.blockedReason = `Blocked on rejected prerequisite: ${uncompletedTaskId}`;
+          depTask.updatedAt = new Date().toISOString();
+          depTask.lastStateChangeAt = new Date().toISOString();
+          this.taskRepo.update(depTask);
+          this.statusHistoryRepo.create({
+            id: `hist-${crypto.randomUUID().slice(0, 8)}`,
+            taskId: depId,
+            fromStatus: 'todo',
+            toStatus: 'blocked-on-dependency',
+            changedBy: rejecterId,
+            authorType: 'system',
+            reason: `Auto-reblocked: Prerequisite ${uncompletedTaskId} was rejected`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+    }
   }
 
   private resolveDependents(finishedTaskId: string): void {

@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { Task } from '../domain/types.js';
+import { Decision, Task } from '../domain/types.js';
 import {
   AgentConcurrencyLimitError,
   TaskAlreadyClaimedError,
@@ -11,6 +11,7 @@ import {
   ITaskRepository,
   INoteRepository,
   IStatusHistoryRepository,
+  IDecisionRepository,
 } from '../infrastructure/repositories/interfaces.js';
 
 export interface ClaimTaskOptions {
@@ -24,13 +25,15 @@ export interface ClaimTaskResult {
   conflictWarnings: ConflictWarning[];
   attemptCount: number;
   autoEscalatedToHuman: boolean;
+  relatedDecisions?: Decision[];
 }
 
 export class ClaimService {
   constructor(
     private taskRepo: ITaskRepository,
     private noteRepo: INoteRepository,
-    private statusHistoryRepo: IStatusHistoryRepository
+    private statusHistoryRepo: IStatusHistoryRepository,
+    private decisionRepo?: IDecisionRepository
   ) {}
 
   claimTask(
@@ -55,12 +58,12 @@ export class ClaimService {
       }
     }
 
-    // 2. Check agent concurrency limit
+    // 2. Check agent concurrency limit (only count active tasks with unexpired leases)
     const activeAgentTasks = this.taskRepo.list({
       status: 'doing',
       claimedByAgent: agentId,
       isArchived: false,
-    }).filter((t) => t.id !== taskId);
+    }).filter((t) => t.id !== taskId && (!t.leaseExpiresAt || new Date(t.leaseExpiresAt) > now));
 
     if (activeAgentTasks.length >= maxConcurrent) {
       throw new AgentConcurrencyLimitError(agentId, maxConcurrent);
@@ -127,11 +130,47 @@ export class ClaimService {
       timestamp: now.toISOString(),
     });
 
+    // 8. Auto-match relevant accepted ADR decisions
+    let relatedDecisions: Decision[] = [];
+    if (this.decisionRepo) {
+      const allAccepted = this.decisionRepo.list('', 'accepted');
+      if (allAccepted.length > 0) {
+        const textToMatch = [
+          task.title,
+          ...(task.declaredFiles || []),
+          task.description || '',
+        ].join(' ').toLowerCase();
+
+        const words = textToMatch
+          .replace(/[^a-z0-9_\-\/]/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'].includes(w));
+
+        const wordSet = new Set(words);
+
+        relatedDecisions = allAccepted.filter((dec) => {
+          // Check tags
+          if (dec.tags && dec.tags.some((tag) => wordSet.has(tag.toLowerCase()) || textToMatch.includes(tag.toLowerCase()))) {
+            return true;
+          }
+          // Check title / choice tokens
+          const decWords = (dec.title + ' ' + dec.choice)
+            .toLowerCase()
+            .replace(/[^a-z0-9_\-\/]/g, ' ')
+            .split(/\s+/)
+            .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'].includes(w));
+
+          return decWords.some((w) => wordSet.has(w));
+        }).slice(0, 5);
+      }
+    }
+
     return {
       task,
       conflictWarnings,
       attemptCount: task.attemptCount,
       autoEscalatedToHuman,
+      relatedDecisions,
     };
   }
 

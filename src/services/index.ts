@@ -54,13 +54,13 @@ export function createServiceContainer(config: DatabaseConfig = {}): ServiceCont
 
   const goalService = new GoalService(goalRepo, taskRepo);
   const taskLifecycleService = new TaskLifecycleService(taskRepo, statusHistoryRepo, noteRepo, goalService);
-  const claimService = new ClaimService(taskRepo, noteRepo, statusHistoryRepo);
-  const verificationService = new VerificationService(taskRepo, noteRepo, statusHistoryRepo);
+  const claimService = new ClaimService(taskRepo, noteRepo, statusHistoryRepo, decisionRepo);
+  const verificationService = new VerificationService(taskRepo, noteRepo, statusHistoryRepo, taskLifecycleService, claimService);
   const humanCollabService = new HumanCollabService(taskRepo, noteRepo, statusHistoryRepo);
   const discoveredWorkService = new DiscoveredWorkService(taskRepo, noteRepo, taskLifecycleService);
   const decisionService = new DecisionService(decisionRepo);
   const duplicateMergeService = new DuplicateMergeService(taskRepo, noteRepo, statusHistoryRepo);
-  const sessionService = new SessionService(taskRepo, goalRepo, decisionRepo, taskLifecycleService);
+  const sessionService = new SessionService(taskRepo, goalRepo, decisionRepo, taskLifecycleService, noteRepo);
   const housekeepingService = new HousekeepingService(goalRepo, taskRepo, decisionRepo, noteRepo);
 
   return {

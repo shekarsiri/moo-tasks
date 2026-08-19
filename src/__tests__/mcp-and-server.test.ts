@@ -2,7 +2,14 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServiceContainer, ServiceContainer } from '../services/index.js';
 import { setupMcpServer } from '../mcp/server.js';
 import { buildServer } from '../server/app.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 
 describe('MCP Tools & Fastify HTTP Server', () => {
   let container: ServiceContainer;
@@ -339,6 +346,239 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       });
       expect(exportRes.statusCode).toBe(200);
       expect(JSON.parse(exportRes.payload).content).toContain('Setup Infrastructure');
+    });
+  });
+
+  describe('Defensive MCP Input Coercion & CLI Commands', () => {
+    it('gracefully handles single-string parameters for dependencies and files', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      // Create task with single string for declaredFiles
+      const taskRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_create_task',
+          arguments: {
+            title: 'Defensive Input Task',
+            acceptanceCriteria: 'Works with string array coercion',
+            declaredFiles: 'src/single-file.ts', // single string instead of array
+          },
+        },
+      });
+
+      const taskData = JSON.parse(taskRes.content[0].text);
+      expect(taskData.success).toBe(true);
+      expect(Array.isArray(taskData.task.declaredFiles)).toBe(true);
+      expect(taskData.task.declaredFiles).toContain('src/single-file.ts');
+
+      // Claim without explicit agentId and sessionId
+      const claimRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_claim_task',
+          arguments: {
+            taskId: taskData.task.id,
+          },
+        },
+      });
+      const claimData = JSON.parse(claimRes.content[0].text);
+      expect(claimData.success).toBe(true);
+      expect(claimData.task.claimedByAgent).toBe('agent');
+
+      // Heartbeat without passing agentId
+      const hbRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_heartbeat_task',
+          arguments: {
+            taskId: taskData.task.id,
+          },
+        },
+      });
+      const hbData = JSON.parse(hbRes.content[0].text);
+      expect(hbData.success).toBe(true);
+
+      // Checkpoint without passing agentId
+      const cpRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_checkpoint',
+          arguments: {
+            taskId: taskData.task.id,
+            note: 'Progress update',
+          },
+        },
+      });
+      const cpData = JSON.parse(cpRes.content[0].text);
+      expect(cpData.success).toBe(true);
+    });
+
+    it('executes atomic moo_complete_and_claim_next transitioning seamlessly to the next unblocked task', async () => {
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+
+      const goal = container.goalService.createGoal('Multi-step Goal', 'Build pipeline', container.projectPath);
+
+      const t1 = container.taskLifecycleService.createTask({
+        title: 'Step 1: Setup Models',
+        goalId: goal.id,
+        acceptanceCriteria: 'Models written',
+      });
+
+      const t2 = container.taskLifecycleService.createTask({
+        title: 'Step 2: Setup Controllers',
+        goalId: goal.id,
+        acceptanceCriteria: 'Controllers written',
+        dependsOnTaskIds: [t1.task.id],
+      });
+
+      // Claim Task 1
+      container.claimService.claimTask(t1.task.id, 'pipeline-agent', 'sess-100');
+
+      // Complete Task 1 and atomically claim Task 2 (which becomes unblocked upon Task 1 completion)
+      const completeAndClaimRes = await callTool({
+        method: 'tools/call',
+        params: {
+          name: 'moo_complete_and_claim_next',
+          arguments: {
+            taskId: t1.task.id,
+            agentId: 'pipeline-agent',
+            sessionId: 'sess-100',
+            evidence: {
+              commandsRun: ['npm test models.test.ts'],
+              testProof: 'All models verified',
+            },
+            nextDeclaredFiles: ['src/controllers/auth.ts'],
+            nextLeaseSeconds: 600,
+          },
+        },
+      });
+
+      const data = JSON.parse(completeAndClaimRes.content[0].text);
+      expect(data.success).toBe(true);
+      expect(data.completedTask.id).toBe(t1.task.id);
+      expect(data.completedTask.status).toBe('done');
+
+      expect(data.nextTask).toBeDefined();
+      expect(data.nextTask.id).toBe(t2.task.id);
+      expect(data.nextTask.status).toBe('doing');
+      expect(data.nextTask.claimedByAgent).toBe('pipeline-agent');
+      expect(data.nextTask.declaredFiles).toContain('src/controllers/auth.ts');
+    });
+
+    it('lists and reads native MCP resources (compact context, active goals, ready queue, settled decisions)', async () => {
+      const server = setupMcpServer(container);
+      const listResourcesHandler = (server as any)._requestHandlers.get(ListResourcesRequestSchema.shape.method.value);
+      const readResourceHandler = (server as any)._requestHandlers.get(ReadResourceRequestSchema.shape.method.value);
+
+      // 1. List resources
+      const listRes = await listResourcesHandler({ method: 'resources/list' });
+      expect(listRes.resources).toBeDefined();
+      expect(listRes.resources.length).toBe(4);
+
+      const uris = listRes.resources.map((r: any) => r.uri);
+      expect(uris).toContain('moo://context/compact');
+      expect(uris).toContain('moo://goals/active');
+      expect(uris).toContain('moo://tasks/ready');
+      expect(uris).toContain('moo://decisions/settled');
+
+      // 2. Setup sample data
+      const goal = container.goalService.createGoal(
+        'MCP Resource Test Goal',
+        'Human requested resource testing',
+        container.projectPath,
+        5,
+        '# PRD Specification\n- Detail A\n- Detail B'
+      );
+      container.taskLifecycleService.createTask({
+        title: 'Ready Queue Task',
+        goalId: goal.id,
+        acceptanceCriteria: 'Ready test criteria',
+      });
+      container.decisionService.recordDecision({
+        title: 'Use MCP Resources Protocol',
+        context: 'AI coding tools support native context injection',
+        choice: 'MCP Resources',
+        rationale: 'Allows IDEs to pull fresh context automatically',
+        projectPath: container.projectPath,
+        authorId: 'architect-1',
+      });
+
+      // 3. Read moo://context/compact
+      const compactRes = await readResourceHandler({
+        method: 'resources/read',
+        params: { uri: 'moo://context/compact' },
+      });
+      expect(compactRes.contents[0].text).toContain('# 🐮 MOO TASKS CONTEXT');
+      expect(compactRes.contents[0].text).toContain('MCP Resource Test Goal');
+
+      // 4. Read moo://goals/active
+      const goalsRes = await readResourceHandler({
+        method: 'resources/read',
+        params: { uri: 'moo://goals/active' },
+      });
+      expect(goalsRes.contents[0].text).toContain('# 🎯 Active Project Goals');
+      expect(goalsRes.contents[0].text).toContain('MCP Resource Test Goal');
+      expect(goalsRes.contents[0].text).toContain('# PRD Specification');
+
+      // 5. Read moo://tasks/ready
+      const tasksRes = await readResourceHandler({
+        method: 'resources/read',
+        params: { uri: 'moo://tasks/ready' },
+      });
+      const parsedTasks = JSON.parse(tasksRes.contents[0].text);
+      expect(parsedTasks.total).toBe(1);
+      expect(parsedTasks.readyTasks[0].title).toBe('Ready Queue Task');
+
+      // 6. Read moo://decisions/settled
+      const decisionsRes = await readResourceHandler({
+        method: 'resources/read',
+        params: { uri: 'moo://decisions/settled' },
+      });
+      expect(decisionsRes.contents[0].text).toContain('Use MCP Resources Protocol');
+      expect(decisionsRes.contents[0].text).toContain('Allows IDEs to pull fresh context automatically');
+    });
+
+    it('lists and gets native MCP prompts (moo_plan_feature and moo_execute_next)', async () => {
+      const server = setupMcpServer(container);
+      const listPromptsHandler = (server as any)._requestHandlers.get(ListPromptsRequestSchema.shape.method.value);
+      const getPromptHandler = (server as any)._requestHandlers.get(GetPromptRequestSchema.shape.method.value);
+
+      // 1. List prompts
+      const listRes = await listPromptsHandler({ method: 'prompts/list' });
+      expect(listRes.prompts).toBeDefined();
+      expect(listRes.prompts.length).toBeGreaterThanOrEqual(2);
+
+      const promptNames = listRes.prompts.map((p: any) => p.name);
+      expect(promptNames).toContain('moo_plan_feature');
+      expect(promptNames).toContain('moo_execute_next');
+
+      // 2. Get moo_plan_feature prompt
+      const planPromptRes = await getPromptHandler({
+        method: 'prompts/get',
+        params: {
+          name: 'moo_plan_feature',
+          arguments: {
+            featureRequest: 'Build user notification system with Webhooks',
+          },
+        },
+      });
+      expect(planPromptRes.messages[0].content.text).toContain('Build user notification system with Webhooks');
+      expect(planPromptRes.messages[0].content.text).toContain('moo_create_goal');
+
+      // 3. Get moo_execute_next prompt
+      const executePromptRes = await getPromptHandler({
+        method: 'prompts/get',
+        params: {
+          name: 'moo_execute_next',
+          arguments: {
+            agentId: 'coder-bot',
+          },
+        },
+      });
+      expect(executePromptRes.messages[0].content.text).toContain("coder-bot");
+      expect(executePromptRes.messages[0].content.text).toContain('moo_claim_task');
     });
   });
 });

@@ -182,12 +182,13 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
   });
 
   app.post('/api/goals', async (req, reply) => {
-    const { title, verbatimPrompt, maxOpenTasksCap } = req.body as any;
+    const { title, verbatimPrompt, maxOpenTasksCap, description } = req.body as any;
     const goal = container.goalService.createGoal(
       title,
       verbatimPrompt,
       container.projectPath,
-      maxOpenTasksCap
+      maxOpenTasksCap,
+      description
     );
     broadcast('goals_updated', { goal });
     return { success: true, goal };
@@ -452,6 +453,22 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
       projectName: path.basename(container.projectPath),
       projectPath: container.projectPath,
     };
+  });
+
+  // File Context
+  app.post('/api/context/files', async (req, reply) => {
+    const { filePaths, files } = req.body as any;
+    const raw = filePaths || files || [];
+    const list = Array.isArray(raw) ? raw : [raw].filter(Boolean);
+    const summary = container.sessionService.getFileContext(list, container.projectPath);
+    return { success: true, ...summary };
+  });
+
+  app.get('/api/context/files', async (req, reply) => {
+    const { paths } = req.query as any;
+    const list = paths ? paths.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    const summary = container.sessionService.getFileContext(list, container.projectPath);
+    return { success: true, ...summary };
   });
 
   // Resume & Export

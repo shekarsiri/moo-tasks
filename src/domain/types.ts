@@ -35,11 +35,14 @@ export interface TaskEvidence {
   filesModified?: string[];
   testProof?: string;
   notes?: string;
+  gitContext?: GitContext;
 }
 
 export interface GitContext {
   branch?: string;
   commitHash?: string;
+  commitSubject?: string;
+  diffSummary?: string;
   isDirty?: boolean;
   modifiedFiles?: string[];
 }

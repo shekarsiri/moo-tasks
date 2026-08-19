@@ -1,17 +1,39 @@
-import { SessionResumeSummary } from '../domain/types.js';
+import { Decision, SessionResumeSummary, Task } from '../domain/types.js';
 import {
   ITaskRepository,
   IGoalRepository,
   IDecisionRepository,
+  INoteRepository,
 } from '../infrastructure/repositories/interfaces.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
+
+export interface FileContextSummary {
+  filePaths: string[];
+  activeLocks: Array<{
+    taskId: string;
+    taskTitle: string;
+    claimedByAgent?: string;
+    declaredFiles: string[];
+    leaseExpiresAt?: string;
+  }>;
+  pastTasks: Task[];
+  relevantDecisions: Decision[];
+  recentNotes: Array<{
+    taskId: string;
+    noteType: string;
+    content: string;
+    createdAt: string;
+    authorId: string;
+  }>;
+}
 
 export class SessionService {
   constructor(
     private taskRepo: ITaskRepository,
     private goalRepo: IGoalRepository,
     private decisionRepo: IDecisionRepository,
-    private taskLifecycleService: TaskLifecycleService
+    private taskLifecycleService: TaskLifecycleService,
+    private noteRepo?: INoteRepository
   ) {}
 
   whereDidILeaveOff(projectPath: string, agentId?: string): SessionResumeSummary {
@@ -121,5 +143,112 @@ export class SessionService {
     }
 
     return lines.join('\n');
+  }
+
+  getFileContext(filePaths: string[], projectPath?: string): FileContextSummary {
+    const normalize = (p: string) =>
+      p.trim().toLowerCase().replace(/\\/g, '/').replace(/^\.\//, '');
+
+    const normalizedInputs = filePaths.map(normalize);
+
+    const matchesFile = (f: string): boolean => {
+      const nf = normalize(f);
+      const base = nf.split('/').pop() || '';
+      return normalizedInputs.some((inp) => {
+        const inpBase = inp.split('/').pop() || '';
+        return (
+          nf === inp ||
+          nf.endsWith('/' + inp) ||
+          inp.endsWith('/' + nf) ||
+          (base.length > 3 && base === inpBase)
+        );
+      });
+    };
+
+    // 1. Active Locks (tasks in 'doing' whose declaredFiles match)
+    const activeDoingTasks = this.taskRepo.list({ status: 'doing', isArchived: false });
+    const activeLocks = activeDoingTasks
+      .filter((t) => (t.declaredFiles || []).some(matchesFile))
+      .map((t) => ({
+        taskId: t.id,
+        taskTitle: t.title,
+        claimedByAgent: t.claimedByAgent,
+        declaredFiles: t.declaredFiles,
+        leaseExpiresAt: t.leaseExpiresAt,
+      }));
+
+    // 2. Past completed tasks that touched these files
+    const allCompletedTasks = this.taskRepo.list({ status: 'done', isArchived: false });
+    const pastTasks = allCompletedTasks
+      .filter((t) => {
+        const allFiles = [
+          ...(t.declaredFiles || []),
+          ...(t.evidence?.filesModified || []),
+        ];
+        return allFiles.some(matchesFile);
+      })
+      .slice(0, 10);
+
+    // 3. Relevant Decisions
+    const allDecisions = this.decisionRepo.list(projectPath || '', 'accepted');
+    const relevantDecisions = allDecisions.filter((dec) => {
+      const textToSearch = [
+        dec.title,
+        ...(dec.tags || []),
+        dec.choice,
+        dec.rationale,
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return normalizedInputs.some((inp) => {
+        const parts = inp.split('/').filter((p) => p.length > 2);
+        return parts.some((part) => {
+          const cleanPart = part.replace(/\.[a-z0-9]+$/i, '');
+          return cleanPart.length > 2 && textToSearch.includes(cleanPart);
+        });
+      });
+    });
+
+    // 4. Recent Notes from matching tasks
+    const recentNotes: Array<{
+      taskId: string;
+      noteType: string;
+      content: string;
+      createdAt: string;
+      authorId: string;
+    }> = [];
+
+    if (this.noteRepo) {
+      const candidateTaskIds = new Set([
+        ...activeLocks.map((l) => l.taskId),
+        ...pastTasks.map((t) => t.id),
+      ]);
+
+      for (const tid of candidateTaskIds) {
+        const taskNotes = this.noteRepo.listByTaskId(tid);
+        for (const n of taskNotes) {
+          recentNotes.push({
+            taskId: n.taskId,
+            noteType: n.noteType,
+            content: n.content,
+            createdAt: n.createdAt,
+            authorId: n.authorId,
+          });
+        }
+      }
+    }
+
+    recentNotes.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    return {
+      filePaths,
+      activeLocks,
+      pastTasks,
+      relevantDecisions,
+      recentNotes: recentNotes.slice(0, 15),
+    };
   }
 }

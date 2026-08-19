@@ -20,18 +20,46 @@ export class GitContextService {
         cwd,
         stdio: ['ignore', 'pipe', 'ignore'],
         encoding: 'utf-8',
-      }).trim();
+      });
 
       const modifiedFiles = statusOutput
         ? statusOutput
             .split('\n')
-            .map((line) => line.trim().slice(3))
+            .map((line) => {
+              if (!line.trim()) return '';
+              const trimmed = line.trimStart();
+              const match = trimmed.match(/^([A-Z?]{1,2})\s+(.*)$/);
+              let filename = match ? match[2].trim() : line.slice(3).trim();
+              if (filename.includes(' -> ')) {
+                filename = filename.split(' -> ')[1].trim();
+              }
+              return filename;
+            })
             .filter(Boolean)
         : [];
+      let commitSubject: string | undefined;
+      try {
+        commitSubject = execSync('git log -1 --format=%s', {
+          cwd,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          encoding: 'utf-8',
+        }).trim() || undefined;
+      } catch {}
+
+      let diffSummary: string | undefined;
+      try {
+        diffSummary = execSync('git diff --stat', {
+          cwd,
+          stdio: ['ignore', 'pipe', 'ignore'],
+          encoding: 'utf-8',
+        }).trim() || undefined;
+      } catch {}
 
       return {
         branch: branch || undefined,
         commitHash: commitHash || undefined,
+        commitSubject: commitSubject || undefined,
+        diffSummary: diffSummary || undefined,
         isDirty: modifiedFiles.length > 0,
         modifiedFiles: modifiedFiles.length > 0 ? modifiedFiles : undefined,
       };

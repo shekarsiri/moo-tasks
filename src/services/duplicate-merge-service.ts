@@ -32,10 +32,11 @@ export class DuplicateMergeService {
 
     const now = new Date().toISOString();
 
-    // 1. Move subtasks from source to target
+    // 1. Move subtasks from source to target (or target's parent if target is already a subtask)
+    const effectiveParentId = targetTask.parentId || targetTaskId;
     const subtasks = this.taskRepo.listSubtasks(sourceTaskId);
     for (const subtask of subtasks) {
-      subtask.parentId = targetTaskId;
+      subtask.parentId = effectiveParentId;
       subtask.updatedAt = now;
       this.taskRepo.update(subtask);
     }

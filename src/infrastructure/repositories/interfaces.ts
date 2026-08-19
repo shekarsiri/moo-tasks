@@ -58,7 +58,7 @@ export interface ITaskRepository {
 export interface IDecisionRepository {
   create(decision: Decision): Decision;
   findById(id: string): Decision | null;
-  list(projectPath: string, status?: DecisionStatus, tag?: string): Decision[];
+  list(projectPath?: string, status?: DecisionStatus, tag?: string): Decision[];
   update(decision: Decision): Decision;
   delete(id: string): boolean;
 }

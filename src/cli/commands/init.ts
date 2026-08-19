@@ -6,18 +6,19 @@ import { createServiceContainer } from '../../services/index.js';
 export const AGENTS_MD_CONTENT = `# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
 
 > ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server (\`.moo/tasks.db\`).
-> For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
+> For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks with **FULL TECHNICAL DETAILS** **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
 
 ---
 
 ## ⚡ 1-Call Fast-Path for Rapid Coding (Recommended)
 
-When the user asks you to implement a feature or fix an issue, use **\`moo_quick_start\`** to atomically create and claim the task in a single step:
+When the user asks you to implement a feature or fix an issue, use **\`moo_quick_start\`** to atomically create and claim the task in a single step with complete specifications:
 
 \`\`\`json
 {
   "title": "Implement feature X",
-  "acceptanceCriteria": "Clear, testable markdown definition of done",
+  "description": "### Technical Overview\\nDetailed design, architectural breakdown, and step-by-step implementation plan.\\n\\n### Implementation Plan\\n1. Step 1...\\n2. Step 2...",
+  "acceptanceCriteria": "- [ ] Clear, testable markdown definition of done\\n- [ ] Unit tests pass",
   "priority": "high",
   "declaredFiles": ["src/feature.ts"]
 }
@@ -29,13 +30,19 @@ When the user asks you to implement a feature or fix an issue, use **\`moo_quick
 
 ### 1. Goal Anchoring (Prevent Scope Drift)
 - Always anchor the human user's overarching request with \`moo_create_goal(title, verbatimPrompt, description)\`.
-- Store the user's EXACT verbatim prompt to maintain fidelity.
+- Always include:
+  - **verbatimPrompt**: Store the user's EXACT verbatim prompt to maintain fidelity.
+  - **description**: Full rich Markdown PRD, architectural breakdown, component boundaries, and milestones.
 
-### 2. Task Planning & Acceptance Criteria
-- Break down the goal into small, atomic tasks:
+### 2. Task Planning & Full Specifications
+- Break down the goal into small, atomic tasks before touching code:
   - Call \`moo_create_task\` or \`moo_create_tasks_batch\`.
-  - ALWAYS write testable \`acceptanceCriteria\` in Markdown BEFORE touching code.
-  - Declare \`declaredFiles\` and prerequisite \`dependsOnTaskIds\` (DAG cycle prevention is enforced).
+  - ALWAYS write a comprehensive **\`description\`** containing:
+    1. **Technical Overview & Architecture**: Why and how this is built.
+    2. **Step-by-Step Implementation Plan**: Numbered actionable steps.
+    3. **Design Decisions / Code Snippets**: Key types, schemas, or endpoints.
+  - ALWAYS write testable **\`acceptanceCriteria\`** in Markdown with checkboxes (\`- [ ]\`) BEFORE touching code.
+  - Declare **\`declaredFiles\`** and prerequisite **\`dependsOnTaskIds\`** (DAG cycle prevention is enforced).
   - Open tasks cap (max 10 open items per goal) is strictly enforced to prevent over-planning.
 
 ### 3. Exclusive Claim & Ownership
@@ -58,9 +65,10 @@ When the user asks you to implement a feature or fix an issue, use **\`moo_quick
   - Call \`moo_record_decision(title, context, choice, rationale, tags)\` so subsequent agents never re-debate established decisions.
 `;
 
-export async function initCommand(options: { projectPath?: string; rules?: boolean }) {
+export async function initCommand(options: { projectPath?: string; rules?: boolean; force?: boolean }) {
   const root = options.projectPath ? path.resolve(options.projectPath) : process.cwd();
   const mooDir = path.join(root, '.moo');
+  const overwrite = Boolean(options.force || options.rules);
 
   if (!fs.existsSync(mooDir)) {
     fs.mkdirSync(mooDir, { recursive: true });
@@ -80,30 +88,30 @@ export async function initCommand(options: { projectPath?: string; rules?: boole
 
   // 2. Generate AGENTS.md
   const agentsMdPath = path.join(root, 'AGENTS.md');
-  if (!fs.existsSync(agentsMdPath)) {
+  if (!fs.existsSync(agentsMdPath) || overwrite) {
     fs.writeFileSync(agentsMdPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} Created agent instructions: ${picocolors.cyan(agentsMdPath)}`);
+    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} agent instructions: ${picocolors.cyan(agentsMdPath)}`);
   }
 
   // 3. Generate CLAUDE.md for Claude Code
   const claudeMdPath = path.join(root, 'CLAUDE.md');
-  if (!fs.existsSync(claudeMdPath)) {
+  if (!fs.existsSync(claudeMdPath) || overwrite) {
     fs.writeFileSync(claudeMdPath, `# Project Instructions for Claude Code\n\nSee [AGENTS.md](./AGENTS.md) for mandatory task orchestration rules with Moo Tasks.\n\n${AGENTS_MD_CONTENT}`);
-    console.log(`${picocolors.green('✔')} Created Claude Code instructions: ${picocolors.cyan(claudeMdPath)}`);
+    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Claude Code instructions: ${picocolors.cyan(claudeMdPath)}`);
   }
 
   // 4. Generate .cursorrules for Cursor
   const cursorRulesPath = path.join(root, '.cursorrules');
-  if (!fs.existsSync(cursorRulesPath)) {
+  if (!fs.existsSync(cursorRulesPath) || overwrite) {
     fs.writeFileSync(cursorRulesPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} Created Cursor instructions: ${picocolors.cyan(cursorRulesPath)}`);
+    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Cursor instructions: ${picocolors.cyan(cursorRulesPath)}`);
   }
 
   // 5. Generate .windsurfrules for Windsurf
   const windsurfRulesPath = path.join(root, '.windsurfrules');
-  if (!fs.existsSync(windsurfRulesPath)) {
+  if (!fs.existsSync(windsurfRulesPath) || overwrite) {
     fs.writeFileSync(windsurfRulesPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} Created Windsurf instructions: ${picocolors.cyan(windsurfRulesPath)}`);
+    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Windsurf instructions: ${picocolors.cyan(windsurfRulesPath)}`);
   }
 
   console.log(`\n${picocolors.bold(picocolors.green('✔ Initialized Moo Tasks workspace!'))}`);

@@ -2,9 +2,14 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { ServiceContainer } from '../services/index.js';
+import { DependencyGraph } from '../domain/dependency.js';
 
 export function setupMcpServer(container: ServiceContainer): Server {
   const server = new Server(
@@ -15,6 +20,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
     {
       capabilities: {
         tools: {},
+        resources: {},
+        prompts: {},
       },
     }
   );
@@ -25,13 +32,13 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // 1. Goals
         {
           name: 'moo_create_goal',
-          description: 'Record a human user request verbatim as an overarching Goal. Tasks will link back to this goal. Caps open tasks to prevent over-planning.',
+          description: 'Record a human user request verbatim as an overarching Goal with rich Markdown PRD/spec. Tasks will link back to this goal. Caps open tasks to prevent over-planning.',
           inputSchema: {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'Brief descriptive title for the goal' },
               verbatimPrompt: { type: 'string', description: 'Verbatim text of the human user request' },
-              description: { type: 'string', description: 'Full rich Markdown specification, PRD, architectural breakdown, and plan' },
+              description: { type: 'string', description: 'Comprehensive Markdown PRD, architectural breakdown, component boundaries, and milestone plan' },
               maxOpenTasksCap: { type: 'number', description: 'Maximum open tasks allowed under this goal (default: 10)' },
             },
             required: ['title', 'verbatimPrompt'],
@@ -114,15 +121,15 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // 2. Tasks & Lifecycle
         {
           name: 'moo_create_task',
-          description: 'Create a task under a goal (or standalone) with acceptance criteria, priority, declared files, and dependencies.',
+          description: 'Create a task under a goal (or standalone) with detailed technical description, acceptance criteria, priority, declared files, and dependencies.',
           inputSchema: {
             type: 'object',
             properties: {
-              title: { type: 'string', description: 'Task title' },
+              title: { type: 'string', description: 'Concise, actionable task title' },
+              description: { type: 'string', description: 'Comprehensive Markdown technical specification containing architecture overview, step-by-step implementation plan, design rationale, and code snippets' },
               goalId: { type: 'string', description: 'Goal ID this task belongs to' },
               parentId: { type: 'string', description: 'Parent Task ID if this is a subtask (max 1 level depth)' },
-              acceptanceCriteria: { type: 'string', description: 'Mandatory criteria defining when task is done (written before work starts)' },
-              description: { type: 'string', description: 'Detailed task description' },
+              acceptanceCriteria: { type: 'string', description: 'Mandatory testable criteria defining when task is done (written before code)' },
               priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: 'Task priority' },
               dependsOnTaskIds: { type: 'array', items: { type: 'string' }, description: 'Task IDs this task depends on' },
               declaredFiles: { type: 'array', items: { type: 'string' }, description: 'Files or directories this task will touch' },
@@ -134,7 +141,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         },
         {
           name: 'moo_create_tasks_batch',
-          description: 'Batch create multiple tasks under a goal in a single operation.',
+          description: 'Batch create multiple tasks under a goal with full technical descriptions, criteria, and dependencies in a single operation.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -144,10 +151,10 @@ export function setupMcpServer(container: ServiceContainer): Server {
                   type: 'object',
                   properties: {
                     title: { type: 'string' },
+                    description: { type: 'string', description: 'Comprehensive Markdown technical specification and implementation plan' },
                     goalId: { type: 'string' },
                     parentId: { type: 'string' },
                     acceptanceCriteria: { type: 'string' },
-                    description: { type: 'string' },
                     priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
                     dependsOnTaskIds: { type: 'array', items: { type: 'string' } },
                     declaredFiles: { type: 'array', items: { type: 'string' } },
@@ -300,7 +307,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
         // 4. Completion & Proof
         {
           name: 'moo_complete_task',
-          description: 'Close a task with mandatory proof of work: commands run, output logs, modified files, and test proofs.',
+          description: 'Close a task with mandatory proof of work: commands run, output logs, modified files, and test proofs. Optionally auto-claim next unblocked task.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -317,8 +324,38 @@ export function setupMcpServer(container: ServiceContainer): Server {
                 },
               },
               notes: { type: 'string' },
+              autoClaimNext: { type: 'boolean', description: 'If true, atomically claims next unblocked task in goal upon completion' },
+              sessionId: { type: 'string', description: 'Agent conversation/session ID for auto-claiming next task' },
+              nextDeclaredFiles: { type: 'array', items: { type: 'string' }, description: 'Declared files for next claimed task' },
+              nextLeaseSeconds: { type: 'number', description: 'Lease timeout in seconds for next claimed task' },
             },
             required: ['taskId', 'agentId', 'evidence'],
+          },
+        },
+        {
+          name: 'moo_complete_and_claim_next',
+          description: 'Atomically complete a task with proof and immediately claim the next unblocked ready task under the same goal in a single LLM tool call.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID to complete' },
+              agentId: { type: 'string', description: 'Agent ID completing and claiming' },
+              sessionId: { type: 'string', description: 'Agent session ID for the claim lease' },
+              evidence: {
+                type: 'object',
+                properties: {
+                  commandsRun: { type: 'array', items: { type: 'string' } },
+                  outputSnippet: { type: 'string' },
+                  filesModified: { type: 'array', items: { type: 'string' } },
+                  testProof: { type: 'string' },
+                  notes: { type: 'string' },
+                },
+              },
+              notes: { type: 'string', description: 'Optional completion notes' },
+              nextDeclaredFiles: { type: 'array', items: { type: 'string' }, description: 'Declared files for the next claimed task' },
+              nextLeaseSeconds: { type: 'number', description: 'Lease seconds for the next claimed task (default: 300)' },
+            },
+            required: ['taskId', 'agentId', 'sessionId', 'evidence'],
           },
         },
         {
@@ -431,6 +468,22 @@ export function setupMcpServer(container: ServiceContainer): Server {
               taskId: { type: 'string' },
             },
             required: ['taskId'],
+          },
+        },
+        {
+          name: 'moo_log_attempt_failure',
+          description: 'Log a structured attempt failure note with error snippet, failure category, hypothesis, and next plan. Increments task attempt counter and automatically escalates to human if loop threshold is exceeded.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              taskId: { type: 'string', description: 'Task ID' },
+              agentId: { type: 'string', description: 'Agent ID reporting the failure (default: agent)' },
+              errorSnippet: { type: 'string', description: 'Raw error output, stack trace, or test failure snippet' },
+              failureCategory: { type: 'string', description: 'Category of failure (e.g. test_failure, syntax_error, type_error, runtime_error)' },
+              hypothesis: { type: 'string', description: 'Working hypothesis of root cause' },
+              nextAttemptPlan: { type: 'string', description: 'Action plan for next attempt' },
+            },
+            required: ['taskId', 'errorSnippet'],
           },
         },
 
@@ -580,6 +633,17 @@ export function setupMcpServer(container: ServiceContainer): Server {
             properties: {
               agentId: { type: 'string', description: 'Optional agent ID filter' },
             },
+          },
+        },
+        {
+          name: 'moo_get_file_context',
+          description: 'Retrieve file-centric historical context: active file locks, past completed tasks, recent notes, and relevant architectural decisions for specific files before modifying code.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              filePaths: { type: 'array', items: { type: 'string' }, description: 'Array of file or directory paths to inspect' },
+            },
+            required: ['filePaths'],
           },
         },
         {
@@ -738,7 +802,20 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         // Tasks
         case 'moo_create_task': {
-          const res = container.taskLifecycleService.createTask(args as any, (args as any).authorId || 'agent', 'agent');
+          const rawFiles = (args as any).declaredFiles;
+          const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+          const rawDeps = (args as any).dependsOnTaskIds || (args as any).dependsOnTaskId;
+          const dependsOnTaskIds = rawDeps ? (Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean)) : undefined;
+
+          const res = container.taskLifecycleService.createTask(
+            {
+              ...(args as any),
+              declaredFiles,
+              dependsOnTaskIds,
+            },
+            (args as any).authorId || 'agent',
+            'agent'
+          );
           return {
             content: [
               {
@@ -758,7 +835,14 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_create_tasks_batch': {
-          const { tasks } = args as any;
+          const rawTasks = (args as any).tasks || [];
+          const tasks = (Array.isArray(rawTasks) ? rawTasks : [rawTasks]).map((t: any) => {
+            const rawFiles = t.declaredFiles;
+            const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+            const rawDeps = t.dependsOnTaskIds || t.dependsOnTaskId;
+            const dependsOnTaskIds = rawDeps ? (Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean)) : undefined;
+            return { ...t, declaredFiles, dependsOnTaskIds };
+          });
           const results = container.taskLifecycleService.createBatch(tasks, 'agent', 'agent');
           return {
             content: [
@@ -780,14 +864,17 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_update_task': {
-          const { taskId, ...updates } = args as any;
-          const updated = container.taskLifecycleService.updateTask(taskId, updates);
+          const { taskId, declaredFiles: rawFiles, ...updates } = args as any;
+          const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+          const updated = container.taskLifecycleService.updateTask(taskId, { ...updates, declaredFiles });
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task: updated }, null, 2) }] };
         }
 
         case 'moo_link_dependencies': {
-          const { taskId, dependsOnTaskIds } = args as any;
-          for (const depId of dependsOnTaskIds) {
+          const { taskId, dependsOnTaskIds, dependsOnTaskId } = args as any;
+          const rawDeps = dependsOnTaskIds || dependsOnTaskId;
+          const depsList = Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean);
+          for (const depId of depsList) {
             container.taskLifecycleService.addDependency(taskId, depId);
           }
           const task = container.taskLifecycleService.getTask(taskId);
@@ -894,8 +981,11 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         // Claims
         case 'moo_claim_task': {
-          const { taskId, agentId, sessionId, leaseDurationSeconds, declaredFiles } = args as any;
-          const res = container.claimService.claimTask(taskId, agentId, sessionId, {
+          const { taskId, agentId, sessionId, leaseDurationSeconds, declaredFiles: rawFiles } = args as any;
+          const aid = agentId || 'agent';
+          const sid = sessionId || `sess-${Date.now()}`;
+          const declaredFiles = rawFiles ? (Array.isArray(rawFiles) ? rawFiles : [rawFiles]) : undefined;
+          const res = container.claimService.claimTask(taskId, aid, sid, {
             leaseDurationSeconds,
             declaredFiles,
           });
@@ -907,7 +997,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
                   {
                     success: true,
                     ...res,
-                    hint: `Task claimed exclusively until ${res.task.leaseExpiresAt}. Modify code, then call moo_complete_task(taskId: '${taskId}', agentId: '${agentId}', evidence: { commandsRun, testProof, ... }) to complete.`,
+                    hint: `Task claimed exclusively until ${res.task.leaseExpiresAt}. Modify code, then call moo_complete_task(taskId: '${taskId}', agentId: '${aid}', evidence: { commandsRun, testProof, ... }) to complete.`,
                   },
                   null,
                   2
@@ -919,26 +1009,63 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         case 'moo_heartbeat_task': {
           const { taskId, agentId, extensionSeconds } = args as any;
-          const task = container.claimService.heartbeatTask(taskId, agentId, extensionSeconds);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
+          const task = container.taskRepo.findById(taskId);
+          const aid = agentId || task?.claimedByAgent || 'agent';
+          const updated = container.claimService.heartbeatTask(taskId, aid, extensionSeconds);
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task: updated }, null, 2) }] };
         }
 
         case 'moo_release_task': {
           const { taskId, agentId, notes } = args as any;
-          const task = container.claimService.releaseTask(taskId, agentId, notes);
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
+          const task = container.taskRepo.findById(taskId);
+          const aid = agentId || task?.claimedByAgent || 'agent';
+          const updated = container.claimService.releaseTask(taskId, aid, notes);
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, task: updated }, null, 2) }] };
         }
 
         case 'moo_handoff_task': {
           const { taskId, fromAgentId, toAgentId, handoffSummary, sessionId } = args as any;
-          const task = container.claimService.handoffTask(taskId, fromAgentId, toAgentId, handoffSummary, sessionId);
+          const task = container.claimService.handoffTask(
+            taskId,
+            fromAgentId || 'agent',
+            toAgentId || 'agent-next',
+            handoffSummary || 'Handoff task',
+            sessionId || `sess-${Date.now()}`
+          );
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
         }
 
         // Completion & Verification
         case 'moo_complete_task': {
-          const { taskId, agentId, evidence, notes } = args as any;
-          const task = container.verificationService.completeTask(taskId, agentId, evidence, notes);
+          const { taskId, agentId, evidence, notes, autoClaimNext, sessionId, nextDeclaredFiles, nextLeaseSeconds } = args as any;
+          const currentTask = container.taskRepo.findById(taskId);
+          const aid = agentId || currentTask?.claimedByAgent || 'agent';
+
+          if (autoClaimNext) {
+            const res = container.verificationService.completeAndClaimNext(
+              taskId,
+              aid,
+              sessionId || `sess-${Date.now()}`,
+              evidence || {},
+              {
+                notes,
+                nextClaimOptions: {
+                  declaredFiles: nextDeclaredFiles,
+                  leaseDurationSeconds: nextLeaseSeconds,
+                },
+              }
+            );
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ success: true, ...res }, null, 2),
+                },
+              ],
+            };
+          }
+
+          const task = container.verificationService.completeTask(taskId, aid, evidence || {}, notes);
           return {
             content: [
               {
@@ -957,22 +1084,51 @@ export function setupMcpServer(container: ServiceContainer): Server {
           };
         }
 
+        case 'moo_complete_and_claim_next': {
+          const { taskId, agentId, sessionId, evidence, notes, nextDeclaredFiles, nextLeaseSeconds } = args as any;
+          const currentTask = container.taskRepo.findById(taskId);
+          const aid = agentId || currentTask?.claimedByAgent || 'agent';
+          const res = container.verificationService.completeAndClaimNext(
+            taskId,
+            aid,
+            sessionId || `sess-${Date.now()}`,
+            evidence || {},
+            {
+              notes,
+              nextClaimOptions: {
+                declaredFiles: nextDeclaredFiles,
+                leaseDurationSeconds: nextLeaseSeconds,
+              },
+            }
+          );
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, ...res }, null, 2),
+              },
+            ],
+          };
+        }
+
         case 'moo_verify_task': {
           const { taskId, verifierId, notes } = args as any;
-          const task = container.verificationService.verifyTask(taskId, verifierId, 'human', notes);
+          const task = container.verificationService.verifyTask(taskId, verifierId || 'verifier', 'human', notes);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
         }
 
         case 'moo_reject_task': {
           const { taskId, rejecterId, reason } = args as any;
-          const task = container.verificationService.rejectTask(taskId, rejecterId, 'human', reason);
+          const task = container.verificationService.rejectTask(taskId, rejecterId || 'reviewer', 'human', reason);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
         }
 
         // Human Collab
         case 'moo_ask_human': {
           const { taskId, agentId, question, questionType } = args as any;
-          const task = container.humanCollabService.askHuman(taskId, agentId, question, questionType);
+          const currentTask = container.taskRepo.findById(taskId);
+          const aid = agentId || currentTask?.claimedByAgent || 'agent';
+          const task = container.humanCollabService.askHuman(taskId, aid, question, questionType);
           return {
             content: [
               {
@@ -999,7 +1155,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         case 'moo_answer_human': {
           const { taskId, humanId, answer } = args as any;
-          const task = container.humanCollabService.answerHuman(taskId, humanId, answer);
+          const task = container.humanCollabService.answerHuman(taskId, humanId || 'human', answer);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, task }, null, 2) }] };
         }
 
@@ -1016,7 +1172,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
             id: `note-${Math.random().toString(36).slice(2, 9)}`,
             taskId,
             authorType: 'agent',
-            authorId,
+            authorId: authorId || 'agent',
             noteType: noteType || 'general',
             content,
             createdAt: new Date().toISOString(),
@@ -1028,6 +1184,36 @@ export function setupMcpServer(container: ServiceContainer): Server {
           const { taskId } = args as any;
           const notes = container.noteRepo.listByTaskId(taskId);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, total: notes.length, notes }, null, 2) }] };
+        }
+
+        case 'moo_log_attempt_failure': {
+          const { taskId, agentId, errorSnippet, failureCategory, hypothesis, nextAttemptPlan } = args as any;
+          const result = container.taskLifecycleService.logAttemptFailure({
+            taskId,
+            agentId: agentId || 'agent',
+            errorSnippet,
+            failureCategory,
+            hypothesis,
+            nextAttemptPlan,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    ...result,
+                    hint: result.autoEscalatedToHuman
+                      ? `Task escalated to human review due to exceeding max attempts (${result.task.maxAttemptsAllowed}).`
+                      : `Attempt #${result.attemptCount} failure logged. Proceed with next attempt.`,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
         }
 
         // Lifecycle & Undo
@@ -1051,19 +1237,22 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         case 'moo_bulk_drop_tasks': {
           const { taskIds, reason, authorId } = args as any;
-          const droppedCount = container.taskLifecycleService.bulkDrop(taskIds, reason, authorId || 'agent', 'agent');
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, droppedCount, taskIds }, null, 2) }] };
+          const ids = Array.isArray(taskIds) ? taskIds : [taskIds].filter(Boolean);
+          const droppedCount = container.taskLifecycleService.bulkDrop(ids, reason, authorId || 'agent', 'agent');
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, droppedCount, taskIds: ids }, null, 2) }] };
         }
 
         case 'moo_bulk_reopen_tasks': {
           const { taskIds, reason, authorId } = args as any;
-          const reopenedCount = container.taskLifecycleService.bulkReopen(taskIds, reason || 'Bulk reopen', authorId || 'agent', 'agent');
-          return { content: [{ type: 'text', text: JSON.stringify({ success: true, reopenedCount, taskIds }, null, 2) }] };
+          const ids = Array.isArray(taskIds) ? taskIds : [taskIds].filter(Boolean);
+          const reopenedCount = container.taskLifecycleService.bulkReopen(ids, reason || 'Bulk reopen', authorId || 'agent', 'agent');
+          return { content: [{ type: 'text', text: JSON.stringify({ success: true, reopenedCount, taskIds: ids }, null, 2) }] };
         }
 
         // Decisions
         case 'moo_record_decision': {
-          const { title, context, choice, rationale, tags, authorId } = args as any;
+          const { title, context, choice, rationale, tags: rawTags, authorId } = args as any;
+          const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
           const dec = container.decisionService.recordDecision({
             title,
             context,
@@ -1119,6 +1308,20 @@ export function setupMcpServer(container: ServiceContainer): Server {
           return { content: [{ type: 'text', text: compact }] };
         }
 
+        case 'moo_get_file_context': {
+          const rawFiles = (args as any).filePaths || (args as any).files || [];
+          const filePaths = Array.isArray(rawFiles) ? rawFiles : [rawFiles].filter(Boolean);
+          const fileContext = container.sessionService.getFileContext(filePaths, container.projectPath);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, ...fileContext }, null, 2),
+              },
+            ],
+          };
+        }
+
         case 'moo_quick_start': {
           const { goalId, title, acceptanceCriteria, priority, declaredFiles, description, agentId, sessionId, leaseDurationMinutes } = args as any;
           const aid = agentId || 'agent';
@@ -1152,6 +1355,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
                 success: true,
                 task: claimed.task,
                 conflictWarnings: claimed.conflictWarnings,
+                relatedDecisions: claimed.relatedDecisions || [],
                 hint: `Task ${claimed.task.id} created and exclusively claimed. You may proceed with implementation.`,
               }, null, 2)
             }],
@@ -1160,8 +1364,9 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         case 'moo_checkpoint': {
           const { taskId, note, agentId, heartbeat } = args as any;
-          const aid = agentId || 'agent';
-          if (heartbeat !== false) {
+          const taskObj = container.taskRepo.findById(taskId);
+          const aid = agentId || taskObj?.claimedByAgent || 'agent';
+          if (heartbeat !== false && taskObj?.claimedByAgent) {
             container.claimService.heartbeatTask(taskId, aid);
           }
 
@@ -1215,6 +1420,208 @@ export function setupMcpServer(container: ServiceContainer): Server {
         isError: true,
       };
     }
+  });
+
+  // --- MCP Native Resources ---
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return {
+      resources: [
+        {
+          uri: 'moo://context/compact',
+          name: 'Compact Context',
+          description: 'Ultra-dense token-optimized summary of active goal, claimed task, decisions, and file locks',
+          mimeType: 'text/markdown',
+        },
+        {
+          uri: 'moo://goals/active',
+          name: 'Active Goals',
+          description: 'Active project goals with rich Markdown PRD/specs, task metrics, and completion state',
+          mimeType: 'text/markdown',
+        },
+        {
+          uri: 'moo://tasks/ready',
+          name: 'Ready Queue',
+          description: 'All unblocked, actionable tasks currently ready for immediate claim and implementation',
+          mimeType: 'application/json',
+        },
+        {
+          uri: 'moo://decisions/settled',
+          name: 'Settled Architectural Decisions (ADR)',
+          description: 'Project architectural decision records (accepted) preventing re-litigation of designs',
+          mimeType: 'text/markdown',
+        },
+      ],
+    };
+  });
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const { uri } = request.params;
+
+    if (uri === 'moo://context/compact') {
+      const text = container.sessionService.getCompactContext(container.projectPath);
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'text/markdown',
+            text,
+          },
+        ],
+      };
+    }
+
+    if (uri === 'moo://goals/active') {
+      const goals = container.goalService.listGoals(container.projectPath, 'active');
+      const lines: string[] = ['# 🎯 Active Project Goals\n'];
+      for (const g of goals) {
+        const status = container.goalService.getGoalStatus(g.id);
+        lines.push(`## [${g.id}] ${g.title}`);
+        lines.push(`- **Status**: ${g.status} | **Progress**: ${status.completedTasks}/${status.totalTasks} completed (${status.openTasks} open, max cap: ${g.maxOpenTasksCap})`);
+        if (g.verbatimPrompt) lines.push(`- **Original Prompt**: *"${g.verbatimPrompt}"*`);
+        if (g.description) lines.push(`\n### Specification\n${g.description}\n`);
+        lines.push('---');
+      }
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'text/markdown',
+            text: lines.join('\n'),
+          },
+        ],
+      };
+    }
+
+    if (uri === 'moo://tasks/ready') {
+      const allTasks = container.taskRepo.list({ isArchived: false, isDeferred: false });
+      const todoTasks = allTasks.filter((t) => t.status === 'todo');
+      const allDeps = container.taskRepo.getAllDependencies();
+      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
+      const unblocked = todoTasks.filter((t) => DependencyGraph.isTaskUnblocked(t.id, allDeps, taskMap));
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'application/json',
+            text: JSON.stringify({ readyTasks: unblocked, total: unblocked.length }, null, 2),
+          },
+        ],
+      };
+    }
+
+    if (uri === 'moo://decisions/settled') {
+      const decisions = container.decisionRepo.list(container.projectPath, 'accepted');
+      const lines: string[] = ['# 🏛️ Settled Architectural Decision Records (ADR)\n'];
+      for (const d of decisions) {
+        lines.push(`## [${d.id}] ${d.title}`);
+        lines.push(`- **Choice**: \`${d.choice}\``);
+        lines.push(`- **Rationale**: ${d.rationale}`);
+        if (d.tags && d.tags.length > 0) lines.push(`- **Tags**: ${d.tags.map((t) => `\`${t}\``).join(', ')}`);
+        if (d.context) lines.push(`- **Context**: ${d.context}`);
+        lines.push('---');
+      }
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: 'text/markdown',
+            text: lines.join('\n'),
+          },
+        ],
+      };
+    }
+
+    throw new Error(`Unknown resource URI: ${uri}`);
+  });
+
+  // --- MCP Native Prompts ---
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return {
+      prompts: [
+        {
+          name: 'moo_plan_feature',
+          description: 'Interactive prompt guiding an agent to break down a user feature request into atomic tasks anchored to a goal.',
+          arguments: [
+            {
+              name: 'featureRequest',
+              description: 'The verbatim feature request from the human user',
+              required: true,
+            },
+          ],
+        },
+        {
+          name: 'moo_execute_next',
+          description: 'Workflow prompt guiding an agent to claim the top ready task, implement it, and verify with tests.',
+          arguments: [
+            {
+              name: 'agentId',
+              description: 'Agent ID claiming and executing the task',
+              required: false,
+            },
+          ],
+        },
+        {
+          name: 'moo-plan-feature',
+          description: 'Alias for moo_plan_feature',
+          arguments: [
+            {
+              name: 'featureRequest',
+              description: 'The verbatim feature request from the human user',
+              required: true,
+            },
+          ],
+        },
+        {
+          name: 'moo-execute-next',
+          description: 'Alias for moo_execute_next',
+          arguments: [
+            {
+              name: 'agentId',
+              description: 'Agent ID claiming and executing the task',
+              required: false,
+            },
+          ],
+        },
+      ],
+    };
+  });
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    const { name, arguments: promptArgs = {} } = request.params;
+
+    if (name === 'moo_plan_feature' || name === 'moo-plan-feature') {
+      const featureRequest = (promptArgs as any).featureRequest || '';
+      return {
+        description: 'Break down a user request into a Goal and atomic tasks with acceptance criteria',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `You are pair programming with the user. Please plan the following feature using Moo Tasks:\n\n"${featureRequest}"\n\nFollow this workflow:\n1. Call moo_create_goal(title, verbatimPrompt, description) with rich PRD markdown.\n2. Call moo_create_tasks_batch with atomic tasks, complete technical specifications, acceptance criteria, and dependencies.\n3. Call moo_get_compact_context to review the plan before implementation.`,
+            },
+          },
+        ],
+      };
+    }
+
+    if (name === 'moo_execute_next' || name === 'moo-execute-next') {
+      const agentId = (promptArgs as any).agentId || 'agent';
+      return {
+        description: 'Execute the top unblocked task from Moo Tasks ready queue',
+        messages: [
+          {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `Please execute the next ready task in Moo Tasks for agent '${agentId}':\n\n1. Call moo_get_next_task() to inspect the top priority unblocked task.\n2. Call moo_claim_task(taskId, agentId, sessionId, declaredFiles) to acquire a lease.\n3. Implement the feature and write tests.\n4. Call moo_complete_task(taskId, agentId, evidence: { commandsRun, testProof, filesModified }) or moo_complete_and_claim_next to finish.`,
+            },
+          },
+        ],
+      };
+    }
+
+    throw new Error(`Unknown prompt: ${name}`);
   });
 
   return server;

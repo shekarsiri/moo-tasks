@@ -10,8 +10,12 @@ const state = {
   filterGoal: '',
   filterPriority: '',
   filterAgent: '',
+  filterSort: 'default', // 'default' | 'priority-desc' | 'updated-desc' | 'thrash-desc'
   filterSearch: '',
   selectedTaskId: null,
+  selectedTaskIds: new Set(),
+  collapsedColumns: new Set(JSON.parse(localStorage.getItem('moo_collapsed_columns') || '[]')),
+  keyboardFocusedIndex: -1,
   paletteSelectedIndex: 0,
 };
 
@@ -147,19 +151,41 @@ function htmlToMarkdown(html) {
   return div.innerText || '';
 }
 
+// Inline Save Status Helper
+function setInlineSaveStatus(field, status) {
+  const indicator = document.getElementById(`inlineSaveStatus-${field}`);
+  if (!indicator) return;
+  if (status === 'saving') {
+    indicator.className = 'inline-save-indicator saving';
+    indicator.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping inline-block"></span> Saving...`;
+  } else if (status === 'saved') {
+    indicator.className = 'inline-save-indicator saved';
+    indicator.textContent = 'Saved ✓';
+    setTimeout(() => {
+      if (indicator.textContent === 'Saved ✓') {
+        indicator.textContent = '';
+        indicator.className = 'inline-save-indicator';
+      }
+    }, 2000);
+  }
+}
+
 // Direct In-Place Visual Editing Handlers
 window.handleDirectDocBlur = async (element, targetId, field, isGoal = false) => {
   const markdown = htmlToMarkdown(element.innerHTML);
+  setInlineSaveStatus(field, 'saving');
   if (isGoal) {
     await fetch(`/api/goals/${targetId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [field]: markdown }),
     });
+    setInlineSaveStatus(field, 'saved');
     showToast('Saved specification', 'success');
     fetchGoals();
   } else {
     await handleSaveInlineField(targetId, field, markdown);
+    setInlineSaveStatus(field, 'saved');
   }
 };
 
@@ -184,8 +210,15 @@ const filterToolbar = document.getElementById('filterToolbar');
 const filterGoal = document.getElementById('filterGoal');
 const filterPriority = document.getElementById('filterPriority');
 const filterAgent = document.getElementById('filterAgent');
+const filterSort = document.getElementById('filterSort');
 const filterSearch = document.getElementById('filterSearch');
 const displayCountLabel = document.getElementById('displayCountLabel');
+
+// Batch Actions & Shortcuts References
+const batchActionBar = document.getElementById('batchActionBar');
+const batchSelectedCount = document.getElementById('batchSelectedCount');
+const modalKeyboardShortcuts = document.getElementById('modalKeyboardShortcuts');
+const btnOpenShortcutsHelp = document.getElementById('btnOpenShortcutsHelp');
 
 // Counters
 const navCounterTotal = document.getElementById('navCounterTotal');
@@ -224,6 +257,20 @@ function formatRelativeTime(dateStr) {
   if (diffMin < 60) return `${diffMin}m ago`;
   if (diffHrs < 24) return `${diffHrs}h ago`;
   return `${diffDays}d ago`;
+}
+
+function formatLeaseRemaining(leaseExpiresAt) {
+  if (!leaseExpiresAt) return '';
+  const diffMs = new Date(leaseExpiresAt).getTime() - Date.now();
+  if (diffMs <= 0) return 'Expired';
+  const totalSec = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSec / 3600);
+  const min = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  if (hours > 0) {
+    return `${hours}h ${min < 10 ? '0' : ''}${min}m ${sec < 10 ? '0' : ''}${sec}s`;
+  }
+  return `${min}m ${sec < 10 ? '0' : ''}${sec}s`;
 }
 
 // Toast Notification System
@@ -339,17 +386,38 @@ window.addEventListener('online', () => {
   initSSE();
 });
 
-// Active Multi-Device Background Sync (every 2.5s when visible)
+// Active Multi-Device Background Sync (Smart adaptive polling fallback)
+let lastFallbackPoll = Date.now();
 setInterval(() => {
   if (document.visibilityState === 'visible') {
-    fetchTasks();
-    if (!sseInstance || sseReconnectAttempts > 0) {
-      refreshAll();
-    } else if (Date.now() - lastPingReceivedAt > 20000) {
-      initSSE();
+    const isSSEHealthy = sseInstance && sseReconnectAttempts === 0 && Date.now() - lastPingReceivedAt <= 25000;
+    const pollThreshold = isSSEHealthy ? 15000 : 3000;
+    if (Date.now() - lastFallbackPoll >= pollThreshold) {
+      lastFallbackPoll = Date.now();
+      if (!isSSEHealthy) {
+        refreshAll();
+        initSSE();
+      } else {
+        fetchTasks();
+      }
     }
   }
-}, 2500);
+}, 1000);
+
+// Live Lease & Countdown Tick Timer (ticks every second for active timers)
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    const activeLeaseBadges = document.querySelectorAll('[data-lease-expires]');
+    activeLeaseBadges.forEach((el) => {
+      const expiresAt = el.getAttribute('data-lease-expires');
+      if (expiresAt) {
+        const text = formatLeaseRemaining(expiresAt);
+        const textSpan = el.querySelector('.lease-text') || el;
+        if (textSpan) textSpan.textContent = text;
+      }
+    });
+  }
+}, 1000);
 
 // API Fetching
 async function fetchProjectInfo() {
@@ -437,10 +505,14 @@ async function fetchActivity() {
 async function refreshAll() {
   await Promise.all([fetchProjectInfo(), fetchGoals(), fetchTasks(), fetchDecisions(), fetchActivity()]);
   if (state.selectedTaskId) {
+    const activeEl = document.activeElement;
     const isTyping =
-      document.activeElement &&
-      (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') &&
-      document.getElementById('drawerInspector')?.contains(document.activeElement);
+      activeEl &&
+      (activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.isContentEditable ||
+        activeEl.classList?.contains('rich-editable-doc')) &&
+      document.getElementById('drawerInspector')?.contains(activeEl);
 
     if (!isTyping) {
       openInspector(state.selectedTaskId, false, false);
@@ -534,7 +606,7 @@ function setViewMode(mode) {
   renderTasks();
 }
 
-// Filters
+// Filters & Sorting
 function getFilteredTasks() {
   let list = state.tasks.filter((t) => !t.isArchived);
 
@@ -560,6 +632,16 @@ function getFilteredTasks() {
     );
   }
 
+  // Custom Sorting Options
+  const priorityRank = { critical: 4, high: 3, medium: 2, low: 1 };
+  if (state.filterSort === 'priority-desc') {
+    list.sort((a, b) => (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0));
+  } else if (state.filterSort === 'updated-desc') {
+    list.sort((a, b) => new Date(b.lastStateChangeAt || 0).getTime() - new Date(a.lastStateChangeAt || 0).getTime());
+  } else if (state.filterSort === 'thrash-desc') {
+    list.sort((a, b) => ((b.attemptCount || 0) + (b.reopenCount || 0) * 2) - ((a.attemptCount || 0) + (a.reopenCount || 0) * 2));
+  }
+
   return list;
 }
 
@@ -581,12 +663,87 @@ if (filterAgent) {
     renderTasks();
   };
 }
+if (filterSort) {
+  filterSort.onchange = (e) => {
+    state.filterSort = e.target.value;
+    renderTasks();
+  };
+}
 if (filterSearch) {
   filterSearch.oninput = (e) => {
     state.filterSearch = e.target.value;
     renderTasks();
   };
 }
+
+// Batch Actions Logic
+window.toggleTaskSelection = (taskId, isSelected) => {
+  if (isSelected) {
+    state.selectedTaskIds.add(taskId);
+  } else {
+    state.selectedTaskIds.delete(taskId);
+  }
+  updateBatchActionBar();
+};
+
+window.clearTaskSelection = () => {
+  state.selectedTaskIds.clear();
+  updateBatchActionBar();
+  renderTasks();
+};
+
+function updateBatchActionBar() {
+  if (!batchActionBar || !batchSelectedCount) return;
+  const count = state.selectedTaskIds.size;
+  batchSelectedCount.textContent = count;
+  if (count > 0) {
+    batchActionBar.classList.remove('hidden');
+  } else {
+    batchActionBar.classList.add('hidden');
+  }
+}
+
+window.handleBatchStatusChange = async (newStatus) => {
+  if (!newStatus || state.selectedTaskIds.size === 0) return;
+  const taskIds = Array.from(state.selectedTaskIds);
+  showToast(`Updating ${taskIds.length} issues to ${newStatus}...`, 'info');
+  for (const id of taskIds) {
+    await fetch(`/api/tasks/${id}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus, authorId: 'human-batch' }),
+    });
+  }
+  showToast(`Updated ${taskIds.length} issues to ${newStatus}`, 'success');
+  clearTaskSelection();
+  refreshAll();
+};
+
+window.handleBatchPriorityChange = async (newPriority) => {
+  if (!newPriority || state.selectedTaskIds.size === 0) return;
+  const taskIds = Array.from(state.selectedTaskIds);
+  showToast(`Setting priority for ${taskIds.length} issues...`, 'info');
+  for (const id of taskIds) {
+    await fetch(`/api/tasks/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ priority: newPriority }),
+    });
+  }
+  showToast(`Updated priority for ${taskIds.length} issues`, 'success');
+  clearTaskSelection();
+  refreshAll();
+};
+
+window.toggleBoardColumn = (colStatus) => {
+  if (state.collapsedColumns.has(colStatus)) {
+    state.collapsedColumns.delete(colStatus);
+  } else {
+    state.collapsedColumns.add(colStatus);
+  }
+  localStorage.setItem('moo_collapsed_columns', JSON.stringify(Array.from(state.collapsedColumns)));
+  renderTasks();
+};
 
 function renderGoalFilters() {
   if (!filterGoal) return;
@@ -704,6 +861,8 @@ function renderListView(tasks) {
     { status: 'dropped', label: 'Dropped' },
   ];
 
+  let taskGlobalIndex = 0;
+
   groups.forEach((grp) => {
     const groupTasks = tasks.filter((t) => t.status === grp.status);
     if (groupTasks.length === 0 && (grp.status === 'dropped' || grp.status === 'blocked-on-dependency')) {
@@ -735,14 +894,21 @@ function renderListView(tasks) {
       rowsContainer.appendChild(emptyRow);
     } else {
       groupTasks.forEach((task) => {
+        const isCurrentFocused = state.keyboardFocusedIndex === taskGlobalIndex;
+        taskGlobalIndex++;
+
         const row = document.createElement('div');
-        row.className = 'list-row';
+        row.className = `list-row ${isCurrentFocused ? 'keyboard-focused' : ''}`;
         row.setAttribute('data-id', task.id);
 
         const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
         const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
+        const hasActiveLease = task.status === 'doing' && task.leaseExpiresAt && new Date(task.leaseExpiresAt) > new Date();
 
         row.innerHTML = `
+          <div class="list-col-check" onclick="event.stopPropagation()">
+            <input type="checkbox" class="list-row-checkbox" ${state.selectedTaskIds.has(task.id) ? 'checked' : ''} onchange="toggleTaskSelection('${task.id}', this.checked)">
+          </div>
           <div class="list-col-id flex items-center gap-1">
             <span>${task.id}</span>
             ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="High Thrash/Attempts"></i>` : ''}
@@ -757,6 +923,12 @@ function renderListView(tasks) {
             ${task.claimedByAgent ? `<span class="flex items-center gap-1"><i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 font-sans">Unassigned</span>`}
           </div>
           <div class="list-col-status">
+            ${hasActiveLease ? `
+              <span class="lease-countdown-badge mr-2" data-lease-expires="${task.leaseExpiresAt}" title="Active agent lease">
+                <span class="lease-pulse-dot"></span>
+                <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
+              </span>
+            ` : ''}
             <span class="status-pill">
               <span class="status-dot ${cfg.class}"></span>
               <span class="text-slate-300">${cfg.label}</span>
@@ -773,7 +945,7 @@ function renderListView(tasks) {
   });
 }
 
-// Mode 2: Board View with Drag & Drop
+// Mode 2: Board View with Drag & Drop & Collapsible Columns
 function renderBoardView(tasks) {
   if (!tasksBoardView) return;
   tasksBoardView.innerHTML = '';
@@ -790,10 +962,15 @@ function renderBoardView(tasks) {
   columns.forEach((col) => {
     const colTasks = tasks.filter((t) => t.status === col.status);
     const cfg = statusConfig[col.status];
+    const isCollapsed = state.collapsedColumns.has(col.status);
 
     const colEl = document.createElement('div');
-    colEl.className = 'board-column';
+    colEl.className = `board-column ${isCollapsed ? 'collapsed' : ''}`;
     colEl.setAttribute('data-col-status', col.status);
+
+    if (isCollapsed) {
+      colEl.onclick = () => toggleBoardColumn(col.status);
+    }
 
     colEl.ondragover = (e) => {
       e.preventDefault();
@@ -817,12 +994,17 @@ function renderBoardView(tasks) {
     };
 
     colEl.innerHTML = `
-      <div class="board-column-header">
+      <div class="board-column-header" title="${isCollapsed ? 'Click to expand' : ''}">
         <div class="flex items-center gap-2">
           <span class="status-dot ${cfg.class}"></span>
           <span>${col.label}</span>
         </div>
-        <span class="font-mono text-slate-500 text-[10px]">${colTasks.length}</span>
+        <div class="flex items-center gap-1.5">
+          <span class="font-mono text-slate-500 text-[10px]">${colTasks.length}</span>
+          <button class="board-column-collapse-btn" onclick="event.stopPropagation(); toggleBoardColumn('${col.status}')" title="${isCollapsed ? 'Expand column' : 'Collapse column'}">
+            <i data-lucide="${isCollapsed ? 'chevron-right' : 'chevron-left'}" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
       </div>
       <div class="board-cards"></div>
     `;
@@ -846,6 +1028,7 @@ function renderBoardView(tasks) {
 
       const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
       const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
+      const hasActiveLease = task.status === 'doing' && task.leaseExpiresAt && new Date(task.leaseExpiresAt) > new Date();
 
       card.innerHTML = `
         <div class="board-card-header">
@@ -856,6 +1039,14 @@ function renderBoardView(tasks) {
           ${getPriorityIcon(task.priority)}
         </div>
         <div class="board-card-title">${task.title}</div>
+        ${hasActiveLease ? `
+          <div class="mb-2">
+            <span class="lease-countdown-badge" data-lease-expires="${task.leaseExpiresAt}" title="Active agent lease">
+              <span class="lease-pulse-dot"></span>
+              <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
+            </span>
+          </div>
+        ` : ''}
         <div class="board-card-footer">
           ${task.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10.5px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${task.claimedByAgent}</span>` : `<span class="text-slate-600 text-[10px]">Unassigned</span>`}
           <span class="text-slate-500 text-[10px] font-mono">${formatRelativeTime(task.lastStateChangeAt)}</span>
@@ -943,10 +1134,18 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
           ${task.claimedByAgent ? `<i data-lucide="bot" class="w-3.5 h-3.5"></i> ${task.claimedByAgent} ${task.attemptCount > 1 ? `(Attempt #${task.attemptCount})` : ''}` : '<span class="text-slate-500 font-sans">Unclaimed</span>'}
         </div>
 
-        ${task.leaseExpiresAt ? `
-          <span class="property-label">Lease Timeout</span>
-          <div class="property-value font-mono text-xs text-slate-400">
-            ${new Date(task.leaseExpiresAt).toLocaleTimeString()}
+        ${task.status === 'doing' && task.leaseExpiresAt ? `
+          <span class="property-label">Lease Status</span>
+          <div class="property-value font-mono text-xs flex items-center gap-2">
+            ${new Date(task.leaseExpiresAt) > new Date() ? `
+              <span class="lease-countdown-badge" data-lease-expires="${task.leaseExpiresAt}" title="Real-time agent lease remaining">
+                <span class="lease-pulse-dot"></span>
+                <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
+              </span>
+            ` : `
+              <span class="text-rose-400 font-mono text-xs px-2 py-0.5 rounded bg-rose-950/30 border border-rose-800/40">Lease Expired</span>
+            `}
+            <span class="text-slate-500 text-[10px]">(Expires: ${new Date(task.leaseExpiresAt).toLocaleTimeString()})</span>
           </div>
         ` : ''}
 
@@ -963,6 +1162,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         <div class="flex items-center justify-between pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
             <i data-lucide="align-left" class="w-3.5 h-3.5 text-indigo-400"></i> Description & Context
+            <span id="inlineSaveStatus-description" class="inline-save-indicator"></span>
           </div>
           <span class="text-[10px] text-slate-500 font-mono">Type directly to edit • ⌘Enter to save</span>
         </div>
@@ -982,6 +1182,7 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         <div class="flex items-center justify-between pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
             <i data-lucide="check-circle" class="w-3.5 h-3.5 text-indigo-400"></i> Acceptance Criteria & Requirements
+            <span id="inlineSaveStatus-acceptanceCriteria" class="inline-save-indicator"></span>
           </div>
           <span class="text-[10px] text-slate-500 font-mono">Type directly to edit • ⌘Enter to save</span>
         </div>
@@ -1027,11 +1228,11 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         </div>
       `}
 
-      <!-- Dependencies & Blockers -->
+      <!-- Visual Dependency Flow (DAG) & Blockers -->
       <div class="bg-surface border border-subtle rounded-lg p-3 space-y-2.5">
         <div class="flex items-center justify-between">
           <div class="text-[10px] font-bold tracking-wider uppercase text-amber-400 font-mono flex items-center gap-1">
-            <i data-lucide="alert-circle" class="w-3.5 h-3.5 text-amber-400"></i> BLOCKERS (Depends on)
+            <i data-lucide="git-branch" class="w-3.5 h-3.5 text-amber-400"></i> DEPENDENCY GRAPH & BLOCKERS
           </div>
           <div class="flex items-center gap-1">
             <select id="selectAddBlocker" class="filter-select text-[11px]">
@@ -1041,6 +1242,44 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
             <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="handleAddBlocker('${task.id}')">Link</button>
           </div>
         </div>
+
+        ${(dependencies.length > 0 || dependents.length > 0) ? `
+          <div class="dag-flow-container mb-2">
+            <div class="dag-column">
+              <div class="text-[9px] font-mono text-amber-400 font-bold uppercase">Blockers (${dependencies.length})</div>
+              ${dependencies.length === 0 ? '<div class="text-[10px] text-slate-500 italic">None</div>' : dependencies.map((d) => {
+                const bTask = state.tasks.find((t) => t.id === d);
+                return `
+                  <div class="dag-node" onclick="openInspector('${d}')">
+                    <span class="text-amber-300 font-bold">${d}</span>
+                    <span class="text-slate-300 truncate max-w-[130px]">${bTask ? bTask.title : ''}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            <div class="dag-connector"><i data-lucide="arrow-right" class="w-4 h-4 text-slate-500"></i></div>
+            <div class="dag-column">
+              <div class="text-[9px] font-mono text-indigo-400 font-bold uppercase">This Task</div>
+              <div class="dag-node active-node">
+                <span class="text-indigo-300 font-bold">${task.id}</span>
+                <span class="text-slate-100 font-medium truncate max-w-[140px]">${task.title}</span>
+              </div>
+            </div>
+            <div class="dag-connector"><i data-lucide="arrow-right" class="w-4 h-4 text-slate-500"></i></div>
+            <div class="dag-column">
+              <div class="text-[9px] font-mono text-blue-400 font-bold uppercase">Dependents (${dependents.length})</div>
+              ${dependents.length === 0 ? '<div class="text-[10px] text-slate-500 italic">None</div>' : dependents.map((d) => {
+                const depTask = state.tasks.find((t) => t.id === d);
+                return `
+                  <div class="dag-node" onclick="openInspector('${d}')">
+                    <span class="text-blue-300 font-bold">${d}</span>
+                    <span class="text-slate-300 truncate max-w-[130px]">${depTask ? depTask.title : ''}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        ` : ''}
         
         <div class="flex flex-wrap gap-1.5">
           ${dependencies.length === 0 ? `<div class="text-xs text-slate-500 italic">No direct blockers.</div>` : ''}
@@ -1413,7 +1652,17 @@ function renderGoalsView() {
   container.innerHTML = '';
 
   if (state.goals.length === 0) {
-    container.innerHTML = `<div class="col-span-2 text-center py-16 text-slate-600">No goals created yet. Click "+ Create Goal" to record human objectives.</div>`;
+    container.innerHTML = `
+      <div class="col-span-1 md:col-span-2 empty-hero-card">
+        <div class="empty-hero-icon"><i data-lucide="target" class="w-6 h-6"></i></div>
+        <h3 class="text-sm font-semibold text-slate-100 mb-1">No Goals Defined Yet</h3>
+        <p class="text-xs text-slate-400 max-w-sm mb-4">Goals anchor overarching user requirements, specifications, and prevent multi-agent scope drift.</p>
+        <button class="btn-primary text-xs" onclick="modalCreateGoal?.classList.remove('hidden'); refreshLucideIcons();">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Create First Goal
+        </button>
+      </div>
+    `;
+    refreshLucideIcons();
     return;
   }
 
@@ -1791,7 +2040,16 @@ function renderHumanInbox() {
   container.innerHTML = '';
 
   if (waitingTasks.length === 0) {
-    container.innerHTML = `<div class="text-center py-16 text-slate-600 text-sm">🎉 No agents are currently blocked on human input.</div>`;
+    container.innerHTML = `
+      <div class="empty-hero-card">
+        <div class="empty-hero-icon" style="background: rgba(168, 85, 247, 0.12); border-color: rgba(168, 85, 247, 0.25); color: #c084fc;">
+          <i data-lucide="check-circle-2" class="w-6 h-6"></i>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-100 mb-1">Human Attention Queue is Clear</h3>
+        <p class="text-xs text-slate-400 max-w-sm mb-2">No coding agents are currently blocked or waiting on questions/approvals. When an agent needs input, real-time alerts will trigger here.</p>
+      </div>
+    `;
+    refreshLucideIcons();
     return;
   }
 
@@ -1850,7 +2108,16 @@ function renderReviewFeed() {
   container.innerHTML = '';
 
   if (reviewTasks.length === 0) {
-    container.innerHTML = `<div class="text-center py-16 text-slate-600 text-sm">No tasks currently awaiting review or verification.</div>`;
+    container.innerHTML = `
+      <div class="empty-hero-card">
+        <div class="empty-hero-icon" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.25); color: #34d399;">
+          <i data-lucide="shield-check" class="w-6 h-6"></i>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-100 mb-1">All Work Verified</h3>
+        <p class="text-xs text-slate-400 max-w-sm mb-2">No agent-completed issues are waiting for proof review or verification.</p>
+      </div>
+    `;
+    refreshLucideIcons();
     return;
   }
 
@@ -1907,7 +2174,17 @@ function renderDecisionsView() {
   container.innerHTML = '';
 
   if (state.decisions.length === 0) {
-    container.innerHTML = `<div class="col-span-2 text-center py-16 text-slate-600">No architectural decisions recorded yet.</div>`;
+    container.innerHTML = `
+      <div class="col-span-1 md:col-span-2 empty-hero-card">
+        <div class="empty-hero-icon"><i data-lucide="landmark" class="w-6 h-6"></i></div>
+        <h3 class="text-sm font-semibold text-slate-100 mb-1">No Architectural Decisions (ADR) Yet</h3>
+        <p class="text-xs text-slate-400 max-w-sm mb-4">Record system architecture trade-offs and tech choices so autonomous agents never re-debate settled decisions.</p>
+        <button class="btn-primary text-xs" onclick="modalCreateDecision?.classList.remove('hidden'); refreshLucideIcons();">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Record First Decision
+        </button>
+      </div>
+    `;
+    refreshLucideIcons();
     return;
   }
 
@@ -1986,7 +2263,16 @@ function renderActivityFeed() {
   container.innerHTML = '';
 
   if (state.activity.length === 0) {
-    container.innerHTML = `<div class="text-center py-16 text-slate-600">No recent activity.</div>`;
+    container.innerHTML = `
+      <div class="empty-hero-card">
+        <div class="empty-hero-icon" style="background: rgba(59, 130, 246, 0.12); border-color: rgba(59, 130, 246, 0.25); color: #60a5fa;">
+          <i data-lucide="activity" class="w-6 h-6"></i>
+        </div>
+        <h3 class="text-sm font-semibold text-slate-100 mb-1">No Activity Logged</h3>
+        <p class="text-xs text-slate-400 max-w-sm mb-2">Audit notes, checkpoints, and attempt logs from running coding agents will appear in this real-time stream.</p>
+      </div>
+    `;
+    refreshLucideIcons();
     return;
   }
 
@@ -2135,7 +2421,10 @@ function updatePaletteHighlight() {
 
 // Global Keyboard Shortcuts
 window.addEventListener('keydown', (e) => {
-  const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+  const isInput =
+    ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) ||
+    document.activeElement?.isContentEditable ||
+    document.activeElement?.classList?.contains('rich-editable-doc');
 
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
     e.preventDefault();
@@ -2174,6 +2463,54 @@ window.addEventListener('keydown', (e) => {
   }
 
   if (!isInput) {
+    // Shortcuts Help
+    if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+      e.preventDefault();
+      modalKeyboardShortcuts?.classList.toggle('hidden');
+      refreshLucideIcons();
+      return;
+    }
+
+    // List Navigation (J / K / ArrowDown / ArrowUp)
+    if (state.currentView === 'tasks' && state.viewMode === 'list') {
+      const rows = document.querySelectorAll('.list-row');
+      if (rows.length > 0) {
+        if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          state.keyboardFocusedIndex = (state.keyboardFocusedIndex + 1) % rows.length;
+          rows.forEach((r, idx) => r.classList.toggle('keyboard-focused', idx === state.keyboardFocusedIndex));
+          rows[state.keyboardFocusedIndex]?.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          state.keyboardFocusedIndex = (state.keyboardFocusedIndex - 1 + rows.length) % rows.length;
+          rows.forEach((r, idx) => r.classList.toggle('keyboard-focused', idx === state.keyboardFocusedIndex));
+          rows[state.keyboardFocusedIndex]?.scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && state.keyboardFocusedIndex >= 0) {
+          e.preventDefault();
+          const targetRow = rows[state.keyboardFocusedIndex];
+          const taskId = targetRow?.getAttribute('data-id');
+          if (taskId) openInspector(taskId);
+          return;
+        }
+        if ((e.key === 'x' || e.key === 'X') && state.keyboardFocusedIndex >= 0) {
+          e.preventDefault();
+          const targetRow = rows[state.keyboardFocusedIndex];
+          const taskId = targetRow?.getAttribute('data-id');
+          if (taskId) {
+            const isSelected = state.selectedTaskIds.has(taskId);
+            toggleTaskSelection(taskId, !isSelected);
+            const checkbox = targetRow.querySelector('.list-row-checkbox');
+            if (checkbox) checkbox.checked = !isSelected;
+          }
+          return;
+        }
+      }
+    }
+
     if (e.key === 'c' || e.key === 'C') {
       e.preventDefault();
       if (modalCreateTask) modalCreateTask.classList.remove('hidden');
@@ -2187,6 +2524,13 @@ window.addEventListener('keydown', (e) => {
     if (e.key === '6') switchView('activity');
   }
 });
+
+if (btnOpenShortcutsHelp) {
+  btnOpenShortcutsHelp.onclick = () => {
+    modalKeyboardShortcuts?.classList.remove('hidden');
+    refreshLucideIcons();
+  };
+}
 
 // Modal Triggers
 const btnHeaderNewTask = document.getElementById('btnHeaderNewTask');
@@ -2212,6 +2556,7 @@ if (formCreateTask) {
     const title = document.getElementById('inputTaskTitle').value;
     const goalId = document.getElementById('inputTaskGoal').value || undefined;
     const priority = document.getElementById('inputTaskPriority').value;
+    const description = document.getElementById('inputTaskDescription')?.value || undefined;
     const acceptanceCriteria = document.getElementById('inputTaskAC').value;
     const filesInput = document.getElementById('inputTaskFiles').value;
     const isDeferred = document.getElementById('inputTaskDeferred').checked;
@@ -2221,7 +2566,7 @@ if (formCreateTask) {
     const res = await fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, goalId, priority, acceptanceCriteria, declaredFiles, isDeferred }),
+      body: JSON.stringify({ title, goalId, priority, description, acceptanceCriteria, declaredFiles, isDeferred }),
     });
 
     const data = await res.json();
@@ -2243,12 +2588,13 @@ if (formCreateGoal) {
     e.preventDefault();
     const title = document.getElementById('inputGoalTitle').value;
     const verbatimPrompt = document.getElementById('inputGoalVerbatim').value;
+    const description = document.getElementById('inputGoalDescription')?.value || undefined;
     const maxOpenTasksCap = parseInt(document.getElementById('inputGoalCap').value) || 10;
 
     await fetch('/api/goals', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, verbatimPrompt, maxOpenTasksCap }),
+      body: JSON.stringify({ title, verbatimPrompt, description, maxOpenTasksCap }),
     });
 
     showToast('Goal created successfully', 'success');

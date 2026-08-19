@@ -160,9 +160,14 @@
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" id="liveSyncDot"></span>
           <span id="liveSyncLabel">Live Sync</span>
         </div>
-        <div class="flex items-center gap-1 hidden md:flex">
-          <kbd class="kbd-key">C</kbd>
-          <span class="text-[10px] text-slate-500">New</span>
+        <div class="flex items-center gap-2 hidden md:flex">
+          <button id="btnOpenShortcutsHelp" class="text-slate-500 hover:text-slate-300 flex items-center gap-1" title="Keyboard Shortcuts (?)">
+            <kbd class="kbd-key">?</kbd>
+          </button>
+          <div class="flex items-center gap-1">
+            <kbd class="kbd-key">C</kbd>
+            <span class="text-[10px] text-slate-500">New</span>
+          </div>
         </div>
       </div>
     </aside>
@@ -220,17 +225,12 @@
       <!-- Filter Toolbar -->
       <div class="filter-toolbar h-10 min-h-[40px] border-b border-borderSubtle bg-app flex items-center justify-between px-3 md:px-4 text-xs overflow-x-auto" id="filterToolbar">
         <div class="filter-group flex items-center gap-2 shrink-0">
-          <select id="filterGoal" class="filter-select">
+          <select id="filterGoal" class="filter-select" aria-label="Filter by Goal">
             <option value="">All Goals</option>
             <option value="__orphans__">Scope Drift (Orphans)</option>
           </select>
 
-          <select id="filterPriority" class="filter-select">
-            <option value="">All Goals</option>
-            <option value="__orphans__">Scope Drift (Orphans)</option>
-          </select>
-
-          <select id="filterPriority" class="filter-select">
+          <select id="filterPriority" class="filter-select" aria-label="Filter by Priority">
             <option value="">All Priorities</option>
             <option value="critical">Critical</option>
             <option value="high">High</option>
@@ -238,11 +238,18 @@
             <option value="low">Low</option>
           </select>
 
-          <select id="filterAgent" class="filter-select">
+          <select id="filterAgent" class="filter-select" aria-label="Filter by Assignee">
             <option value="">All Assignees</option>
           </select>
 
-          <input type="text" id="filterSearch" placeholder="Filter issues..." class="filter-select w-44">
+          <select id="filterSort" class="filter-select" aria-label="Sort issues">
+            <option value="default">Sort: Default</option>
+            <option value="priority-desc">Sort: Priority (High→Low)</option>
+            <option value="updated-desc">Sort: Recently Updated</option>
+            <option value="thrash-desc">Sort: Attempts / Thrash</option>
+          </select>
+
+          <input type="text" id="filterSearch" placeholder="Filter issues..." class="filter-select w-44" aria-label="Search issues">
         </div>
 
         <div class="flex items-center gap-3 text-xs text-slate-500 font-mono">
@@ -415,8 +422,12 @@
           </div>
         </div>
         <div>
+          <label class="block text-slate-400 mb-1">Detailed Description & Notes (Supports Markdown)</label>
+          <textarea id="inputTaskDescription" rows="3" class="input-field font-mono" placeholder="Implementation steps, technical design, code snippets..."></textarea>
+        </div>
+        <div>
           <label class="block text-slate-400 mb-1">Acceptance Criteria (Supports Markdown & Checkboxes)</label>
-          <textarea id="inputTaskAC" required rows="4" class="input-field font-mono" placeholder="## Criteria&#10;- [ ] Implement handler&#10;- [ ] Add unit test"></textarea>
+          <textarea id="inputTaskAC" required rows="3" class="input-field font-mono" placeholder="## Criteria&#10;- [ ] Implement handler&#10;- [ ] Add unit test"></textarea>
         </div>
         <div>
           <label class="block text-slate-400 mb-1">Declared Touch Files (Comma-separated)</label>
@@ -507,7 +518,11 @@
         </div>
         <div>
           <label class="block text-slate-400 mb-1">Verbatim Human Request (Supports Markdown)</label>
-          <textarea id="inputGoalVerbatim" required rows="4" class="input-field font-mono" placeholder="Paste verbatim original prompt here..."></textarea>
+          <textarea id="inputGoalVerbatim" required rows="3" class="input-field font-mono" placeholder="Paste verbatim original prompt here..."></textarea>
+        </div>
+        <div>
+          <label class="block text-slate-400 mb-1">Rich Markdown PRD / Specification (Optional)</label>
+          <textarea id="inputGoalDescription" rows="4" class="input-field font-mono" placeholder="# Goal PRD & Architecture&#10;&#10;Detailed specification, architectural breakdown, and milestones..."></textarea>
         </div>
         <div>
           <label class="block text-slate-400 mb-1">Open Tasks Cap (Max open items)</label>
@@ -602,7 +617,7 @@
   </div>
 
   <!-- Modal: Mandatory Reason Prompt -->
-  <div id="modalReasonPrompt" class="modal-backdrop hidden">
+  <div id="modalReasonPrompt" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalReasonTitle">
     <div class="modal-card max-w-md">
       <h3 id="modalReasonTitle" class="text-sm font-semibold mb-2">Mandatory Reason</h3>
       <form id="formReasonPrompt" class="space-y-3 text-xs">
@@ -612,6 +627,67 @@
           <button type="submit" class="btn-primary">Confirm</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Modal: Keyboard Shortcuts Help -->
+  <div id="modalKeyboardShortcuts" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modalShortcutsTitle">
+    <div class="modal-card max-w-lg">
+      <div class="flex items-center justify-between mb-3 border-b border-borderSubtle pb-2">
+        <h3 id="modalShortcutsTitle" class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="keyboard" class="w-4 h-4 text-indigo-400"></i> Keyboard Shortcuts
+        </h3>
+        <button class="modal-close text-slate-400 hover:text-white">&times;</button>
+      </div>
+      <div class="grid grid-cols-2 gap-3 text-xs py-1">
+        <div class="space-y-2">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">Navigation</div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Command Palette</span><kbd class="kbd-key">⌘K / ^K</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Navigate Issues</span><kbd class="kbd-key">J / K</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Open Inspector</span><kbd class="kbd-key">↵ / Space</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Toggle Selection</span><kbd class="kbd-key">X</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Close Modals/Drawer</span><kbd class="kbd-key">Esc</kbd></div>
+        </div>
+        <div class="space-y-2">
+          <div class="text-[10px] font-bold uppercase tracking-wider text-slate-500 font-mono">Actions & Views</div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">New Issue</span><kbd class="kbd-key">C</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Issues</span><kbd class="kbd-key">1</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Goals</span><kbd class="kbd-key">2</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Switch to Human Inbox</span><kbd class="kbd-key">3</kbd></div>
+          <div class="flex items-center justify-between"><span class="text-slate-300">Shortcuts Help</span><kbd class="kbd-key">?</kbd></div>
+        </div>
+      </div>
+      <div class="flex justify-end pt-3 border-t border-borderSubtle mt-3">
+        <button type="button" class="modal-close btn-secondary text-xs">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Batch Actions Bar -->
+  <div id="batchActionBar" class="fixed bottom-16 md:bottom-6 left-1/2 -translate-x-1/2 z-[100] bg-surface/95 backdrop-blur-md border border-indigo-500/40 shadow-2xl shadow-indigo-950/40 rounded-xl px-4 py-2.5 flex items-center gap-3 text-xs hidden transition-all duration-200">
+    <div class="flex items-center gap-2 font-medium text-indigo-300">
+      <span id="batchSelectedCount" class="font-mono bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800/60 font-bold">0</span>
+      <span>selected</span>
+    </div>
+    <div class="h-4 w-px bg-borderDefault"></div>
+    <div class="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+      <select id="batchStatusSelect" class="filter-select text-xs" onchange="handleBatchStatusChange(this.value)">
+        <option value="">Move Status...</option>
+        <option value="todo">Todo</option>
+        <option value="doing">In Progress</option>
+        <option value="done">Done</option>
+        <option value="dropped">Dropped</option>
+      </select>
+      <select id="batchPrioritySelect" class="filter-select text-xs" onchange="handleBatchPriorityChange(this.value)">
+        <option value="">Set Priority...</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <button class="btn-secondary text-xs" onclick="clearTaskSelection()">
+        Cancel
+      </button>
     </div>
   </div>
 

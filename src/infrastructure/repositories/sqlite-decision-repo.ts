@@ -63,9 +63,9 @@ export class SqliteDecisionRepository implements IDecisionRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  list(projectPath: string, status?: DecisionStatus, tag?: string): Decision[] {
-    let query = `SELECT * FROM decisions WHERE project_path = ?`;
-    const params: any[] = [projectPath];
+  list(projectPath?: string, status?: DecisionStatus, tag?: string): Decision[] {
+    let query = projectPath ? `SELECT * FROM decisions WHERE project_path = ?` : `SELECT * FROM decisions WHERE 1=1`;
+    const params: any[] = projectPath ? [projectPath] : [];
 
     if (status) {
       query += ` AND status = ?`;
