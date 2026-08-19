@@ -832,48 +832,62 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
         ` : ''}
       </div>
 
-      <!-- Issue Description (Full Rich Markdown View) -->
-      ${task.description ? `
-        <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
-          <div class="flex items-center justify-between pb-1.5 border-b border-subtle">
-            <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
-              <i data-lucide="align-left" class="w-3.5 h-3.5 text-indigo-400"></i> Description & Context
-            </div>
-            <button class="text-[11px] text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1" onclick="toggleTaskDocEdit('${task.id}', 'description')">
-              <i data-lucide="edit-2" class="w-3 h-3"></i> Edit
-            </button>
+      <!-- Issue Description (Full Rich Markdown with Direct Click-to-Edit) -->
+      <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
+        <div class="flex items-center justify-between pb-1 border-b border-subtle">
+          <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
+            <i data-lucide="align-left" class="w-3.5 h-3.5 text-indigo-400"></i> Description & Context
           </div>
-          <div id="taskDescPreview-${task.id}" class="markdown-body text-xs text-slate-200 leading-relaxed">
-            ${renderMarkdown(task.description)}
+          <span class="text-[10px] text-slate-500 font-mono">Click to edit inline</span>
+        </div>
+        
+        <div id="taskDescPreview-${task.id}" class="editable-markdown-block group" onclick="startTaskDocEdit('${task.id}', 'description')">
+          <div class="absolute top-2 right-2 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
+            <i data-lucide="edit-2" class="w-2.5 h-2.5"></i> Click to edit
           </div>
-          <div id="taskDescEdit-${task.id}" class="hidden space-y-2">
-            <textarea id="taskDescInput-${task.id}" rows="5" class="input-field text-xs font-mono text-slate-200 w-full">${task.description}</textarea>
-            <div class="flex justify-end gap-2">
-              <button class="btn-primary text-xs" onclick="handleSaveInlineField('${task.id}', 'description', document.getElementById('taskDescInput-${task.id}').value)">Save</button>
+          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
+            ${task.description ? renderMarkdown(task.description) : '<p class="text-slate-500 italic">+ Click here to add a detailed description or context...</p>'}
+          </div>
+        </div>
+
+        <div id="taskDescEdit-${task.id}" class="hidden space-y-2">
+          <textarea id="taskDescInput-${task.id}" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleDocKeydown(event, '${task.id}', 'description')">${task.description || ''}</textarea>
+          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
+            <span>⌘ + Enter to save • Esc to cancel</span>
+            <div class="flex gap-1.5">
+              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelTaskDocEdit('${task.id}', 'description')">Cancel</button>
+              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="saveTaskDocEdit('${task.id}', 'description')">Save</button>
             </div>
           </div>
         </div>
-      ` : ''}
+      </div>
 
-      <!-- Acceptance Criteria & Definition of Done (Full Rich Markdown View) -->
+      <!-- Acceptance Criteria & Definition of Done (Full Rich Markdown with Direct Click-to-Edit) -->
       <div class="bg-surface border border-subtle rounded-lg p-3.5 space-y-2">
-        <div class="flex items-center justify-between pb-1.5 border-b border-subtle">
+        <div class="flex items-center justify-between pb-1 border-b border-subtle">
           <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono flex items-center gap-1.5">
             <i data-lucide="check-circle" class="w-3.5 h-3.5 text-indigo-400"></i> Acceptance Criteria & Requirements
           </div>
-          <button class="text-[11px] text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1" onclick="toggleTaskDocEdit('${task.id}', 'criteria')">
-            <i data-lucide="edit-2" class="w-3 h-3"></i> Edit
-          </button>
+          <span class="text-[10px] text-slate-500 font-mono">Click to edit inline</span>
         </div>
 
-        <div id="taskCriteriaPreview-${task.id}" class="markdown-body text-xs text-slate-200 leading-relaxed">
-          ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">No criteria specified yet. AI agents will define criteria when creating or scoping tasks.</p>'}
+        <div id="taskCriteriaPreview-${task.id}" class="editable-markdown-block group" onclick="startTaskDocEdit('${task.id}', 'criteria')">
+          <div class="absolute top-2 right-2 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
+            <i data-lucide="edit-2" class="w-2.5 h-2.5"></i> Click to edit
+          </div>
+          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
+            ${task.acceptanceCriteria ? renderMarkdown(task.acceptanceCriteria) : '<p class="text-slate-500 italic">+ Click here to add acceptance criteria and definition of done...</p>'}
+          </div>
         </div>
 
         <div id="taskCriteriaEdit-${task.id}" class="hidden space-y-2">
-          <textarea id="taskCriteriaInput-${task.id}" rows="6" class="input-field text-xs font-mono text-slate-200 w-full">${task.acceptanceCriteria || ''}</textarea>
-          <div class="flex justify-end gap-2">
-            <button class="btn-primary text-xs" onclick="handleSaveInlineField('${task.id}', 'acceptanceCriteria', document.getElementById('taskCriteriaInput-${task.id}').value)">Save</button>
+          <textarea id="taskCriteriaInput-${task.id}" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleDocKeydown(event, '${task.id}', 'criteria')">${task.acceptanceCriteria || ''}</textarea>
+          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
+            <span>⌘ + Enter to save • Esc to cancel</span>
+            <div class="flex gap-1.5">
+              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelTaskDocEdit('${task.id}', 'criteria')">Cancel</button>
+              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="saveTaskDocEdit('${task.id}', 'criteria')">Save</button>
+            </div>
           </div>
         </div>
       </div>
@@ -1043,44 +1057,91 @@ async function openInspector(taskId, showDrawer = true, updateHash = true) {
   }
 }
 
-// Markdown Document View / Edit Toggles
-window.toggleTaskDocEdit = (taskId, type) => {
-  const previewId = type === 'description' ? `taskDescPreview-${taskId}` : `taskCriteriaPreview-${taskId}`;
-  const editId = type === 'description' ? `taskDescEdit-${taskId}` : `taskCriteriaEdit-${taskId}`;
-  const previewBox = document.getElementById(previewId);
-  const editBox = document.getElementById(editId);
+// Auto-Growing Textarea Helper
+window.autoGrowTextarea = (el) => {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.max(el.scrollHeight + 4, 90) + 'px';
+};
 
-  if (editBox && previewBox) {
-    const isEditing = !editBox.classList.contains('hidden');
-    if (isEditing) {
-      editBox.classList.add('hidden');
-      previewBox.classList.remove('hidden');
-    } else {
-      editBox.classList.remove('hidden');
-      previewBox.classList.add('hidden');
-    }
+window.startTaskDocEdit = (taskId, type) => {
+  const isDesc = type === 'description';
+  const preview = document.getElementById(isDesc ? `taskDescPreview-${taskId}` : `taskCriteriaPreview-${taskId}`);
+  const editBox = document.getElementById(isDesc ? `taskDescEdit-${taskId}` : `taskCriteriaEdit-${taskId}`);
+  const input = document.getElementById(isDesc ? `taskDescInput-${taskId}` : `taskCriteriaInput-${taskId}`);
+
+  if (preview && editBox && input) {
+    preview.classList.add('hidden');
+    editBox.classList.remove('hidden');
+    autoGrowTextarea(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+};
+
+window.cancelTaskDocEdit = (taskId, type) => {
+  const isDesc = type === 'description';
+  const preview = document.getElementById(isDesc ? `taskDescPreview-${taskId}` : `taskCriteriaPreview-${taskId}`);
+  const editBox = document.getElementById(isDesc ? `taskDescEdit-${taskId}` : `taskCriteriaEdit-${taskId}`);
+
+  if (preview && editBox) {
+    editBox.classList.add('hidden');
+    preview.classList.remove('hidden');
   }
   refreshLucideIcons();
 };
 
-window.toggleGoalSpecEdit = () => {
-  const previewBox = document.getElementById('goalSpecPreviewBox');
-  const editBox = document.getElementById('goalSpecEditBox');
-  const label = document.getElementById('btnGoalSpecEditLabel');
+window.saveTaskDocEdit = async (taskId, type) => {
+  const isDesc = type === 'description';
+  const input = document.getElementById(isDesc ? `taskDescInput-${taskId}` : `taskCriteriaInput-${taskId}`);
+  if (!input) return;
+  const fieldName = isDesc ? 'description' : 'acceptanceCriteria';
+  await handleSaveInlineField(taskId, fieldName, input.value);
+};
 
-  if (editBox && previewBox) {
-    const isEditing = !editBox.classList.contains('hidden');
-    if (isEditing) {
-      editBox.classList.add('hidden');
-      previewBox.classList.remove('hidden');
-      if (label) label.textContent = 'Edit Spec';
-    } else {
-      editBox.classList.remove('hidden');
-      previewBox.classList.add('hidden');
-      if (label) label.textContent = 'View Rendered';
-    }
+window.handleDocKeydown = (event, taskId, type) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    saveTaskDocEdit(taskId, type);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelTaskDocEdit(taskId, type);
+  }
+};
+
+window.startGoalSpecInlineEdit = (goalId) => {
+  const preview = document.getElementById('goalSpecPreviewBox');
+  const editBox = document.getElementById('goalSpecEditBox');
+  const textarea = document.getElementById('goalSpecTextarea');
+
+  if (preview && editBox && textarea) {
+    preview.classList.add('hidden');
+    editBox.classList.remove('hidden');
+    autoGrowTextarea(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+  }
+};
+
+window.cancelGoalSpecInlineEdit = (goalId) => {
+  const preview = document.getElementById('goalSpecPreviewBox');
+  const editBox = document.getElementById('goalSpecEditBox');
+
+  if (preview && editBox) {
+    editBox.classList.add('hidden');
+    preview.classList.remove('hidden');
   }
   refreshLucideIcons();
+};
+
+window.handleGoalSpecKeydown = (event, goalId) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    event.preventDefault();
+    handleSaveGoalSpec(goalId);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelGoalSpecInlineEdit(goalId);
+  }
 };
 
 // Inline Field Save Handler
@@ -1524,28 +1585,33 @@ async function renderGoalDetails(goalId) {
         </div>
       </div>
 
-      <!-- Specification & PRD Section (Full First-Class Markdown Document View) -->
+      <!-- Specification & PRD Section (Full Markdown with Direct Click-to-Edit) -->
       <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
         <div class="flex items-center justify-between border-b border-subtle pb-2">
           <div class="flex items-center gap-2">
             <i data-lucide="file-text" class="w-4 h-4 text-indigo-400"></i>
             <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Specification & Definition of Done (PRD)</span>
           </div>
-          <button type="button" class="text-xs text-slate-400 hover:text-indigo-300 font-mono flex items-center gap-1.5 px-2.5 py-1 rounded bg-card hover:bg-cardHover border border-subtle transition" onclick="toggleGoalSpecEdit()">
-            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i> <span id="btnGoalSpecEditLabel">Edit Spec</span>
-          </button>
+          <span class="text-[10px] text-slate-500 font-mono">Click document to edit inline</span>
         </div>
 
-        <div id="goalSpecPreviewBox" class="bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px] text-xs text-slate-200 markdown-body leading-relaxed">
-          ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">No detailed specification recorded yet. AI coding agents will populate this with full requirements and architecture using <code>moo_update_goal</code>.</div>'}
+        <div id="goalSpecPreviewBox" class="editable-markdown-block group bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px]" onclick="startGoalSpecInlineEdit('${g.id}')">
+          <div class="absolute top-3 right-3 edit-hint text-[10px] text-indigo-400 bg-indigo-950/80 border border-indigo-800/60 px-2 py-0.5 rounded font-mono flex items-center gap-1">
+            <i data-lucide="edit-2" class="w-3 h-3"></i> Click to edit spec
+          </div>
+          <div class="markdown-body text-xs text-slate-200 leading-relaxed">
+            ${g.description ? renderMarkdown(g.description) : '<div class="text-slate-500 italic py-4">+ Click here to write full product specifications, architecture design, and user stories in Markdown...</div>'}
+          </div>
         </div>
 
         <div id="goalSpecEditBox" class="hidden space-y-2">
-          <textarea id="goalSpecTextarea" class="input-field w-full font-mono text-xs h-56 leading-relaxed resize-y" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
-          <div class="flex justify-end gap-2">
-            <button type="button" class="btn-primary text-xs flex items-center gap-1.5" onclick="handleSaveGoalSpec('${g.id}')">
-              <i data-lucide="save" class="w-3.5 h-3.5"></i> Save Specification
-            </button>
+          <textarea id="goalSpecTextarea" class="inline-editor-textarea text-xs text-slate-200" oninput="autoGrowTextarea(this)" onkeydown="handleGoalSpecKeydown(event, '${g.id}')" placeholder="Write full product requirements, user stories, architecture design, and criteria in Markdown...">${g.description || ''}</textarea>
+          <div class="flex items-center justify-between text-[11px] font-mono text-slate-500">
+            <span>⌘ + Enter to save • Esc to cancel</span>
+            <div class="flex gap-1.5">
+              <button type="button" class="btn-secondary text-xs py-0.5 px-2" onclick="cancelGoalSpecInlineEdit('${g.id}')">Cancel</button>
+              <button type="button" class="btn-primary text-xs py-0.5 px-2.5" onclick="handleSaveGoalSpec('${g.id}')">Save Specification</button>
+            </div>
           </div>
         </div>
       </div>

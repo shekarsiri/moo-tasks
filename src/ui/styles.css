@@ -1034,6 +1034,52 @@ code, pre, .font-mono {
   border-color: var(--border-default);
 }
 
+/* Inline Click-to-Edit Markdown Block */
+.editable-markdown-block {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: -4px -8px;
+  transition: all 0.15s ease-in-out;
+  cursor: text;
+  position: relative;
+}
+
+.editable-markdown-block:hover {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.editable-markdown-block .edit-hint {
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  pointer-events: none;
+}
+
+.editable-markdown-block:hover .edit-hint {
+  opacity: 1;
+}
+
+.inline-editor-textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: #f1f5f9;
+  background: #080a0f;
+  border: 1px solid #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.18);
+  border-radius: 6px;
+  padding: 10px 12px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.inline-editor-textarea:focus {
+  border-color: #818cf8;
+}
+
 .hidden {
   display: none !important;
 }
