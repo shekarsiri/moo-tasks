@@ -17,6 +17,7 @@ program
   .description('Start local Web UI and HTTP/SSE server')
   .option('-p, --port <number>', 'Port to listen on', '4242')
   .option('-h, --host <string>', 'Host interface to bind', '127.0.0.1')
+  .option('--lan', 'Bind to 0.0.0.0 to enable intranet / local network access across devices')
   .option('--project-path <path>', 'Custom project root path')
   .action(startServerCommand);
 
