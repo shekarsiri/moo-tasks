@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "moo-tasks": {
+      "command": "npx",
+      "args": [
+        "moo-tasks",
+        "mcp"
+      ]
+    }
+  }
+}
