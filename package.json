@@ -1,6 +1,6 @@
 {
   "name": "moo-tasks",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Robust, agentic task orchestration & management engine with MCP, Web UI, and human-in-the-loop controls",
   "type": "module",
   "bin": {
