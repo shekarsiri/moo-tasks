@@ -72,10 +72,13 @@
 <body class="bg-app text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex">
   
   <!-- Main Layout -->
-  <div id="appLayout" class="flex w-screen h-screen overflow-hidden">
+  <div id="appLayout" class="flex w-screen h-screen overflow-hidden relative">
     
-    <!-- Left Sidebar -->
-    <aside id="sidebar" class="w-60 min-w-[240px] bg-sidebar border-r border-borderSubtle flex flex-col h-full z-20 transition-all duration-200">
+    <!-- Mobile Sidebar Backdrop Overlay -->
+    <div id="sidebarBackdrop" class="fixed inset-0 bg-black/75 backdrop-blur-sm z-40 hidden md:hidden transition-opacity duration-200" onclick="toggleMobileSidebar(false)"></div>
+
+    <!-- Left Sidebar (Responsive Drawer on Mobile) -->
+    <aside id="sidebar" class="w-64 min-w-[250px] bg-sidebar border-r border-borderSubtle flex flex-col h-full z-50 fixed inset-y-0 left-0 -translate-x-full md:relative md:translate-x-0 transition-transform duration-200 ease-out shadow-2xl md:shadow-none">
       <!-- Workspace Brand -->
       <div class="sidebar-header p-3 border-b border-borderSubtle flex items-center justify-between">
         <div class="flex items-center gap-2.5 font-bold text-[13px] text-slate-100">
@@ -85,6 +88,9 @@
             <div class="text-[10px] text-slate-500 font-mono font-normal" id="sidebarProjectLabel">v1.0.0 • Local Engine</div>
           </div>
         </div>
+        <button id="btnMobileSidebarClose" class="md:hidden p-1.5 text-slate-400 hover:text-slate-200 rounded" onclick="toggleMobileSidebar(false)">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
       </div>
 
       <!-- Navigation List -->
@@ -154,7 +160,7 @@
           <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" id="liveSyncDot"></span>
           <span id="liveSyncLabel">Live Sync</span>
         </div>
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-1 hidden md:flex">
           <kbd class="kbd-key">C</kbd>
           <span class="text-[10px] text-slate-500">New</span>
         </div>
@@ -162,52 +168,64 @@
     </aside>
 
     <!-- Main Workspace View -->
-    <main id="mainWorkspace" class="flex-1 flex flex-col h-full overflow-hidden bg-app">
+    <main id="mainWorkspace" class="flex-1 flex flex-col h-full overflow-hidden bg-app pb-14 md:pb-0">
       <!-- Top Action Header -->
-      <header class="top-header h-12 min-h-[48px] border-b border-borderSubtle bg-app flex items-center justify-between px-4 gap-3">
-        <div class="breadcrumb-area flex items-center gap-2 text-[12.5px] font-medium text-slate-400">
-          <span id="breadcrumbWorkspaceName">Workspace</span>
-          <span class="text-slate-600">/</span>
-          <span class="breadcrumb-active text-slate-100 font-semibold" id="activeViewTitle">All Issues</span>
+      <header class="top-header h-12 min-h-[48px] border-b border-borderSubtle bg-app flex items-center justify-between px-3 md:px-4 gap-2">
+        <div class="flex items-center gap-2 overflow-hidden">
+          <!-- Mobile Hamburger Toggle Button -->
+          <button id="btnMobileSidebarToggle" class="md:hidden p-1.5 rounded text-slate-300 hover:bg-surface border border-subtle flex items-center justify-center shrink-0" onclick="toggleMobileSidebar(true)" aria-label="Open navigation menu">
+            <i data-lucide="menu" class="w-4 h-4"></i>
+          </button>
+
+          <div class="breadcrumb-area flex items-center gap-1.5 text-[12px] md:text-[12.5px] font-medium text-slate-400 truncate">
+            <span id="breadcrumbWorkspaceName" class="truncate max-w-[100px] sm:max-w-[160px]">Workspace</span>
+            <span class="text-slate-600">/</span>
+            <span class="breadcrumb-active text-slate-100 font-semibold truncate" id="activeViewTitle">All Issues</span>
+          </div>
         </div>
 
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-1.5 sm:gap-2.5">
           <!-- Command Palette Trigger -->
-          <div class="search-trigger cursor-pointer flex items-center gap-2 bg-surface border border-borderDefault hover:border-borderActive rounded-md px-2.5 py-1 text-slate-400 text-xs transition" id="btnOpenPalette">
+          <div class="search-trigger cursor-pointer flex items-center gap-1.5 bg-surface border border-borderDefault hover:border-borderActive rounded-md px-2 py-1 text-slate-400 text-xs transition" id="btnOpenPalette">
             <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400"></i>
-            <span class="flex-1 text-[11.5px]">Search or jump to...</span>
-            <kbd class="kbd-key">⌘K</kbd>
+            <span class="hidden sm:inline text-[11.5px]">Search...</span>
+            <kbd class="kbd-key hidden md:inline-block">⌘K</kbd>
           </div>
 
           <!-- View Switcher (List vs Board) -->
           <div class="view-switcher flex bg-surface border border-borderDefault rounded-md p-0.5 gap-0.5" id="tasksViewSwitcher">
-            <button class="view-btn active" data-mode="list" id="btnViewList">
-              <i data-lucide="list" class="w-3.5 h-3.5"></i> <span>List</span>
+            <button class="view-btn active" data-mode="list" id="btnViewList" title="List View">
+              <i data-lucide="list" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">List</span>
             </button>
-            <button class="view-btn" data-mode="board" id="btnViewBoard">
-              <i data-lucide="kanban" class="w-3.5 h-3.5"></i> <span>Board</span>
+            <button class="view-btn" data-mode="board" id="btnViewBoard" title="Kanban Board View">
+              <i data-lucide="kanban" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">Board</span>
             </button>
           </div>
 
           <!-- Sound Alert Toggle -->
-          <button class="btn-secondary px-2.5" id="btnToggleSound" title="Toggle audio chime alerts">
+          <button class="btn-secondary px-2 py-1" id="btnToggleSound" title="Toggle audio chime alerts">
             <i data-lucide="bell" id="iconSoundState" class="w-3.5 h-3.5 text-slate-300"></i>
           </button>
 
           <!-- Quick Action Buttons -->
-          <button class="btn-secondary" id="btnHeaderExport">
+          <button class="btn-secondary hidden sm:flex" id="btnHeaderExport">
             <i data-lucide="download" class="w-3.5 h-3.5"></i> <span>Export</span>
           </button>
-          <button class="btn-primary" id="btnHeaderNewTask">
-            <i data-lucide="plus" class="w-3.5 h-3.5"></i> <span>New Issue</span> <kbd class="kbd-key ml-1 bg-indigo-900/60 border-indigo-700 text-indigo-200">C</kbd>
+          <button class="btn-primary px-2.5 py-1" id="btnHeaderNewTask">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> <span class="hidden sm:inline">New Issue</span>
           </button>
         </div>
       </header>
 
       <!-- Filter Toolbar -->
-      <div class="filter-toolbar h-10 min-h-[40px] border-b border-borderSubtle bg-app flex items-center justify-between px-4 text-xs" id="filterToolbar">
-        <div class="filter-group flex items-center gap-2">
+      <div class="filter-toolbar h-10 min-h-[40px] border-b border-borderSubtle bg-app flex items-center justify-between px-3 md:px-4 text-xs overflow-x-auto" id="filterToolbar">
+        <div class="filter-group flex items-center gap-2 shrink-0">
           <select id="filterGoal" class="filter-select">
+            <option value="">All Goals</option>
+            <option value="__orphans__">Scope Drift (Orphans)</option>
+          </select>
+
+          <select id="filterPriority" class="filter-select">
             <option value="">All Goals</option>
             <option value="__orphans__">Scope Drift (Orphans)</option>
           </select>
@@ -598,7 +616,32 @@
   </div>
 
   <!-- Interactive Toast Notification Container -->
-  <div id="toastContainer" class="fixed bottom-5 right-5 z-[120] flex flex-col gap-2 pointer-events-none"></div>
+  <div id="toastContainer" class="fixed bottom-16 md:bottom-5 right-4 z-[120] flex flex-col gap-2 pointer-events-none max-w-[90vw]"></div>
+
+  <!-- Mobile Bottom Navigation Bar -->
+  <nav id="mobileBottomNav" class="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-sidebar/95 backdrop-blur-md border-t border-borderSubtle flex items-center justify-around z-30 px-1 select-none">
+    <button class="mobile-nav-btn active flex flex-col items-center justify-center flex-1 h-full py-1 text-indigo-400" data-view="tasks" onclick="switchView('tasks')">
+      <i data-lucide="check-square" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-0.5">Issues</span>
+    </button>
+    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" data-view="goals" onclick="switchView('goals')">
+      <i data-lucide="target" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-0.5">Goals</span>
+    </button>
+    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200 relative" data-view="human" onclick="switchView('human')">
+      <i data-lucide="help-circle" class="w-4 h-4 text-purple-400"></i>
+      <span class="text-[10px] font-medium mt-0.5">Inbox</span>
+      <span class="mobile-nav-badge hidden" id="mobileNavBadgeHuman">0</span>
+    </button>
+    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" data-view="review" onclick="switchView('review')">
+      <i data-lucide="shield-check" class="w-4 h-4 text-indigo-400"></i>
+      <span class="text-[10px] font-medium mt-0.5">Review</span>
+    </button>
+    <button class="mobile-nav-btn flex flex-col items-center justify-center flex-1 h-full py-1 text-slate-400 hover:text-slate-200" onclick="toggleMobileSidebar(true)">
+      <i data-lucide="menu" class="w-4 h-4"></i>
+      <span class="text-[10px] font-medium mt-0.5">Menu</span>
+    </button>
+  </nav>
 
   <script src="/app.js"></script>
 </body>

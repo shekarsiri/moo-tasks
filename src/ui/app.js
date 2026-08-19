@@ -449,6 +449,22 @@ async function refreshAll() {
   refreshLucideIcons();
 }
 
+// Mobile Sidebar Drawer Controller
+window.toggleMobileSidebar = (open) => {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebarBackdrop');
+  if (!sidebar) return;
+
+  const shouldOpen = open !== undefined ? open : sidebar.classList.contains('-translate-x-full');
+  if (shouldOpen) {
+    sidebar.classList.remove('-translate-x-full');
+    if (backdrop) backdrop.classList.remove('hidden');
+  } else {
+    sidebar.classList.add('-translate-x-full');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+};
+
 // Sidebar Navigation
 navItems.forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -468,6 +484,19 @@ function switchView(viewName, updateHash = true) {
   }
 
   navItems.forEach((b) => b.classList.toggle('active', b.getAttribute('data-view') === viewName));
+
+  // Sync Mobile Bottom Navigation
+  const mobileNavBtns = document.querySelectorAll('.mobile-nav-btn');
+  mobileNavBtns.forEach((b) => {
+    const isTarget = b.getAttribute('data-view') === viewName;
+    b.classList.toggle('active', isTarget);
+    b.classList.toggle('text-indigo-400', isTarget);
+    b.classList.toggle('text-slate-400', !isTarget);
+  });
+
+  // Close mobile sidebar if open
+  toggleMobileSidebar(false);
+
   viewPanes.forEach((pane) => {
     pane.classList.toggle('hidden', pane.id !== `pane-${viewName}`);
     pane.classList.toggle('active', pane.id === `pane-${viewName}`);
@@ -605,6 +634,12 @@ function updateSidebarCounters() {
   if (navCounterHuman) {
     navCounterHuman.textContent = humanWaiting.length;
     navCounterHuman.classList.toggle('hidden', humanWaiting.length === 0);
+  }
+
+  const badgeHuman = document.getElementById('mobileNavBadgeHuman');
+  if (badgeHuman) {
+    badgeHuman.textContent = humanWaiting.length;
+    badgeHuman.classList.toggle('hidden', humanWaiting.length === 0);
   }
 
   const reviewTasks = state.tasks.filter(
