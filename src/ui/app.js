@@ -22,6 +22,83 @@ function refreshLucideIcons() {
   }
 }
 
+// Audio & Notification Alert Engine
+let soundEnabled = localStorage.getItem('moo_sound_enabled') !== 'false';
+const alertedHumanTaskIds = new Set();
+let originalTitle = document.title || 'Moo Tasks';
+let titleFlashInterval = null;
+
+function startTitleFlashing(flashText) {
+  if (titleFlashInterval) return;
+  let toggle = false;
+  titleFlashInterval = setInterval(() => {
+    document.title = toggle ? flashText : (originalTitle || 'Moo Tasks');
+    toggle = !toggle;
+  }, 1000);
+}
+
+function stopTitleFlashing() {
+  if (titleFlashInterval) {
+    clearInterval(titleFlashInterval);
+    titleFlashInterval = null;
+    document.title = originalTitle || 'Moo Tasks';
+  }
+}
+
+window.addEventListener('focus', stopTitleFlashing);
+window.addEventListener('click', stopTitleFlashing);
+
+function playNotificationChime() {
+  if (!soundEnabled) return;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, now); // D5
+    osc1.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
+
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(880, now + 0.12);
+    osc2.frequency.exponentialRampToValueAtTime(1174.66, now + 0.3); // D6
+
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+
+    osc1.connect(gain);
+    osc2.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc1.start(now);
+    osc2.start(now + 0.12);
+    osc1.stop(now + 0.25);
+    osc2.stop(now + 0.45);
+  } catch {
+    // ignore
+  }
+}
+
+function triggerHumanAlert(task) {
+  playNotificationChime();
+  if (document.hidden) {
+    startTitleFlashing('🚨 (1) 🙋 Human Action Needed');
+  }
+  if ('Notification' in window && Notification.permission === 'granted') {
+    const notif = new Notification('🙋 Moo Tasks: Action Needed', {
+      body: `${task.claimedByAgent || 'Agent'}: ${task.humanQuestion || task.title}`,
+      icon: '/logo.png',
+    });
+    notif.onclick = () => {
+      window.focus();
+      window.location.hash = '#/human';
+    };
+  }
+}
+
 // Markdown Parser Helper
 function renderMarkdown(text) {
   if (!text) return '';
@@ -165,6 +242,16 @@ async function fetchTasks() {
     const res = await fetch('/api/tasks');
     const data = await res.json();
     state.tasks = data.tasks || [];
+
+    // Check for new waiting-on-human tasks to chime
+    const waitingTasks = state.tasks.filter((t) => t.status === 'waiting-on-human' && !t.isArchived);
+    waitingTasks.forEach((t) => {
+      if (!alertedHumanTaskIds.has(t.id)) {
+        alertedHumanTaskIds.add(t.id);
+        triggerHumanAlert(t);
+      }
+    });
+
     renderTasks();
     renderHumanInbox();
     renderReviewFeed();
@@ -1150,6 +1237,16 @@ window.filterByGoalDirect = (goalId) => {
   renderTasks();
 };
 
+// Quick Answer Helper
+window.setQuickAnswer = (taskId, text) => {
+  const input = document.getElementById(`inbox-answer-${taskId}`);
+  if (input) {
+    input.value = text;
+    const form = input.closest('form');
+    if (form) form.requestSubmit();
+  }
+};
+
 // Human Attention View
 function renderHumanInbox() {
   const container = document.getElementById('humanInboxList');
@@ -1179,6 +1276,21 @@ function renderHumanInbox() {
         <div class="font-semibold mb-1 flex items-center gap-1"><i data-lucide="help-circle" class="w-3.5 h-3.5"></i> ${task.humanQuestionType || 'Question'}:</div>
         <div>${renderMarkdown(task.humanQuestion)}</div>
       </div>
+      
+      <!-- Quick Action Buttons -->
+      <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
+        <span class="text-[10px] uppercase font-bold text-slate-500 mr-1">Quick Action:</span>
+        <button type="button" onclick="setQuickAnswer('${task.id}', 'Approved. Please proceed with implementation.')" class="px-2 py-0.5 rounded bg-emerald-950/50 border border-emerald-800/70 text-emerald-300 text-[11px] hover:bg-emerald-900/70 transition flex items-center gap-1">
+          <i data-lucide="check" class="w-3 h-3"></i> Approve
+        </button>
+        <button type="button" onclick="setQuickAnswer('${task.id}', 'Rejected. Please rethink or try an alternative approach.')" class="px-2 py-0.5 rounded bg-rose-950/50 border border-rose-800/70 text-rose-300 text-[11px] hover:bg-rose-900/70 transition flex items-center gap-1">
+          <i data-lucide="x" class="w-3 h-3"></i> Reject
+        </button>
+        <button type="button" onclick="setQuickAnswer('${task.id}', 'Skip this requirement for now and proceed with next steps.')" class="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 text-[11px] hover:bg-slate-700 transition flex items-center gap-1">
+          <i data-lucide="skip-forward" class="w-3 h-3"></i> Skip
+        </button>
+      </div>
+
       <form onsubmit="handleAnswerQuestion(event, '${task.id}')" class="flex gap-2">
         <input type="text" id="inbox-answer-${task.id}" required placeholder="Type answer or decision to resume agent..." class="input-field text-xs flex-1">
         <button type="submit" class="btn-primary text-xs flex items-center gap-1">
@@ -1817,6 +1929,36 @@ async function exportProject() {
 
 const btnHeaderExport = document.getElementById('btnHeaderExport');
 if (btnHeaderExport) btnHeaderExport.onclick = exportProject;
+
+// Sound Alert Toggle
+const btnToggleSound = document.getElementById('btnToggleSound');
+const iconSoundState = document.getElementById('iconSoundState');
+
+function updateSoundButtonUI() {
+  if (iconSoundState) {
+    iconSoundState.setAttribute('data-lucide', soundEnabled ? 'bell' : 'bell-off');
+    iconSoundState.className = `w-3.5 h-3.5 ${soundEnabled ? 'text-indigo-400' : 'text-slate-500'}`;
+    refreshLucideIcons();
+  }
+}
+
+if (btnToggleSound) {
+  updateSoundButtonUI();
+  btnToggleSound.onclick = () => {
+    soundEnabled = !soundEnabled;
+    localStorage.setItem('moo_sound_enabled', String(soundEnabled));
+    updateSoundButtonUI();
+    if (soundEnabled) {
+      playNotificationChime();
+      showToast('Sound alerts enabled', 'success');
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    } else {
+      showToast('Sound alerts muted', 'info');
+    }
+  };
+}
 
 // Route & Hash Management
 function handleRouteFromHash() {
