@@ -119,5 +119,13 @@ export async function installCommand(target: string) {
     console.log(picocolors.cyan(JSON.stringify(codexSnippet, null, 2)));
   }
 
-  console.log(`\n${picocolors.green('✔ Installation completed successfully.')}\n`);
+  console.log(`\n${picocolors.green('✔ Installation completed successfully.')}`);
+  console.log(`\n${picocolors.bold(picocolors.white('💡 Global CLI Usage:'))}`);
+  console.log(`  To run bare ${picocolors.cyan('moo')} commands without npx, install globally:`);
+  console.log(`    ${picocolors.yellow('npm install -g moo-tasks')}`);
+  console.log(`  Then you can run:`);
+  console.log(`    ${picocolors.cyan('moo start')}    ${picocolors.dim('# Launch local Web UI (http://127.0.0.1:4242)')}`);
+  console.log(`    ${picocolors.cyan('moo init')}     ${picocolors.dim('# Initialize project workspace & rules')}`);
+  console.log(`    ${picocolors.cyan('moo ws')}       ${picocolors.dim('# List global workspaces')}`);
+  console.log(`    ${picocolors.cyan('moo status')}   ${picocolors.dim('# View Where-Did-I-Leave-Off context')}\n`);
 }

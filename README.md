@@ -83,9 +83,37 @@ Standard AI coding agents often suffer from:
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start & Installation
 
-### 1. Initialize Workspace & Agent Protocols
+### Option A: Install Globally (Recommended for `moo` command)
+Install `moo-tasks` globally to access the short `moo` command anywhere:
+```bash
+npm install -g moo-tasks
+# or: pnpm add -g moo-tasks | bun add -g moo-tasks
+```
+Once installed, you can use `moo` directly:
+```bash
+moo init       # Initialize .moo workspace in current project
+moo start      # Launch real-time Web UI (http://127.0.0.1:4242)
+moo ws         # List registered global workspaces
+moo status     # Show Where-Did-I-Leave-Off context
+moo search     # Full-text SQLite search
+```
+
+> 💡 **Note on `moo` vs `npx`**:
+> - Bare `moo <command>` works when installed globally via `npm install -g moo-tasks`.
+> - If running without global installation, use `npx moo-tasks <command>` (do **not** use `npx moo`, as `moo` on npm registry is an unrelated package).
+> - If `moo: command not found` appears after global install, ensure npm's global bin directory is in your `$PATH`:
+>   ```bash
+>   export PATH="$(npm prefix -g)/bin:$PATH"
+>   ```
+
+---
+
+### Option B: On-Demand via `npx moo-tasks`
+Run directly without global installation:
+
+#### 1. Initialize Workspace & Agent Protocols
 Run in your project root:
 ```bash
 npx moo-tasks init
@@ -94,7 +122,7 @@ This:
 - Initializes `.moo/tasks.db` SQLite database with WAL mode.
 - Generates `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, and `.windsurfrules`.
 
-### 2. Launch Local Web UI
+#### 2. Launch Local Web UI
 ```bash
 npx moo-tasks start
 ```

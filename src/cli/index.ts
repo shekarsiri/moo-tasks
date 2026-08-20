@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'fs';
 import { Command } from 'commander';
 import { startServerCommand } from './commands/start.js';
 import { mcpCommand } from './commands/mcp.js';
@@ -19,12 +20,19 @@ import {
   removeWorkspaceCommand,
 } from './commands/workspaces.js';
 
+let version = '1.0.4';
+try {
+  const pkgPath = new URL('../../package.json', import.meta.url);
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+  version = pkg.version || version;
+} catch {}
+
 const program = new Command();
 
 program
   .name('moo-tasks')
   .description('Agentic Task Orchestration & Management Engine with MCP and Web UI')
-  .version('1.0.0');
+  .version(version);
 
 program
   .command('workspaces')

@@ -111,6 +111,6 @@ export async function initCommand(options: { projectPath?: string; rules?: boole
   console.log(`  ${picocolors.gray('Root Path:')}      ${picocolors.cyan(ws.rootPath)}`);
   console.log(`  ${picocolors.gray('Global Database:')} ${picocolors.yellow(globalDbPath)}`);
   console.log(`  ${picocolors.gray('Agent Rules:')}    ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules')}`);
-  console.log(`  ${picocolors.gray('Web UI:')}         ${picocolors.yellow('npx moo-tasks start')}`);
-  console.log(`  ${picocolors.gray('MCP Mode:')}       ${picocolors.yellow('npx moo-tasks mcp')}\n`);
+  console.log(`  ${picocolors.gray('Web UI:')}         ${picocolors.yellow('moo start')} ${picocolors.dim('(or npx moo-tasks start)')}`);
+  console.log(`  ${picocolors.gray('MCP Mode:')}       ${picocolors.yellow('moo mcp')} ${picocolors.dim('(or npx moo-tasks mcp)')}\n`);
 }
