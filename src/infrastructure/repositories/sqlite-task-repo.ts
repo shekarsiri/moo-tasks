@@ -206,8 +206,8 @@ export class SqliteTaskRepository implements ITaskRepository {
     const params: any[] = [];
 
     if (filter.workspaceId) {
-      query += ` AND workspace_id = ?`;
-      params.push(filter.workspaceId);
+      query += ` AND (workspace_id = ? OR (workspace_id IS NULL AND goal_id IN (SELECT id FROM goals WHERE workspace_id = ?)))`;
+      params.push(filter.workspaceId, filter.workspaceId);
     }
 
     if (filter.goalId !== undefined) {

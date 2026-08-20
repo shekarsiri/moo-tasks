@@ -274,6 +274,32 @@ export class DatabaseMigrator {
       // FTS5 extension already enabled or table exists
     }
 
+    // Backfill workspace_id for goals, tasks, decisions if missing
+    try {
+      db.exec(`
+        -- Goals backfill from workspaces by project_path
+        UPDATE goals
+        SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.root_path = goals.project_path LIMIT 1)
+        WHERE (workspace_id IS NULL OR workspace_id = '')
+          AND EXISTS (SELECT 1 FROM workspaces WHERE workspaces.root_path = goals.project_path);
+
+        -- Tasks backfill from goals
+        UPDATE tasks
+        SET workspace_id = (SELECT workspace_id FROM goals WHERE goals.id = tasks.goal_id LIMIT 1)
+        WHERE (workspace_id IS NULL OR workspace_id = '')
+          AND goal_id IS NOT NULL
+          AND EXISTS (SELECT 1 FROM goals WHERE goals.id = tasks.goal_id AND goals.workspace_id IS NOT NULL AND goals.workspace_id != '');
+
+        -- Decisions backfill from workspaces by project_path
+        UPDATE decisions
+        SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.root_path = decisions.project_path LIMIT 1)
+        WHERE (workspace_id IS NULL OR workspace_id = '')
+          AND EXISTS (SELECT 1 FROM workspaces WHERE workspaces.root_path = decisions.project_path);
+      `);
+    } catch {
+      // ignore
+    }
+
     // Record schema version
     try {
       const row = db.prepare(`SELECT version FROM schema_version WHERE version = ?`).get(1);

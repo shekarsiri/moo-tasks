@@ -59,11 +59,11 @@ export class SqliteGoalRepository implements IGoalRepository {
     const params: any[] = [];
 
     if (workspaceId) {
-      query += ` AND workspace_id = ?`;
-      params.push(workspaceId);
+      query += ` AND (workspace_id = ? OR (workspace_id IS NULL AND project_path = (SELECT root_path FROM workspaces WHERE id = ?)))`;
+      params.push(workspaceId, workspaceId);
     } else if (projectPath) {
-      query += ` AND project_path = ?`;
-      params.push(projectPath);
+      query += ` AND (project_path = ? OR workspace_id = (SELECT id FROM workspaces WHERE root_path = ?))`;
+      params.push(projectPath, projectPath);
     }
 
     if (status) {

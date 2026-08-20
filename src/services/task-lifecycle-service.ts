@@ -132,9 +132,32 @@ export class TaskLifecycleService {
       declaredFiles: dto.declaredFiles,
     });
 
+    // Resolve workspaceId if omitted
+    let effectiveWorkspaceId = dto.workspaceId;
+    if (!effectiveWorkspaceId && effectiveGoalId) {
+      try {
+        const linkedGoal = this.goalService.getGoal(effectiveGoalId);
+        if (linkedGoal?.workspaceId) {
+          effectiveWorkspaceId = linkedGoal.workspaceId;
+        }
+      } catch {
+        // ignore if goal not found
+      }
+    }
+    if (!effectiveWorkspaceId && dto.parentId) {
+      try {
+        const parent = this.taskRepo.findById(dto.parentId);
+        if (parent?.workspaceId) {
+          effectiveWorkspaceId = parent.workspaceId;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     const task: Task = {
       id: taskId,
-      workspaceId: dto.workspaceId,
+      workspaceId: effectiveWorkspaceId,
       goalId: effectiveGoalId,
       parentId: dto.parentId,
       title: parsedTitle.cleanTitle,

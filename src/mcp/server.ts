@@ -827,6 +827,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
             verbatimPrompt: z.string(),
             description: z.string().optional(),
             maxOpenTasksCap: z.number().optional(),
+            workspaceId: z.string().optional(),
           });
           const parsed = schema.parse(args);
           const goal = container.goalService.createGoal(
@@ -834,7 +835,8 @@ export function setupMcpServer(container: ServiceContainer): Server {
             parsed.verbatimPrompt,
             container.projectPath,
             parsed.maxOpenTasksCap,
-            parsed.description
+            parsed.description,
+            parsed.workspaceId || container.activeWorkspace?.id
           );
           return {
             content: [
@@ -923,6 +925,7 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
           const res = container.taskLifecycleService.createTask(
             {
+              workspaceId: (args as any).workspaceId || container.activeWorkspace?.id,
               ...(args as any),
               declaredFiles,
               tags,
@@ -958,7 +961,13 @@ export function setupMcpServer(container: ServiceContainer): Server {
             const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
             const rawDeps = t.dependsOnTaskIds || t.dependsOnTaskId;
             const dependsOnTaskIds = rawDeps ? (Array.isArray(rawDeps) ? rawDeps : [rawDeps].filter(Boolean)) : undefined;
-            return { ...t, declaredFiles, tags, dependsOnTaskIds };
+            return {
+              workspaceId: t.workspaceId || container.activeWorkspace?.id,
+              ...t,
+              declaredFiles,
+              tags,
+              dependsOnTaskIds,
+            };
           });
           const results = container.taskLifecycleService.createBatch(tasks, 'agent', 'agent');
           return {
@@ -1373,9 +1382,10 @@ export function setupMcpServer(container: ServiceContainer): Server {
 
         // Decisions
         case 'moo_record_decision': {
-          const { title, context, choice, rationale, tags: rawTags, authorId } = args as any;
+          const { title, context, choice, rationale, tags: rawTags, authorId, workspaceId } = args as any;
           const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : [];
           const dec = container.decisionService.recordDecision({
+            workspaceId: workspaceId || container.activeWorkspace?.id,
             title,
             context,
             choice,
@@ -1388,16 +1398,20 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_list_decisions': {
-          const { status, tag } = args as any;
-          const decisions = container.decisionService.listDecisions(container.projectPath, status, tag);
+          const { status, tag, workspaceId } = args as any;
+          const targetWs = workspaceId || container.activeWorkspace?.id;
+          const decisions = targetWs
+            ? container.decisionService.listDecisions(undefined, status, tag, targetWs)
+            : container.decisionService.listDecisions(container.projectPath, status, tag);
           return { content: [{ type: 'text', text: JSON.stringify({ success: true, total: decisions.length, decisions }, null, 2) }] };
         }
 
         case 'moo_supersede_decision': {
-          const { oldDecisionId, newTitle, newContext, newChoice, newRationale, reason, authorId, tags } = args as any;
+          const { oldDecisionId, newTitle, newContext, newChoice, newRationale, reason, authorId, tags, workspaceId } = args as any;
           const res = container.decisionService.supersedeDecision(
             oldDecisionId,
             {
+              workspaceId: workspaceId || container.activeWorkspace?.id,
               title: newTitle,
               context: newContext,
               choice: newChoice,
@@ -1488,11 +1502,12 @@ export function setupMcpServer(container: ServiceContainer): Server {
         }
 
         case 'moo_quick_start': {
-          const { goalId, title, acceptanceCriteria, priority, type, tags: rawTags, declaredFiles, description, agentId, sessionId, leaseDurationMinutes } = args as any;
+          const { goalId, title, acceptanceCriteria, priority, type, tags: rawTags, declaredFiles, description, agentId, sessionId, leaseDurationMinutes, workspaceId } = args as any;
           const aid = agentId || 'agent';
           const tags = rawTags ? (Array.isArray(rawTags) ? rawTags : [rawTags]) : undefined;
           const created = container.taskLifecycleService.createTask(
             {
+              workspaceId: workspaceId || container.activeWorkspace?.id,
               goalId,
               title,
               acceptanceCriteria,
