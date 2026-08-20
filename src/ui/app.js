@@ -237,6 +237,38 @@ window.handleDirectDocKeydown = (event, element, targetId, field, isGoal = false
   }
 };
 
+window.handleCriteriaCheckboxClick = async (event, taskId, docElement) => {
+  if (event.target && event.target.tagName === 'INPUT' && event.target.type === 'checkbox') {
+    event.stopPropagation();
+    const allCheckboxes = Array.from(docElement.querySelectorAll('input[type="checkbox"]'));
+    const clickedIndex = allCheckboxes.indexOf(event.target);
+    if (clickedIndex === -1) return;
+
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task || !task.acceptanceCriteria) return;
+
+    const criteriaLines = task.acceptanceCriteria.split('\n');
+    let checkboxCount = 0;
+    for (let i = 0; i < criteriaLines.length; i++) {
+      const line = criteriaLines[i];
+      if (/^(\s*[-*]\s+\[)([ xX])(\]\s+.*)$/.test(line)) {
+        if (checkboxCount === clickedIndex) {
+          const isChecked = event.target.checked;
+          criteriaLines[i] = line.replace(/^(\s*[-*]\s+\[)([ xX])(\]\s+.*)$/, `$1${isChecked ? 'x' : ' '}$3`);
+          break;
+        }
+        checkboxCount++;
+      }
+    }
+
+    const updatedMarkdown = criteriaLines.join('\n');
+    task.acceptanceCriteria = updatedMarkdown;
+    setInlineSaveStatus('acceptanceCriteria', 'saving');
+    await handleSaveInlineField(taskId, 'acceptanceCriteria', updatedMarkdown);
+    setInlineSaveStatus('acceptanceCriteria', 'saved');
+  }
+};
+
 // DOM References
 const navItems = document.querySelectorAll('.nav-item');
 const viewPanes = document.querySelectorAll('.view-pane');
@@ -1538,6 +1570,10 @@ document.addEventListener('click', (e) => {
 if (filterSearch) {
   filterSearch.oninput = (e) => {
     state.filterSearch = e.target.value;
+    const btnClear = document.getElementById('btnClearFilterSearch');
+    if (btnClear) {
+      btnClear.classList.toggle('hidden', !state.filterSearch);
+    }
     renderTasks();
   };
 }
@@ -1550,6 +1586,7 @@ window.toggleTaskSelection = (taskId, isSelected) => {
     state.selectedTaskIds.delete(taskId);
   }
   updateBatchActionBar();
+  renderTasks();
 };
 
 window.clearTaskSelection = () => {
@@ -2162,6 +2199,7 @@ function getTaskGroups(tasks) {
 function renderListView(tasks) {
   if (!tasksListView) return;
   tasksListView.innerHTML = '';
+  tasksListView.classList.toggle('has-selections', state.selectedTaskIds.size > 0);
 
   const groups = getTaskGroups(tasks);
   const dp = state.displayProperties || {};
@@ -2209,7 +2247,8 @@ function renderListView(tasks) {
     } else {
       grp.tasks.forEach((task) => {
         const row = document.createElement('div');
-        row.className = 'issue-row';
+        const isSelected = state.selectedTaskIds.has(task.id);
+        row.className = `issue-row ${isSelected ? 'selected' : ''}`;
         row.setAttribute('data-id', task.id);
 
         const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
@@ -2222,16 +2261,20 @@ function renderListView(tasks) {
         const showLabels = dp.labels !== false;
         const showAssignee = dp.assignee !== false;
         const showDate = dp.updated !== false || dp.created !== false;
+        const hasThrashWarning = task.attemptCount >= 2;
 
         row.innerHTML = `
           <div class="issue-row-left">
+            <input type="checkbox" class="row-select-checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleTaskSelection('${task.id}', this.checked)" title="Select issue">
             ${showPriority ? `<div class="issue-priority-icon">${getPrioritySignal(task.priority)}</div>` : ''}
             ${showId ? `<span class="issue-key">${formatIssueKey(task.id)}</span>` : ''}
             ${showStatus ? `<div class="issue-status-icon">${getStatusIcon(task.status, isBacklog)}</div>` : ''}
+            ${getTypeBadge(task.type)}
             <div class="issue-title-container">
               <span class="issue-title-text">${formatTitleWithCode(task.title)}</span>
               ${showProject && goal ? `<span class="issue-breadcrumb">› ${escapeHtml(goal.title)}</span>` : ''}
             </div>
+            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${task.attemptCount} attempts logged">⚠️ ${task.attemptCount} att</span>` : ''}
             ${getSubissueProgressPill(task)}
           </div>
           <div class="issue-row-right">
@@ -2334,6 +2377,7 @@ function renderBoardView(tasks) {
 
       const goal = state.goals.find((g) => g.goal.id === task.goalId)?.goal;
       const isStalled = task.attemptCount >= task.maxAttemptsAllowed || task.reopenCount >= 2;
+      const hasThrashWarning = task.attemptCount >= 2;
       const hasActiveLease = task.status === 'doing' && task.leaseExpiresAt && new Date(task.leaseExpiresAt) > new Date();
 
       card.innerHTML = `
@@ -2343,6 +2387,7 @@ function renderBoardView(tasks) {
             ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="Stalled"></i>` : ''}
           </div>
           <div class="flex items-center gap-1.5">
+            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${task.attemptCount} attempts logged">⚠️ ${task.attemptCount}</span>` : ''}
             ${getTypeBadge(task.type)}
             ${getPrioritySignal(task.priority)}
           </div>
@@ -2781,6 +2826,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           spellcheck="false"
           data-placeholder="+ Click here to type acceptance criteria directly..."
           class="markdown-body rich-editable-doc text-xs text-slate-200 leading-relaxed"
+          onclick="handleCriteriaCheckboxClick(event, '${task.id}', this)"
           onblur="handleDirectDocBlur(this, '${task.id}', 'acceptanceCriteria', false)"
           onkeydown="handleDirectDocKeydown(event, this, '${task.id}', 'acceptanceCriteria', false)"
         >${renderMarkdown(task.acceptanceCriteria || '')}</div>
@@ -3733,41 +3779,78 @@ function renderReviewFeed() {
   reviewTasks.forEach((task) => {
     const isCompleted = task.status === 'done';
     const card = document.createElement('div');
-    card.className = `bg-surface border ${isCompleted ? 'border-indigo-500/30' : 'border-rose-500/30'} rounded-lg p-4`;
+    card.className = `bg-surface border ${isCompleted ? 'border-indigo-500/30' : 'border-rose-500/30'} rounded-lg p-4 shadow-lg space-y-3`;
+
+    const ev = task.evidence;
+    const git = ev?.gitContext;
 
     card.innerHTML = `
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-xs font-mono font-semibold ${isCompleted ? 'text-indigo-400' : 'text-rose-400'} uppercase flex items-center gap-1">
-          <i data-lucide="${isCompleted ? 'shield-check' : 'x-circle'}" class="w-3.5 h-3.5"></i>
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-mono font-semibold ${isCompleted ? 'text-indigo-400' : 'text-rose-400'} uppercase flex items-center gap-1.5">
+          <i data-lucide="${isCompleted ? 'shield-check' : 'x-circle'}" class="w-4 h-4"></i>
           ${isCompleted ? 'Agent Claimed Done (Awaiting Verification)' : 'Dropped Task'}
         </span>
         <span class="text-xs font-mono text-slate-500">${task.id}</span>
       </div>
-      <h3 class="text-sm font-bold text-slate-100 mb-1.5">${task.title}</h3>
-      
-      ${task.evidence ? `
-        <div class="bg-card p-3 rounded border border-subtle text-xs font-mono text-slate-300 mb-3">
-          <div class="text-slate-500 text-[10px] mb-1 font-bold uppercase flex items-center gap-1"><i data-lucide="file-check" class="w-3 h-3"></i> SUBMITTED EVIDENCE</div>
-          <div>Commands: ${task.evidence.commandsRun?.join(', ') || 'N/A'}</div>
-          <div>Proof: ${task.evidence.testProof || task.evidence.outputSnippet || 'Provided'}</div>
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-bold text-slate-100">${escapeHtml(task.title)}</h3>
+        ${getTypeBadge(task.type)}
+      </div>
+
+      ${ev ? `
+        <div class="bg-card p-3 rounded-lg border border-subtle text-xs space-y-2.5">
+          <div class="text-slate-400 text-[10.5px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+            <i data-lucide="terminal" class="w-3.5 h-3.5 text-indigo-400"></i> Verification & Proof of Work
+          </div>
+          ${ev.commandsRun && ev.commandsRun.length > 0 ? `
+            <div>
+              <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Commands Executed:</div>
+              <pre class="bg-black/60 p-2.5 rounded border border-borderSubtle text-emerald-400 font-mono text-[11px] overflow-x-auto select-text">${ev.commandsRun.map((c) => `$ ${escapeHtml(c)}`).join('\n')}</pre>
+            </div>
+          ` : ''}
+          ${ev.filesModified && ev.filesModified.length > 0 ? `
+            <div>
+              <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Files Modified:</div>
+              <div class="flex flex-wrap gap-1">
+                ${ev.filesModified.map((f) => `<span class="inline-code font-mono text-[11px] text-slate-300 bg-surface border border-borderDefault px-1.5 py-0.5 rounded">${escapeHtml(f)}</span>`).join('')}
+              </div>
+            </div>
+          ` : ''}
+          ${ev.testProof || ev.outputSnippet ? `
+            <div>
+              <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Test Output / Logs:</div>
+              <pre class="bg-black/40 p-2.5 rounded border border-borderSubtle text-slate-300 font-mono text-[11px] max-h-40 overflow-y-auto select-text leading-tight">${escapeHtml(ev.testProof || ev.outputSnippet)}</pre>
+            </div>
+          ` : ''}
+          ${git ? `
+            <div class="flex items-center gap-3 pt-1 text-[11px] text-slate-400 font-mono border-t border-borderSubtle">
+              <span>Commit: <strong class="text-slate-200">${escapeHtml(git.commitHash || 'N/A')}</strong></span>
+              <span>Branch: <strong class="text-slate-200">${escapeHtml(git.branch || 'main')}</strong></span>
+            </div>
+          ` : ''}
         </div>
       ` : ''}
 
-      ${task.droppedReason ? `<div class="text-xs text-rose-300 italic mb-3">Reason: "${task.droppedReason}"</div>` : ''}
+      ${task.droppedReason ? `<div class="p-2.5 rounded bg-rose-950/25 border border-rose-900/40 text-xs text-rose-300 italic">Dropped Reason: "${escapeHtml(task.droppedReason)}"</div>` : ''}
 
-      <div class="flex items-center justify-end gap-2 border-t border-subtle pt-3">
-        ${isCompleted ? `
-          <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
-            <i data-lucide="ban" class="w-3 h-3"></i> Reject with Reason
-          </button>
-          <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
-            <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
-          </button>
-        ` : `
-          <button class="btn-secondary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
-            <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Issue
-          </button>
-        `}
+      <div class="flex items-center justify-between border-t border-subtle pt-3">
+        <button class="btn-secondary text-xs" onclick="openInspector('${task.id}')">
+          <i data-lucide="eye" class="w-3.5 h-3.5"></i> Inspect Details
+        </button>
+        <div class="flex items-center gap-2">
+          ${isCompleted ? `
+            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
+              <i data-lucide="ban" class="w-3.5 h-3.5"></i> Reject
+            </button>
+            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
+              <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
+            </button>
+          ` : `
+            <button class="btn-secondary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
+              <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Issue
+            </button>
+          `}
+        </div>
       </div>
     `;
 
