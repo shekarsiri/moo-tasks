@@ -52,12 +52,13 @@ jobs:
         run: |
           npm version ${{ inputs.bump }} -m "chore(release): %s [skip ci]"
 
-      - name: Push commit and tag to GitHub
-        run: |
-          git push origin main --follow-tags
-
       - name: Publish to npm
         run: |
           npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Push git tag and commit
+        run: |
+          git push origin --tags
+          git push origin main || echo "::warning::Direct commit push to main blocked by branch protection. Git tag was pushed successfully."
