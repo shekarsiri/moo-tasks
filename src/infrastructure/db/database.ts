@@ -102,6 +102,15 @@ export class DatabaseManager {
       this.close();
     }
 
+    const dir = path.dirname(path.resolve(targetDbPath));
+    if (!fs.existsSync(dir)) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+      } catch {
+        // ignore if already created
+      }
+    }
+
     this.activeDbPath = targetDbPath;
     const db = new Database(targetDbPath);
     this.configurePragmas(db);
