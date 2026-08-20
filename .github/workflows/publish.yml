@@ -50,7 +50,7 @@ jobs:
 
       - name: Bump version and create git tag
         run: |
-          npm version ${{ inputs.bump }} -m "chore(release): %s [skip ci]"
+          npm version ${{ inputs.bump }} --force -m "chore(release): %s [skip ci]"
 
       - name: Publish to npm
         run: |
