@@ -123,6 +123,9 @@ export interface Task {
   reopenCount: number;
   maxAttemptsAllowed: number;
 
+  // Dependencies (predecessors this task blocks on)
+  dependsOnTaskIds?: string[];
+
   // Blocking details
   blockedReason?: string;
   humanQuestion?: string;

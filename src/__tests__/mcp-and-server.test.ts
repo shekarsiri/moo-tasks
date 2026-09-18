@@ -413,6 +413,62 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(notFoundRes.statusCode).toBe(404);
       expect(JSON.parse(notFoundRes.payload).success).toBe(false);
     });
+
+    it('hydrates dependsOnTaskIds in list responses for REST and MCP consumers', async () => {
+      const app = buildServer(container);
+
+      // Two predecessor tasks with no dependencies
+      const rootRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks',
+        payload: { title: 'Dependency Root Task', acceptanceCriteria: 'Root criteria' },
+      });
+      expect(rootRes.statusCode).toBe(200);
+      const rootId = JSON.parse(rootRes.payload).task.id;
+
+      const secondRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks',
+        payload: { title: 'Second Predecessor Task', acceptanceCriteria: 'Predecessor criteria' },
+      });
+      expect(secondRes.statusCode).toBe(200);
+      const secondId = JSON.parse(secondRes.payload).task.id;
+
+      // Dependent task with two predecessors (natively persisted via dependsOnTaskIds)
+      const childRes = await app.inject({
+        method: 'POST',
+        url: '/api/tasks',
+        payload: {
+          title: 'Dependent Task',
+          acceptanceCriteria: 'Child criteria',
+          dependsOnTaskIds: [rootId, secondId],
+        },
+      });
+      expect(childRes.statusCode).toBe(200);
+      const childBody = JSON.parse(childRes.payload);
+      expect(childBody.task.status).toBe('blocked-on-dependency');
+
+      // REST: GET /api/tasks must expose edges for the DAG graph view
+      const listRes = await app.inject({ method: 'GET', url: '/api/tasks' });
+      expect(listRes.statusCode).toBe(200);
+      const listTasks = JSON.parse(listRes.payload).tasks;
+      const childTask = listTasks.find((t: { id: string }) => t.id === childBody.task.id);
+      expect(childTask.dependsOnTaskIds).toContain(rootId);
+      expect(childTask.dependsOnTaskIds).toContain(secondId);
+      expect(listTasks.find((t: { id: string }) => t.id === rootId).dependsOnTaskIds).toEqual([]);
+
+      // MCP: moo_list_tasks must expose the same edges (agents plan against it)
+      const server = setupMcpServer(container);
+      const callTool = (server as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+      const mcpRes = await callTool({
+        method: 'tools/call',
+        params: { name: 'moo_list_tasks', arguments: {} },
+      });
+      const mcpTasks = JSON.parse(mcpRes.content[0].text).tasks;
+      const mcpChild = mcpTasks.find((t: { id: string }) => t.id === childBody.task.id);
+      expect(mcpChild.dependsOnTaskIds).toContain(rootId);
+      expect(mcpChild.dependsOnTaskIds).toContain(secondId);
+    });
   });
 
   describe('Defensive MCP Input Coercion & CLI Commands', () => {
