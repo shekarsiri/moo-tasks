@@ -1,6 +1,6 @@
 {
   "name": "moo-tasks",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Robust, agentic task orchestration & management engine with MCP, Web UI, and human-in-the-loop controls",
   "type": "module",
   "bin": {
@@ -26,7 +26,7 @@
     "AGENTS.md"
   ],
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc && node scripts/build-ui.js",
@@ -57,7 +57,7 @@
   "dependencies": {
     "@fastify/static": "^7.0.4",
     "@modelcontextprotocol/sdk": "^1.6.1",
-    "better-sqlite3": "^11.8.1",
+    "better-sqlite3": "^13.0.3",
     "commander": "^13.1.0",
     "fastify": "^4.28.1",
     "picocolors": "^1.1.1",

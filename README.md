@@ -85,6 +85,8 @@ Standard AI coding agents often suffer from:
 
 ## 🚀 Quick Start & Installation
 
+Requires **Node.js 22 or newer**. SQLite ships as a prebuilt binary, so no compiler is needed.
+
 ### Option A: Install Globally (Recommended for `moo` command)
 Install `moo-tasks` globally to access the short `moo` command anywhere:
 ```bash
