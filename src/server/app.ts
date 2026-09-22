@@ -1,4 +1,4 @@
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
@@ -6,6 +6,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { ServiceContainer } from '../services/index.js';
 import { DatabaseManager } from '../infrastructure/db/database.js';
+import { Workspace } from '../domain/types.js';
 import {
   DomainError,
   GoalNotFoundError,
@@ -250,6 +251,13 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
 
   // --- API Routes ---
 
+  /** The workspace this request is about: the tab's own selection, else the server's default. */
+  const wsOf = (req: FastifyRequest): Workspace => {
+    const id = req.headers['x-moo-workspace'];
+    return (typeof id === 'string' && id && container.workspaceRepo.findById(id)) || container.activeWorkspace;
+  };
+
+
   // Workspaces
   app.get('/api/workspaces', async (req, reply) => {
     const workspaces = container.workspaceService.listWorkspaces();
@@ -265,10 +273,10 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
         activeGoals: goals.filter((g) => g.status === 'active').length,
         totalTasks: tasks.length,
         openTasks: openTasks.length,
-        isActive: ws.id === container.activeWorkspace.id,
+        isActive: ws.id === wsOf(req).id,
       };
     });
-    return { success: true, activeWorkspace: container.activeWorkspace, workspaces: detailed };
+    return { success: true, activeWorkspace: wsOf(req), workspaces: detailed };
   });
 
   app.post('/api/workspaces', async (req, reply) => {
@@ -329,21 +337,17 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     if (!ws) {
       return reply.status(404).send({ success: false, error: 'Workspace not found' });
     }
-    container.activeWorkspace = ws;
-    container.projectPath = ws.rootPath;
-    broadcast('workspaces_switched', { activeWorkspace: ws });
-    broadcast('goals_updated', { activeWorkspace: ws });
-    broadcast('tasks_updated', { activeWorkspace: ws });
+    // Each tab keeps its own selection (sent back as X-Moo-Workspace); nothing shared changes here.
     return { success: true, activeWorkspace: ws };
   });
 
   // Goals
   app.get('/api/goals', async (req, reply) => {
     const { status, workspaceId } = req.query as any;
-    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || container.activeWorkspace.id);
+    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || wsOf(req).id);
     const goals = targetWsId
       ? container.goalService.listGoals(undefined, status, targetWsId)
-      : container.goalService.listGoals(container.projectPath, status);
+      : container.goalService.listGoals(wsOf(req).rootPath, status);
     const summaries = goals.map((g) => container.goalService.getGoalStatus(g.id));
     return { success: true, goals: summaries };
   });
@@ -353,10 +357,10 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const goal = container.goalService.createGoal(
       title,
       verbatimPrompt,
-      container.projectPath,
+      wsOf(req).rootPath,
       maxOpenTasksCap,
       description,
-      workspaceId || container.activeWorkspace.id
+      workspaceId || wsOf(req).id
     );
     broadcast('goals_updated', { goal });
     return { success: true, goal };
@@ -421,13 +425,14 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const results = container.searchService.search(q || '', {
       type: type || 'all',
       limit: limit ? parseInt(limit, 10) : 20,
+      workspaceId: wsOf(req).id,
     });
     return { success: true, ...results };
   });
 
   // Diagnostics & Stall Detection
   app.get('/api/diagnostics/stalls', async (req, reply) => {
-    const warnings = container.sessionService.detectAgentStallsAndThrashing(container.projectPath);
+    const warnings = container.sessionService.detectAgentStallsAndThrashing(wsOf(req).rootPath, wsOf(req).id);
     return { success: true, count: warnings.length, warnings };
   });
 
@@ -436,7 +441,7 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const query = req.query as any;
     const filter = { ...query };
     if (!filter.workspaceId && filter.workspaceId !== 'all') {
-      filter.workspaceId = container.activeWorkspace.id;
+      filter.workspaceId = wsOf(req).id;
     } else if (filter.workspaceId === 'all') {
       delete filter.workspaceId;
     }
@@ -447,7 +452,7 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   app.post('/api/tasks', async (req, reply) => {
     const body = req.body as any;
     if (!body.workspaceId) {
-      body.workspaceId = container.activeWorkspace.id;
+      body.workspaceId = wsOf(req).id;
     }
     const res = container.taskLifecycleService.createTask(body, 'human', 'human');
     broadcast('tasks_updated', { task: res.task, action: 'created' });
@@ -474,7 +479,7 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
 
   app.delete('/api/tasks/:id', async (req, reply) => {
     const { id } = req.params as any;
-    const deleted = container.taskRepo.delete(id);
+    const deleted = container.taskLifecycleService.deleteTask(id);
     broadcast('tasks_updated', { action: 'deleted', taskId: id });
     return { success: deleted };
   });
@@ -568,10 +573,11 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const result = container.markdownImportService.importMarkdown(content, {
       goalId,
       goalTitle,
-      projectPath: container.projectPath,
+      projectPath: wsOf(req).rootPath,
       sequentialPhases: sequentialPhases !== false,
       authorId: 'human-web',
       authorType: 'human',
+      workspaceId: wsOf(req).id,
     });
     broadcast('goals_updated', { action: 'imported', goalId: result.goal?.id });
     broadcast('tasks_updated', { action: 'imported', count: result.importedCount });
@@ -617,7 +623,7 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   });
 
   app.get('/api/human/inbox', async (req, reply) => {
-    const inbox = container.humanCollabService.getHumanInbox();
+    const inbox = container.humanCollabService.getHumanInbox(undefined, wsOf(req).id);
     return { success: true, total: inbox.length, inbox };
   });
 
@@ -632,10 +638,10 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   // Decisions
   app.get('/api/decisions', async (req, reply) => {
     const { status, tag, workspaceId } = req.query as any;
-    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || container.activeWorkspace.id);
+    const targetWsId = workspaceId === 'all' ? undefined : (workspaceId || wsOf(req).id);
     const decisions = targetWsId
       ? container.decisionService.listDecisions(undefined, status, tag, targetWsId)
-      : container.decisionService.listDecisions(container.projectPath, status, tag);
+      : container.decisionService.listDecisions(wsOf(req).rootPath, status, tag);
     return { success: true, decisions };
   });
 
@@ -647,8 +653,8 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
       choice,
       rationale,
       tags,
-      workspaceId: workspaceId || container.activeWorkspace.id,
-      projectPath: container.projectPath,
+      workspaceId: workspaceId || wsOf(req).id,
+      projectPath: wsOf(req).rootPath,
       authorId: 'human',
       authorType: 'human',
     });
@@ -667,8 +673,8 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
         choice,
         rationale,
         tags,
-        workspaceId: container.activeWorkspace.id,
-        projectPath: container.projectPath,
+        workspaceId: wsOf(req).id,
+        projectPath: wsOf(req).rootPath,
         authorId: 'human',
         authorType: 'human',
       },
@@ -704,9 +710,9 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   app.get('/api/project', async (req, reply) => {
     return {
       success: true,
-      projectName: container.activeWorkspace.name || path.basename(container.projectPath),
-      projectPath: container.projectPath,
-      workspace: container.activeWorkspace,
+      projectName: wsOf(req).name || path.basename(wsOf(req).rootPath),
+      projectPath: wsOf(req).rootPath,
+      workspace: wsOf(req),
     };
   });
 
@@ -715,26 +721,26 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const { filePaths, files } = req.body as any;
     const raw = filePaths || files || [];
     const list = Array.isArray(raw) ? raw : [raw].filter(Boolean);
-    const summary = container.sessionService.getFileContext(list, container.projectPath);
+    const summary = container.sessionService.getFileContext(list, wsOf(req).rootPath, wsOf(req).id);
     return { success: true, ...summary };
   });
 
   app.get('/api/context/files', async (req, reply) => {
     const { paths } = req.query as any;
     const list = paths ? paths.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
-    const summary = container.sessionService.getFileContext(list, container.projectPath);
+    const summary = container.sessionService.getFileContext(list, wsOf(req).rootPath, wsOf(req).id);
     return { success: true, ...summary };
   });
 
   // Resume & Export
   app.get('/api/resume', async (req, reply) => {
-    const summary = container.sessionService.whereDidILeaveOff(container.projectPath);
+    const summary = container.sessionService.whereDidILeaveOff(wsOf(req).rootPath, undefined, wsOf(req).id);
     return { success: true, summary };
   });
 
   app.get('/api/export', async (req, reply) => {
     const { format } = req.query as any;
-    const data = container.housekeepingService.exportProject(container.projectPath, format || 'markdown');
+    const data = container.housekeepingService.exportProject(wsOf(req).rootPath, format || 'markdown', wsOf(req).id);
     return { success: true, content: data };
   });
 

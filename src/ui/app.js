@@ -1,5 +1,35 @@
 // Moo Tasks Ultra-Modern Frontend Engine
 
+// Each tab views its own workspace: the choice lives in sessionStorage and rides along on every
+// API call as X-Moo-Workspace, so switching in one tab never changes what another tab shows.
+const TAB_WORKSPACE_KEY = 'moo_tab_workspace';
+function getTabWorkspaceId() {
+  try {
+    return sessionStorage.getItem(TAB_WORKSPACE_KEY);
+  } catch {
+    return null;
+  }
+}
+function setTabWorkspaceId(id) {
+  try {
+    if (id) sessionStorage.setItem(TAB_WORKSPACE_KEY, id);
+    else sessionStorage.removeItem(TAB_WORKSPACE_KEY);
+  } catch {
+    // storage unavailable: the tab follows the server default
+  }
+}
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === 'string' ? input : input.url;
+  const wsId = getTabWorkspaceId();
+  if (wsId && url.startsWith('/api/')) {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('X-Moo-Workspace')) headers.set('X-Moo-Workspace', wsId);
+    init = { ...init, headers };
+  }
+  return nativeFetch(input, init);
+};
+
 const defaultDisplayProperties = {
   id: true,
   status: true,
@@ -149,7 +179,11 @@ function renderMarkdown(text) {
       html = html.replace(/<input\s+type="checkbox"\s+disabled(?:\s+checked)?/g, (match) => {
         return match.replace(' disabled', '');
       });
-      return html;
+      // Sanitize: markdown comes from agents and must never execute script.
+      // Fail closed to escaped plain text when DOMPurify is unavailable.
+      if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+        return window.DOMPurify.sanitize(html);
+      }
     } catch {
       // fallback
     }
@@ -187,9 +221,9 @@ function htmlToMarkdown(html) {
       // fallback
     }
   }
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  return div.innerText || '';
+  // Parse in an inert document so embedded handlers (e.g. <img onerror>) never run
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body.textContent || '';
 }
 
 // Inline Save Status Helper
@@ -312,6 +346,12 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// Encode a value as a JS string literal safe to embed inside a double-quoted
+// inline event handler attribute (e.g. onclick="fn(${jsArg(id)})").
+function jsArg(value) {
+  return escapeHtml(JSON.stringify(value === null || value === undefined ? '' : String(value)));
+}
+
 // Batch Actions & Shortcuts References
 const batchActionBar = document.getElementById('batchActionBar');
 const batchSelectedCount = document.getElementById('batchSelectedCount');
@@ -381,7 +421,7 @@ function showToast(message, type = 'info') {
   if (type === 'success') iconName = 'check-circle';
   if (type === 'error') iconName = 'alert-circle';
 
-  toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4"></i><span class="font-medium">${message}</span>`;
+  toast.innerHTML = `<i data-lucide="${iconName}" class="w-4 h-4"></i><span class="font-medium">${escapeHtml(message)}</span>`;
   toastContainer.appendChild(toast);
   refreshLucideIcons();
 
@@ -593,18 +633,18 @@ function renderWorkspacesDropdown() {
           isActive
             ? 'bg-surfaceHover text-cyan-400 font-semibold'
             : 'text-slate-300 hover:bg-surfaceHover hover:text-white'
-        }" onclick="switchWorkspace('${ws.id}')" title="${escapeHtml(ws.rootPath)}">
+        }" onclick="switchWorkspace(${jsArg(ws.id)})" title="${escapeHtml(ws.rootPath)}">
           <div class="flex items-center gap-2 min-w-0 truncate">
             <span class="w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-cyan-400' : 'bg-slate-600'}"></span>
             <span class="truncate">${escapeHtml(ws.name)}</span>
           </div>
           <div class="flex items-center gap-1.5 shrink-0 ml-2">
-            <span class="text-[10px] text-slate-500 font-mono">${ws.openTasks || 0} open</span>
+            <span class="text-[10px] text-slate-500 font-mono">${escapeHtml(ws.openTasks || 0)} open</span>
             <div class="opacity-0 group-hover:opacity-100 flex items-center gap-1 transition-opacity">
-              <button class="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50" onclick="editWorkspace(event, '${ws.id}')" title="Rename display name">
+              <button class="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/50" onclick="editWorkspace(event, ${jsArg(ws.id)})" title="Rename display name">
                 <i data-lucide="pencil" class="w-3 h-3"></i>
               </button>
-              <button class="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-slate-700/50" onclick="deleteWorkspace(event, '${ws.id}')" title="Unregister workspace">
+              <button class="p-1 text-slate-400 hover:text-red-400 rounded hover:bg-slate-700/50" onclick="deleteWorkspace(event, ${jsArg(ws.id)})" title="Unregister workspace">
                 <i data-lucide="trash-2" class="w-3 h-3"></i>
               </button>
             </div>
@@ -707,6 +747,7 @@ window.switchWorkspace = async (workspaceId) => {
     const data = await res.json();
     if (data.success) {
       state.activeWorkspace = data.activeWorkspace;
+      setTabWorkspaceId(data.activeWorkspace.id);
       const wsDropdown = document.getElementById('workspaceDropdownMenu');
       if (wsDropdown) wsDropdown.classList.add('hidden');
       await refreshAll();
@@ -1114,7 +1155,7 @@ function renderActiveFilterChips() {
       'Priority',
       `<i data-lucide="flag" class="w-3 h-3 text-rose-400"></i>`,
       pCapital,
-      `<span class="priority-signal ${state.filterPriority}"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span></span>`,
+      `<span class="priority-signal ${escapeHtml(state.filterPriority)}"><span class="priority-signal-bar bar-1 filled"></span><span class="priority-signal-bar bar-2 filled"></span></span>`,
       () => {
         state.filterPriority = '';
         renderActiveFilterChips();
@@ -1719,7 +1760,7 @@ function getTypeBadge(type) {
     case 'security':
       return `<span class="type-badge type-security" title="Security"><i data-lucide="shield-alert" class="w-3 h-3"></i><span>sec</span></span>`;
     default:
-      return `<span class="type-badge type-feature"><i data-lucide="tag" class="w-3 h-3"></i><span>${t}</span></span>`;
+      return `<span class="type-badge type-feature"><i data-lucide="tag" class="w-3 h-3"></i><span>${escapeHtml(t)}</span></span>`;
   }
 }
 
@@ -2208,18 +2249,18 @@ function renderListView(tasks) {
     groupEl.className = 'issue-group';
 
     groupEl.innerHTML = `
-      <div class="issue-group-header" onclick="toggleGroupCollapse('${grp.id}')">
+      <div class="issue-group-header" onclick="toggleGroupCollapse(${jsArg(grp.id)})">
         <div class="issue-group-left">
           <span class="issue-group-toggle">
             <svg class="w-3 h-3 transition-transform ${isCollapsed ? '-rotate-90' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
           </span>
           ${grp.icon || ''}
-          <span class="issue-group-title">${grp.title}</span>
+          <span class="issue-group-title">${escapeHtml(grp.title)}</span>
           <span class="issue-group-count">${grp.tasks.length}</span>
-          ${grp.dateRange ? `<span class="issue-group-date-range">${grp.dateRange}</span>` : ''}
+          ${grp.dateRange ? `<span class="issue-group-date-range">${escapeHtml(grp.dateRange)}</span>` : ''}
         </div>
         ${grp.showAdd ? `
-          <button class="issue-group-add-btn" onclick="event.stopPropagation(); grpAddHandler('${grp.id}')" title="Add issue to ${grp.title}">
+          <button class="issue-group-add-btn" onclick="event.stopPropagation(); grpAddHandler(${jsArg(grp.id)})" title="Add issue to ${escapeHtml(grp.title)}">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
         ` : ''}
@@ -2233,9 +2274,9 @@ function renderListView(tasks) {
       const emptyRow = document.createElement('div');
       emptyRow.className = 'px-8 py-6 text-xs text-slate-500 flex items-center justify-between border-b border-borderSubtle/50';
       emptyRow.innerHTML = `
-        <span class="italic">No issues in ${grp.title.toLowerCase()}</span>
+        <span class="italic">No issues in ${escapeHtml(grp.title.toLowerCase())}</span>
         ${grp.showAdd ? `
-          <button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface hover:bg-surfaceHover border border-borderDefault text-slate-300 text-xs transition" onclick="event.stopPropagation(); grpAddHandler('${grp.id}')">
+          <button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface hover:bg-surfaceHover border border-borderDefault text-slate-300 text-xs transition" onclick="event.stopPropagation(); grpAddHandler(${jsArg(grp.id)})">
             <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             <span>Add issue</span>
           </button>
@@ -2263,16 +2304,16 @@ function renderListView(tasks) {
 
         row.innerHTML = `
           <div class="issue-row-left">
-            <input type="checkbox" class="row-select-checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleTaskSelection('${task.id}', this.checked)" title="Select issue">
+            <input type="checkbox" class="row-select-checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleTaskSelection(${jsArg(task.id)}, this.checked)" title="Select issue">
             ${showPriority ? `<div class="issue-priority-icon">${getPrioritySignal(task.priority)}</div>` : ''}
-            ${showId ? `<span class="issue-key">${formatIssueKey(task.id)}</span>` : ''}
+            ${showId ? `<span class="issue-key">${escapeHtml(formatIssueKey(task.id))}</span>` : ''}
             ${showStatus ? `<div class="issue-status-icon">${getStatusIcon(task.status, isBacklog)}</div>` : ''}
             ${getTypeBadge(task.type)}
             <div class="issue-title-container">
               <span class="issue-title-text">${formatTitleWithCode(task.title)}</span>
               ${showProject && goal ? `<span class="issue-breadcrumb">› ${escapeHtml(goal.title)}</span>` : ''}
             </div>
-            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${task.attemptCount} attempts logged">⚠️ ${task.attemptCount} att</span>` : ''}
+            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${escapeHtml(task.attemptCount)} attempts logged">⚠️ ${escapeHtml(task.attemptCount)} att</span>` : ''}
             ${getSubissueProgressPill(task)}
           </div>
           <div class="issue-row-right">
@@ -2348,7 +2389,7 @@ function renderBoardView(tasks) {
         </div>
         <div class="flex items-center gap-1.5">
           <span class="font-mono text-slate-500 text-[10px]">${colTasks.length}</span>
-          <button class="board-column-collapse-btn" onclick="event.stopPropagation(); toggleBoardColumn('${col.status}')" title="${isCollapsed ? 'Expand column' : 'Collapse column'}">
+          <button class="board-column-collapse-btn" onclick="event.stopPropagation(); toggleBoardColumn(${jsArg(col.status)})" title="${isCollapsed ? 'Expand column' : 'Collapse column'}">
             <i data-lucide="${isCollapsed ? 'chevron-right' : 'chevron-left'}" class="w-3.5 h-3.5"></i>
           </button>
         </div>
@@ -2381,22 +2422,22 @@ function renderBoardView(tasks) {
       card.innerHTML = `
         <div class="board-card-header">
           <div class="flex items-center gap-1 font-mono text-[11px] text-slate-500">
-            <span>${formatIssueKey(task.id)}</span>
+            <span>${escapeHtml(formatIssueKey(task.id))}</span>
             ${isStalled ? `<i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400" title="Stalled"></i>` : ''}
           </div>
           <div class="flex items-center gap-1.5">
-            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${task.attemptCount} attempts logged">⚠️ ${task.attemptCount}</span>` : ''}
+            ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${escapeHtml(task.attemptCount)} attempts logged">⚠️ ${escapeHtml(task.attemptCount)}</span>` : ''}
             ${getTypeBadge(task.type)}
             ${getPrioritySignal(task.priority)}
           </div>
         </div>
-        <div class="board-card-title">${task.title}</div>
+        <div class="board-card-title">${escapeHtml(task.title)}</div>
         ${task.tags && task.tags.length > 0 ? `<div class="flex items-center gap-1 flex-wrap mb-2">${renderTagBadges(task.tags)}</div>` : ''}
         ${hasActiveLease ? `
           <div class="mb-2">
-            <span class="lease-countdown-badge" data-lease-expires="${task.leaseExpiresAt}" title="Active agent lease">
+            <span class="lease-countdown-badge" data-lease-expires="${escapeHtml(task.leaseExpiresAt)}" title="Active agent lease">
               <span class="lease-pulse-dot"></span>
-              <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
+              <span class="lease-text">${escapeHtml(formatLeaseRemaining(task.leaseExpiresAt))}</span>
             </span>
           </div>
         ` : ''}
@@ -2619,15 +2660,15 @@ async function renderGraphView(tasks) {
         <div class="flex items-center justify-between mb-1">
           <div class="flex items-center gap-1.5 font-mono text-[10px] text-slate-400">
             <span class="status-dot ${cfg.class}"></span>
-            <span class="font-semibold text-slate-300">${task.id}</span>
+            <span class="font-semibold text-slate-300">${escapeHtml(task.id)}</span>
           </div>
-          <span class="text-[9.5px] uppercase font-mono px-1.5 py-0.5 rounded border ${priorityColor}">${task.priority}</span>
+          <span class="text-[9.5px] uppercase font-mono px-1.5 py-0.5 rounded border ${priorityColor}">${escapeHtml(task.priority)}</span>
         </div>
-        <div class="text-[12px] font-medium text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition-colors">${task.title}</div>
+        <div class="text-[12px] font-medium text-slate-200 line-clamp-1 group-hover:text-indigo-300 transition-colors">${escapeHtml(task.title)}</div>
       </div>
       <div class="flex items-center justify-between text-[10px] text-slate-500 font-mono pt-1 border-t border-borderSubtle">
-        <span>${cfg.label}</span>
-        ${task.claimedByAgent ? `<span class="text-indigo-400 flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${task.claimedByAgent}</span>` : '<span>Unclaimed</span>'}
+        <span>${escapeHtml(cfg.label)}</span>
+        ${task.claimedByAgent ? `<span class="text-indigo-400 flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${escapeHtml(task.claimedByAgent)}</span>` : '<span>Unclaimed</span>'}
       </div>
     `;
 
@@ -2689,8 +2730,8 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
     drawerBody.innerHTML = `
       <!-- Inline Editable Title -->
       <div class="space-y-1">
-        <input type="text" id="drawerInputTitle" value="${task.title.replace(/"/g, '&quot;')}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveInlineField('${task.id}', 'title', this.value)">
-        <div class="text-[11px] text-slate-500 font-mono flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3"></i> Last changed: ${formatRelativeTime(task.lastStateChangeAt)} (${task.lastStateChangeAt})</div>
+        <input type="text" id="drawerInputTitle" value="${escapeHtml(task.title)}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveInlineField(${jsArg(task.id)}, 'title', this.value)">
+        <div class="text-[11px] text-slate-500 font-mono flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3"></i> Last changed: ${escapeHtml(formatRelativeTime(task.lastStateChangeAt))} (${escapeHtml(task.lastStateChangeAt)})</div>
       </div>
 
       <!-- Properties Grid -->
@@ -2698,8 +2739,8 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         <span class="property-label">Status</span>
         <div class="property-value flex items-center gap-2">
           <span class="status-dot ${cfg.class}"></span>
-          <span class="font-medium">${cfg.label}</span>
-          <select id="drawerStatusSelect" class="filter-select text-xs ml-auto" onchange="handleStatusChangePrompt('${task.id}', this.value)">
+          <span class="font-medium">${escapeHtml(cfg.label)}</span>
+          <select id="drawerStatusSelect" class="filter-select text-xs ml-auto" onchange="handleStatusChangePrompt(${jsArg(task.id)}, this.value)">
             <option value="todo" ${task.status === 'todo' ? 'selected' : ''}>Todo</option>
             <option value="doing" ${task.status === 'doing' ? 'selected' : ''}>In Progress</option>
             <option value="blocked-on-dependency" ${task.status === 'blocked-on-dependency' ? 'selected' : ''}>Blocked (Dependency)</option>
@@ -2712,7 +2753,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         <span class="property-label">Backlog / Queue</span>
         <div class="property-value flex items-center gap-2">
           <label class="toggle-switch">
-            <input type="checkbox" ${task.isDeferred ? 'checked' : ''} onchange="handleSaveInlineField('${task.id}', 'isDeferred', this.checked)">
+            <input type="checkbox" ${task.isDeferred ? 'checked' : ''} onchange="handleSaveInlineField(${jsArg(task.id)}, 'isDeferred', this.checked)">
             <span class="toggle-slider"></span>
           </label>
           <span class="text-xs text-slate-300">${task.isDeferred ? 'In Backlog (Deferred)' : 'In Active Queue'}</span>
@@ -2720,7 +2761,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
 
         <span class="property-label">Type</span>
         <div class="property-value flex items-center gap-2">
-          <select class="filter-select text-xs" onchange="handleSaveInlineField('${task.id}', 'type', this.value)">
+          <select class="filter-select text-xs" onchange="handleSaveInlineField(${jsArg(task.id)}, 'type', this.value)">
             <option value="feature" ${(task.type || 'feature') === 'feature' ? 'selected' : ''}>✨ Feature</option>
             <option value="bug" ${task.type === 'bug' ? 'selected' : ''}>🐛 Bug</option>
             <option value="refactor" ${task.type === 'refactor' ? 'selected' : ''}>♻️ Refactor</option>
@@ -2734,7 +2775,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
 
         <span class="property-label">Priority</span>
         <div class="property-value flex items-center gap-2">
-          <select class="filter-select text-xs capitalize" onchange="handleSaveInlineField('${task.id}', 'priority', this.value)">
+          <select class="filter-select text-xs capitalize" onchange="handleSaveInlineField(${jsArg(task.id)}, 'priority', this.value)">
             <option value="low" ${task.priority === 'low' ? 'selected' : ''}>Low</option>
             <option value="medium" ${task.priority === 'medium' ? 'selected' : ''}>Medium</option>
             <option value="high" ${task.priority === 'high' ? 'selected' : ''}>High</option>
@@ -2744,23 +2785,23 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
 
         <span class="property-label">Tags</span>
         <div class="property-value flex items-center gap-1.5 flex-wrap">
-          <input type="text" value="${(task.tags || []).join(', ')}" placeholder="e.g. auth, frontend" class="input-field text-xs py-0.5 px-2 w-full font-mono" onchange="handleSaveInlineTags('${task.id}', this.value)">
+          <input type="text" value="${escapeHtml((task.tags || []).join(', '))}" placeholder="e.g. auth, frontend" class="input-field text-xs py-0.5 px-2 w-full font-mono" onchange="handleSaveInlineTags(${jsArg(task.id)}, this.value)">
         </div>
 
         <span class="property-label">Linked Goal</span>
         <div class="property-value">
-          <select class="filter-select text-xs w-full" onchange="handleSaveInlineField('${task.id}', 'goalId', this.value || null)">
+          <select class="filter-select text-xs w-full" onchange="handleSaveInlineField(${jsArg(task.id)}, 'goalId', this.value || null)">
             <option value="">(None / Scope Drift)</option>
-            ${state.goals.map((g) => `<option value="${g.goal.id}" ${task.goalId === g.goal.id ? 'selected' : ''}>${g.goal.title}</option>`).join('')}
+            ${state.goals.map((g) => `<option value="${escapeHtml(g.goal.id)}" ${task.goalId === g.goal.id ? 'selected' : ''}>${escapeHtml(g.goal.title)}</option>`).join('')}
           </select>
         </div>
 
         <span class="property-label">Assigned Agent</span>
         <div class="property-value flex items-center gap-2">
           ${renderAgentAvatar(task.claimedByAgent, 'sm')}
-          <input type="text" value="${task.claimedByAgent ? escapeHtml(task.claimedByAgent) : ''}" placeholder="e.g. antigravity, vibe-agent" class="input-field text-xs py-0.5 px-2 flex-1 font-mono" onchange="handleSaveInlineField('${task.id}', 'claimedByAgent', this.value.trim() || null)">
+          <input type="text" value="${task.claimedByAgent ? escapeHtml(task.claimedByAgent) : ''}" placeholder="e.g. antigravity, vibe-agent" class="input-field text-xs py-0.5 px-2 flex-1 font-mono" onchange="handleSaveInlineField(${jsArg(task.id)}, 'claimedByAgent', this.value.trim() || null)">
           ${task.claimedByAgent ? `
-            <button class="text-slate-400 hover:text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-surface border border-borderSubtle transition flex items-center justify-center" onclick="handleSaveInlineField('${task.id}', 'claimedByAgent', null)" title="Unassign agent">
+            <button class="text-slate-400 hover:text-rose-400 text-xs px-1.5 py-0.5 rounded hover:bg-surface border border-borderSubtle transition flex items-center justify-center" onclick="handleSaveInlineField(${jsArg(task.id)}, 'claimedByAgent', null)" title="Unassign agent">
               <i data-lucide="x" class="w-3 h-3"></i>
             </button>
           ` : ''}
@@ -2770,9 +2811,9 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           <span class="property-label">Lease Status</span>
           <div class="property-value font-mono text-xs flex items-center gap-2">
             ${new Date(task.leaseExpiresAt) > new Date() ? `
-              <span class="lease-countdown-badge" data-lease-expires="${task.leaseExpiresAt}" title="Real-time agent lease remaining">
+              <span class="lease-countdown-badge" data-lease-expires="${escapeHtml(task.leaseExpiresAt)}" title="Real-time agent lease remaining">
                 <span class="lease-pulse-dot"></span>
-                <span class="lease-text">${formatLeaseRemaining(task.leaseExpiresAt)}</span>
+                <span class="lease-text">${escapeHtml(formatLeaseRemaining(task.leaseExpiresAt))}</span>
               </span>
             ` : `
               <span class="text-rose-400 font-mono text-xs px-2 py-0.5 rounded bg-rose-950/30 border border-rose-800/40">Lease Expired</span>
@@ -2784,7 +2825,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         ${task.declaredFiles && task.declaredFiles.length > 0 ? `
           <span class="property-label">Declared Files</span>
           <div class="property-value font-mono text-xs text-slate-300">
-            ${task.declaredFiles.join(', ')}
+            ${escapeHtml(task.declaredFiles.join(', '))}
           </div>
         ` : ''}
       </div>
@@ -2804,8 +2845,8 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           spellcheck="false"
           data-placeholder="+ Click here to type description directly..."
           class="markdown-body rich-editable-doc text-xs text-slate-200 leading-relaxed"
-          onblur="handleDirectDocBlur(this, '${task.id}', 'description', false)"
-          onkeydown="handleDirectDocKeydown(event, this, '${task.id}', 'description', false)"
+          onblur="handleDirectDocBlur(this, ${jsArg(task.id)}, 'description', false)"
+          onkeydown="handleDirectDocKeydown(event, this, ${jsArg(task.id)}, 'description', false)"
         >${renderMarkdown(task.description || '')}</div>
       </div>
 
@@ -2824,9 +2865,9 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           spellcheck="false"
           data-placeholder="+ Click here to type acceptance criteria directly..."
           class="markdown-body rich-editable-doc text-xs text-slate-200 leading-relaxed"
-          onclick="handleCriteriaCheckboxClick(event, '${task.id}', this)"
-          onblur="handleDirectDocBlur(this, '${task.id}', 'acceptanceCriteria', false)"
-          onkeydown="handleDirectDocKeydown(event, this, '${task.id}', 'acceptanceCriteria', false)"
+          onclick="handleCriteriaCheckboxClick(event, ${jsArg(task.id)}, this)"
+          onblur="handleDirectDocBlur(this, ${jsArg(task.id)}, 'acceptanceCriteria', false)"
+          onkeydown="handleDirectDocKeydown(event, this, ${jsArg(task.id)}, 'acceptanceCriteria', false)"
         >${renderMarkdown(task.acceptanceCriteria || '')}</div>
       </div>
 
@@ -2835,19 +2876,19 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         <div class="bg-surface border border-subtle rounded-lg p-3">
           <div class="flex items-center justify-between mb-2">
             <div class="text-[10px] font-bold tracking-wider uppercase text-slate-400 font-mono">SUBTASKS (${subtasks.length})</div>
-            <button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptAddSubtask('${task.id}')">
+            <button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptAddSubtask(${jsArg(task.id)})">
               <i data-lucide="plus" class="w-3 h-3"></i> Add Subtask
             </button>
           </div>
           <div class="space-y-1.5">
                        ${subtasks.map((s) => `
-              <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between text-xs cursor-pointer hover:border-borderActive" onclick="openInspector('${s.id}')">
+              <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between text-xs cursor-pointer hover:border-borderActive" onclick="openInspector(${jsArg(s.id)})">
                 <div class="flex items-center gap-2">
                   <span class="status-dot ${statusConfig[s.status]?.class || 'todo'}"></span>
-                  <span class="font-mono text-slate-500 text-[10px]">${formatIssueKey(s.id, s)}</span>
-                  <span class="text-slate-200">${s.title}</span>
+                  <span class="font-mono text-slate-500 text-[10px]">${escapeHtml(formatIssueKey(s.id, s))}</span>
+                  <span class="text-slate-200">${escapeHtml(s.title)}</span>
                 </div>
-                <span class="font-mono text-[10px] text-slate-400 uppercase">${s.status}</span>
+                <span class="font-mono text-[10px] text-slate-400 uppercase">${escapeHtml(s.status)}</span>
               </div>
             `).join('')}
           </div>
@@ -2856,7 +2897,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         <div class="bg-surface border border-subtle rounded-lg p-2.5 text-xs text-slate-400 flex items-center gap-1.5">
           <i data-lucide="corner-down-right" class="w-3.5 h-3.5 text-indigo-400"></i>
           <span>Subtask of parent issue: </span>
-          <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector('${task.parentId}')">${formatIssueKey(task.parentId)}</span>
+          <span class="font-mono text-indigo-300 font-medium cursor-pointer hover:underline" onclick="openInspector(${jsArg(task.parentId)})">${escapeHtml(formatIssueKey(task.parentId))}</span>
         </div>
       `}
 
@@ -2869,9 +2910,9 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           <div class="flex items-center gap-1">
             <select id="selectAddBlocker" class="filter-select text-[11px]">
               <option value="">+ Add Blocker...</option>
-              ${candidateBlockers.map((c) => `<option value="${c.id}">${formatIssueKey(c.id, c)} - ${c.title.slice(0, 30)}</option>`).join('')}
+              ${candidateBlockers.map((c) => `<option value="${escapeHtml(c.id)}">${escapeHtml(formatIssueKey(c.id, c))} - ${escapeHtml(c.title.slice(0, 30))}</option>`).join('')}
             </select>
-            <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="handleAddBlocker('${task.id}')">Link</button>
+            <button class="btn-secondary text-[11px] py-0.5 px-2" onclick="handleAddBlocker(${jsArg(task.id)})">Link</button>
           </div>
         </div>
 
@@ -2882,9 +2923,9 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
               ${dependencies.length === 0 ? '<div class="text-[10px] text-slate-500 italic">None</div>' : dependencies.map((d) => {
                 const bTask = state.tasks.find((t) => t.id === d);
                 return `
-                  <div class="dag-node" onclick="openInspector('${d}')">
-                    <span class="text-amber-300 font-bold">${formatIssueKey(d, bTask)}</span>
-                    <span class="text-slate-300 truncate max-w-[130px]">${bTask ? bTask.title : ''}</span>
+                  <div class="dag-node" onclick="openInspector(${jsArg(d)})">
+                    <span class="text-amber-300 font-bold">${escapeHtml(formatIssueKey(d, bTask))}</span>
+                    <span class="text-slate-300 truncate max-w-[130px]">${escapeHtml(bTask ? bTask.title : '')}</span>
                   </div>
                 `;
               }).join('')}
@@ -2893,8 +2934,8 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
             <div class="dag-column">
               <div class="text-[9px] font-mono text-indigo-400 font-bold uppercase">This Task</div>
               <div class="dag-node active-node">
-                <span class="text-indigo-300 font-bold">${formatIssueKey(task.id, task)}</span>
-                <span class="text-slate-100 font-medium truncate max-w-[140px]">${task.title}</span>
+                <span class="text-indigo-300 font-bold">${escapeHtml(formatIssueKey(task.id, task))}</span>
+                <span class="text-slate-100 font-medium truncate max-w-[140px]">${escapeHtml(task.title)}</span>
               </div>
             </div>
             <div class="dag-connector"><i data-lucide="arrow-right" class="w-4 h-4 text-slate-500"></i></div>
@@ -2903,9 +2944,9 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
               ${dependents.length === 0 ? '<div class="text-[10px] text-slate-500 italic">None</div>' : dependents.map((d) => {
                 const depTask = state.tasks.find((t) => t.id === d);
                 return `
-                  <div class="dag-node" onclick="openInspector('${d}')">
-                    <span class="text-blue-300 font-bold">${formatIssueKey(d, depTask)}</span>
-                    <span class="text-slate-300 truncate max-w-[130px]">${depTask ? depTask.title : ''}</span>
+                  <div class="dag-node" onclick="openInspector(${jsArg(d)})">
+                    <span class="text-blue-300 font-bold">${escapeHtml(formatIssueKey(d, depTask))}</span>
+                    <span class="text-slate-300 truncate max-w-[130px]">${escapeHtml(depTask ? depTask.title : '')}</span>
                   </div>
                 `;
               }).join('')}
@@ -2917,8 +2958,8 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           ${dependencies.length === 0 ? `<div class="text-xs text-slate-500 italic">No direct blockers.</div>` : ''}
           ${dependencies.map((d) => `
             <span class="font-mono text-xs px-2 py-0.5 bg-amber-950/40 border border-amber-800/40 text-amber-300 rounded flex items-center gap-1.5">
-              <span class="cursor-pointer hover:underline" onclick="openInspector('${d}')">⚠️ ${formatIssueKey(d)}</span>
-              <button class="text-amber-500 hover:text-rose-400 text-xs ml-1" onclick="handleRemoveBlocker('${task.id}', '${d}')">&times;</button>
+              <span class="cursor-pointer hover:underline" onclick="openInspector(${jsArg(d)})">⚠️ ${escapeHtml(formatIssueKey(d))}</span>
+              <button class="text-amber-500 hover:text-rose-400 text-xs ml-1" onclick="handleRemoveBlocker(${jsArg(task.id)}, ${jsArg(d)})">&times;</button>
             </span>
           `).join('')}
         </div>
@@ -2929,7 +2970,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
               <i data-lucide="zap" class="w-3.5 h-3.5 text-blue-400"></i> BLOCKS DOWNSTREAM
             </div>
             <div class="flex flex-wrap gap-1.5">
-              ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector('${d}')">⚡ ${formatIssueKey(d)}</span>`).join('')}
+              ${dependents.map((d) => `<span class="font-mono text-xs px-2 py-0.5 bg-blue-950/40 border border-blue-800/40 text-blue-300 rounded cursor-pointer hover:underline" onclick="openInspector(${jsArg(d)})">⚡ ${escapeHtml(formatIssueKey(d))}</span>`).join('')}
             </div>
           </div>
         ` : ''}
@@ -2941,7 +2982,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           <div class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 mb-1.5 font-mono flex items-center gap-1">
             <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> VERIFIED EVIDENCE PROOF
           </div>
-          <pre class="text-[11px] font-mono text-slate-300 bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">${JSON.stringify(task.evidence, null, 2)}</pre>
+          <pre class="text-[11px] font-mono text-slate-300 bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">${escapeHtml(JSON.stringify(task.evidence, null, 2))}</pre>
         </div>
       ` : ''}
 
@@ -2949,7 +2990,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
         <!-- Human Question -->
         <div class="bg-purple-950/20 border border-purple-800/40 rounded-lg p-3">
           <div class="text-[10px] font-bold tracking-wider uppercase text-purple-400 mb-1 font-mono flex items-center gap-1">
-            <i data-lucide="help-circle" class="w-3.5 h-3.5"></i> HUMAN QUESTION (${task.humanQuestionType || 'clarification'})
+            <i data-lucide="help-circle" class="w-3.5 h-3.5"></i> HUMAN QUESTION (${escapeHtml(task.humanQuestionType || 'clarification')})
           </div>
           <div class="markdown-body text-xs text-purple-200 mb-2">${renderMarkdown(task.humanQuestion)}</div>
           ${task.humanAnswer ? `
@@ -2957,7 +2998,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
               <span class="font-bold">Answer:</span> ${renderMarkdown(task.humanAnswer)}
             </div>
           ` : `
-            <form onsubmit="handleDrawerAnswer(event, '${task.id}')" class="flex gap-2 mt-2">
+            <form onsubmit="handleDrawerAnswer(event, ${jsArg(task.id)})" class="flex gap-2 mt-2">
               <input type="text" id="drawerAnswerInput" required placeholder="Type answer to resume agent..." class="input-field text-xs flex-1">
               <button type="submit" class="btn-primary text-xs flex items-center gap-1">
                 <i data-lucide="send" class="w-3 h-3"></i> Resume Agent
@@ -2970,27 +3011,27 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
       <!-- Actions Bar -->
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
         <div class="flex gap-2">
-          <button class="btn-secondary text-xs flex items-center gap-1" onclick="promptMergeTask('${task.id}')">
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="promptMergeTask(${jsArg(task.id)})">
             <i data-lucide="git-merge" class="w-3 h-3"></i> Merge into...
           </button>
-          <button class="btn-danger text-xs flex items-center gap-1" onclick="promptDropTask('${task.id}')">
+          <button class="btn-danger text-xs flex items-center gap-1" onclick="promptDropTask(${jsArg(task.id)})">
             <i data-lucide="x-circle" class="w-3 h-3"></i> Drop Issue
           </button>
-          <button class="btn-secondary text-xs flex items-center gap-1" onclick="undoTask('${task.id}')">
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="undoTask(${jsArg(task.id)})">
             <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Undo Status
           </button>
           ${task.status === 'done' || task.status === 'dropped' ? `
-            <button class="btn-primary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
+            <button class="btn-primary text-xs flex items-center gap-1" onclick="reopenTask(${jsArg(task.id)})">
               <i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen Issue
             </button>
           ` : ''}
         </div>
         ${task.status === 'done' && task.verificationState === 'agent_completed' ? `
           <div class="flex gap-2">
-            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
+            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask(${jsArg(task.id)})">
               <i data-lucide="ban" class="w-3 h-3"></i> Reject Proof
             </button>
-            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
+            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask(${jsArg(task.id)})">
               <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
             </button>
           </div>
@@ -3003,7 +3044,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           <i data-lucide="activity" class="w-3.5 h-3.5 text-slate-400"></i> ACTIVITY & AUDIT NOTES (${notes.length})
         </div>
         
-        <form onsubmit="handleAddNote(event, '${task.id}')" class="mb-3 flex gap-2">
+        <form onsubmit="handleAddNote(event, ${jsArg(task.id)})" class="mb-3 flex gap-2">
           <input type="text" id="drawerNoteInput" required placeholder="Add a note or attempt log..." class="input-field text-xs flex-1">
           <button type="submit" class="btn-secondary text-xs">Post</button>
         </form>
@@ -3013,7 +3054,7 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           ${notes.map((n) => `
             <div class="p-2.5 bg-surface rounded border border-subtle">
               <div class="flex items-center justify-between mb-1">
-                <span class="text-indigo-400 font-bold text-[11px] flex items-center gap-1"><i data-lucide="${n.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${n.authorId}</span>
+                <span class="text-indigo-400 font-bold text-[11px] flex items-center gap-1"><i data-lucide="${n.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${escapeHtml(n.authorId)}</span>
                 <span class="text-slate-500 text-[10px]">${new Date(n.createdAt).toLocaleTimeString()}</span>
               </div>
               <div class="text-slate-300 text-xs font-sans markdown-body">${renderMarkdown(n.content)}</div>
@@ -3314,10 +3355,10 @@ function renderGoalsView() {
     card.innerHTML = `
       <div>
         <div class="flex items-center justify-between mb-2">
-          <span class="font-mono text-xs ${isDropped ? 'text-rose-400 bg-rose-950/30' : 'text-indigo-400 bg-indigo-950/30'} px-2 py-0.5 rounded border border-subtle uppercase font-semibold">${g.status}</span>
-          <span class="font-mono text-slate-500 text-xs">${g.id}</span>
+          <span class="font-mono text-xs ${isDropped ? 'text-rose-400 bg-rose-950/30' : 'text-indigo-400 bg-indigo-950/30'} px-2 py-0.5 rounded border border-subtle uppercase font-semibold">${escapeHtml(g.status)}</span>
+          <span class="font-mono text-slate-500 text-xs">${escapeHtml(g.id)}</span>
         </div>
-        <h3 class="text-sm font-bold text-slate-100 mb-1.5">${g.title}</h3>
+        <h3 class="text-sm font-bold text-slate-100 mb-1.5">${escapeHtml(g.title)}</h3>
         <div class="bg-card p-3 rounded border border-subtle text-xs text-slate-300 mb-3 markdown-body">
           ${renderMarkdown(g.verbatimPrompt)}
         </div>
@@ -3337,7 +3378,7 @@ function renderGoalsView() {
         <div class="grid grid-cols-3 gap-2 text-center text-xs mb-3 font-mono">
           <div class="bg-card p-2 rounded border border-subtle">
             <div class="text-slate-500 text-[10px]">Open / Cap</div>
-            <div class="font-bold ${item.hasReachedCap ? 'text-rose-400' : 'text-slate-200'}">${item.openTasks} / ${g.maxOpenTasksCap}</div>
+            <div class="font-bold ${item.hasReachedCap ? 'text-rose-400' : 'text-slate-200'}">${item.openTasks} / ${escapeHtml(g.maxOpenTasksCap)}</div>
           </div>
           <div class="bg-card p-2 rounded border border-subtle">
             <div class="text-slate-500 text-[10px]">Loose Ends</div>
@@ -3357,9 +3398,9 @@ function renderGoalsView() {
             </div>
             <div class="space-y-1 max-h-24 overflow-y-auto">
               ${item.looseEnds.map((t) => `
-                <div class="p-1.5 bg-card rounded border border-subtle text-[11px] flex items-center justify-between cursor-pointer hover:border-borderActive" onclick="openInspector('${t.id}')">
-                  <span class="truncate max-w-[220px] text-slate-300">${t.title}</span>
-                  <span class="font-mono text-[9px] text-amber-400 uppercase">[${t.status}]</span>
+                <div class="p-1.5 bg-card rounded border border-subtle text-[11px] flex items-center justify-between cursor-pointer hover:border-borderActive" onclick="openInspector(${jsArg(t.id)})">
+                  <span class="truncate max-w-[220px] text-slate-300">${escapeHtml(t.title)}</span>
+                  <span class="font-mono text-[9px] text-amber-400 uppercase">[${escapeHtml(t.status)}]</span>
                 </div>
               `).join('')}
             </div>
@@ -3369,17 +3410,17 @@ function renderGoalsView() {
 
       <div class="flex items-center justify-between border-t border-subtle pt-3 mt-1">
         <div class="flex items-center gap-2">
-          <button class="btn-primary text-xs flex items-center gap-1" onclick="viewGoalDetails('${g.id}')">
+          <button class="btn-primary text-xs flex items-center gap-1" onclick="viewGoalDetails(${jsArg(g.id)})">
             <i data-lucide="file-text" class="w-3 h-3"></i> Details & Spec
           </button>
-          <button class="btn-secondary text-xs flex items-center gap-1" onclick="filterByGoalDirect('${g.id}')">
+          <button class="btn-secondary text-xs flex items-center gap-1" onclick="filterByGoalDirect(${jsArg(g.id)})">
             <i data-lucide="layers" class="w-3 h-3"></i> View Issues
           </button>
         </div>
         <div>
           ${g.status === 'active' 
-            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3 h-3"></i> Kill</button>`
-            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen</button>`
+            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal(${jsArg(g.id)})"><i data-lucide="x-circle" class="w-3 h-3"></i> Kill</button>`
+            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal(${jsArg(g.id)})"><i data-lucide="rotate-ccw" class="w-3 h-3"></i> Reopen</button>`
           }
         </div>
       </div>
@@ -3493,23 +3534,23 @@ async function renderGoalDetails(goalId) {
             <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i> All Goals
           </button>
           <div class="flex items-center gap-2">
-            <span class="font-mono text-xs text-slate-500">${g.id}</span>
+            <span class="font-mono text-xs text-slate-500">${escapeHtml(g.id)}</span>
             <span class="font-mono text-xs ${isDropped ? 'text-rose-400 bg-rose-950/30' : isCompleted ? 'text-emerald-400 bg-emerald-950/30' : 'text-indigo-400 bg-indigo-950/30'} px-2 py-0.5 rounded border border-subtle uppercase font-semibold">
-              ${g.status}
+              ${escapeHtml(g.status)}
             </span>
           </div>
         </div>
 
         <div class="flex items-center gap-2">
-          <button class="btn-secondary text-xs flex items-center gap-1.5" onclick="filterByGoalDirect('${g.id}')">
+          <button class="btn-secondary text-xs flex items-center gap-1.5" onclick="filterByGoalDirect(${jsArg(g.id)})">
             <i data-lucide="kanban" class="w-3.5 h-3.5"></i> View in Board
           </button>
-          <button class="btn-primary text-xs flex items-center gap-1.5" onclick="openCreateTaskForGoal('${g.id}')">
+          <button class="btn-primary text-xs flex items-center gap-1.5" onclick="openCreateTaskForGoal(${jsArg(g.id)})">
             <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Issue
           </button>
           ${g.status === 'active'
-            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal('${g.id}')"><i data-lucide="x-circle" class="w-3.5 h-3.5"></i> Kill Goal</button>`
-            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal('${g.id}')"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Goal</button>`
+            ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal(${jsArg(g.id)})"><i data-lucide="x-circle" class="w-3.5 h-3.5"></i> Kill Goal</button>`
+            : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal(${jsArg(g.id)})"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Goal</button>`
           }
         </div>
       </div>
@@ -3518,13 +3559,13 @@ async function renderGoalDetails(goalId) {
       <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
         <div class="space-y-1">
           <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Goal Title</label>
-          <input type="text" value="${g.title.replace(/"/g, '&quot;')}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveGoalField('${g.id}', 'title', this.value)">
+          <input type="text" value="${escapeHtml(g.title)}" class="input-field text-base font-bold text-slate-100 w-full" onchange="handleSaveGoalField(${jsArg(g.id)}, 'title', this.value)">
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
           <div>
             <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Status</label>
-            <select class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField('${g.id}', 'status', this.value)">
+            <select class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField(${jsArg(g.id)}, 'status', this.value)">
               <option value="active" ${g.status === 'active' ? 'selected' : ''}>Active</option>
               <option value="completed" ${g.status === 'completed' ? 'selected' : ''}>Completed</option>
               <option value="dropped" ${g.status === 'dropped' ? 'selected' : ''}>Dropped</option>
@@ -3533,13 +3574,13 @@ async function renderGoalDetails(goalId) {
 
           <div>
             <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Open Tasks Cap</label>
-            <input type="number" min="1" max="50" value="${g.maxOpenTasksCap}" class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField('${g.id}', 'maxOpenTasksCap', Number(this.value))">
+            <input type="number" min="1" max="50" value="${escapeHtml(g.maxOpenTasksCap)}" class="filter-select text-xs w-full mt-1" onchange="handleSaveGoalField(${jsArg(g.id)}, 'maxOpenTasksCap', Number(this.value))">
           </div>
 
           <div>
             <label class="text-[11px] font-mono uppercase font-bold text-slate-500">Created / Updated</label>
             <div class="text-xs font-mono text-slate-400 mt-2">
-              ${formatRelativeTime(g.createdAt)} (${g.createdAt.slice(0, 10)})
+              ${escapeHtml(formatRelativeTime(g.createdAt))} (${escapeHtml(g.createdAt.slice(0, 10))})
             </div>
           </div>
         </div>
@@ -3558,7 +3599,7 @@ async function renderGoalDetails(goalId) {
         <div class="grid grid-cols-4 gap-2 text-center text-xs font-mono pt-1">
           <div class="bg-card p-2 rounded border border-subtle">
             <div class="text-slate-500 text-[10px]">Open Tasks</div>
-            <div class="font-bold ${summary.hasReachedCap ? 'text-rose-400' : 'text-slate-200'}">${summary.openTasks} / ${g.maxOpenTasksCap}</div>
+            <div class="font-bold ${summary.hasReachedCap ? 'text-rose-400' : 'text-slate-200'}">${summary.openTasks} / ${escapeHtml(g.maxOpenTasksCap)}</div>
           </div>
           <div class="bg-card p-2 rounded border border-subtle">
             <div class="text-slate-500 text-[10px]">Loose Ends</div>
@@ -3590,8 +3631,8 @@ async function renderGoalDetails(goalId) {
           spellcheck="false"
           data-placeholder="+ Click here to write full specification directly into the document..."
           class="markdown-body rich-editable-doc bg-card/70 p-5 rounded-lg border border-subtle/80 min-h-[140px] text-xs text-slate-200 leading-relaxed"
-          onblur="handleDirectDocBlur(this, '${g.id}', 'description', true)"
-          onkeydown="handleDirectDocKeydown(event, this, '${g.id}', 'description', true)"
+          onblur="handleDirectDocBlur(this, ${jsArg(g.id)}, 'description', true)"
+          onkeydown="handleDirectDocKeydown(event, this, ${jsArg(g.id)}, 'description', true)"
         >${renderMarkdown(g.description || '')}</div>
       </div>
 
@@ -3612,7 +3653,7 @@ async function renderGoalDetails(goalId) {
             <i data-lucide="check-square" class="w-4 h-4 text-indigo-400"></i>
             <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Linked Issues & Execution Breakdown (${tasks.length})</span>
           </div>
-          <button class="btn-primary text-xs flex items-center gap-1" onclick="openCreateTaskForGoal('${g.id}')">
+          <button class="btn-primary text-xs flex items-center gap-1" onclick="openCreateTaskForGoal(${jsArg(g.id)})">
             <i data-lucide="plus" class="w-3 h-3"></i> Add Issue
           </button>
         </div>
@@ -3626,16 +3667,16 @@ async function renderGoalDetails(goalId) {
             ${tasks.map((t) => {
               const cfg = statusConfig[t.status] || { label: t.status, class: 'todo' };
               return `
-                <div class="p-2.5 bg-card hover:bg-cardHover rounded-md border border-subtle flex items-center justify-between cursor-pointer transition" onclick="openInspector('${t.id}')">
+                <div class="p-2.5 bg-card hover:bg-cardHover rounded-md border border-subtle flex items-center justify-between cursor-pointer transition" onclick="openInspector(${jsArg(t.id)})">
                   <div class="flex items-center gap-2.5 min-w-0">
                     <span class="status-dot ${cfg.class}"></span>
-                    <span class="font-mono text-[11px] text-slate-500 shrink-0">${t.id}</span>
-                    <span class="text-xs text-slate-200 font-medium truncate">${t.title}</span>
+                    <span class="font-mono text-[11px] text-slate-500 shrink-0">${escapeHtml(t.id)}</span>
+                    <span class="text-xs text-slate-200 font-medium truncate">${escapeHtml(t.title)}</span>
                   </div>
                   <div class="flex items-center gap-2 shrink-0">
-                    ${t.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${t.claimedByAgent}</span>` : ''}
+                    ${t.claimedByAgent ? `<span class="text-indigo-400 font-mono text-[10px] flex items-center gap-1"><i data-lucide="bot" class="w-3 h-3"></i> ${escapeHtml(t.claimedByAgent)}</span>` : ''}
                     ${getPriorityIcon(t.priority)}
-                    <span class="font-mono text-[10px] text-slate-400 bg-surface px-1.5 py-0.5 rounded border border-subtle">${cfg.label}</span>
+                    <span class="font-mono text-[10px] text-slate-400 bg-surface px-1.5 py-0.5 rounded border border-subtle">${escapeHtml(cfg.label)}</span>
                   </div>
                 </div>
               `;
@@ -3647,7 +3688,7 @@ async function renderGoalDetails(goalId) {
 
     refreshLucideIcons();
   } catch (err) {
-    container.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">Error loading goal details: ${err.message}</div>`;
+    container.innerHTML = `<div class="p-8 text-center text-rose-400 text-xs">Error loading goal details: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -3697,13 +3738,13 @@ function renderHumanInbox() {
     card.innerHTML = `
       <div class="flex items-center justify-between mb-2">
         <span class="text-xs font-mono text-purple-400 font-semibold uppercase flex items-center gap-1">
-          <i data-lucide="bot" class="w-3.5 h-3.5"></i> Question from Agent: ${task.claimedByAgent || 'Unknown'}
+          <i data-lucide="bot" class="w-3.5 h-3.5"></i> Question from Agent: ${escapeHtml(task.claimedByAgent || 'Unknown')}
         </span>
-        <span class="text-xs font-mono text-slate-500">${task.id}</span>
+        <span class="text-xs font-mono text-slate-500">${escapeHtml(task.id)}</span>
       </div>
-      <h3 class="text-sm font-bold text-slate-100 mb-2">${task.title}</h3>
+      <h3 class="text-sm font-bold text-slate-100 mb-2">${escapeHtml(task.title)}</h3>
       <div class="bg-purple-950/25 border border-purple-900/40 p-3 rounded text-xs text-purple-200 mb-3 markdown-body">
-        <div class="font-semibold mb-1 flex items-center gap-1"><i data-lucide="help-circle" class="w-3.5 h-3.5"></i> ${task.humanQuestionType || 'Question'}:</div>
+        <div class="font-semibold mb-1 flex items-center gap-1"><i data-lucide="help-circle" class="w-3.5 h-3.5"></i> ${escapeHtml(task.humanQuestionType || 'Question')}:</div>
         <div>${renderMarkdown(task.humanQuestion)}</div>
       </div>
       
@@ -3715,8 +3756,8 @@ function renderHumanInbox() {
           </div>
           <div class="flex flex-wrap gap-1.5">
             ${task.humanOptions.map((opt) => `
-              <button type="button" onclick="setQuickAnswer('${task.id}', '${opt.replace(/'/g, "\\'")}')" class="px-2.5 py-1 rounded bg-purple-800/40 border border-purple-600/60 text-purple-200 text-xs hover:bg-purple-700/60 hover:text-white transition flex items-center gap-1 font-medium shadow-sm">
-                <i data-lucide="corner-down-right" class="w-3 h-3 text-purple-400"></i> ${opt}
+              <button type="button" onclick="setQuickAnswer(${jsArg(task.id)}, ${jsArg(opt)})" class="px-2.5 py-1 rounded bg-purple-800/40 border border-purple-600/60 text-purple-200 text-xs hover:bg-purple-700/60 hover:text-white transition flex items-center gap-1 font-medium shadow-sm">
+                <i data-lucide="corner-down-right" class="w-3 h-3 text-purple-400"></i> ${escapeHtml(opt)}
               </button>
             `).join('')}
           </div>
@@ -3726,19 +3767,19 @@ function renderHumanInbox() {
       <!-- Quick Action Buttons -->
       <div class="flex flex-wrap items-center gap-1.5 mb-2.5">
         <span class="text-[10px] uppercase font-bold text-slate-500 mr-1">Quick Action:</span>
-        <button type="button" onclick="setQuickAnswer('${task.id}', 'Approved. Please proceed with implementation.')" class="px-2 py-0.5 rounded bg-emerald-950/50 border border-emerald-800/70 text-emerald-300 text-[11px] hover:bg-emerald-900/70 transition flex items-center gap-1">
+        <button type="button" onclick="setQuickAnswer(${jsArg(task.id)}, 'Approved. Please proceed with implementation.')" class="px-2 py-0.5 rounded bg-emerald-950/50 border border-emerald-800/70 text-emerald-300 text-[11px] hover:bg-emerald-900/70 transition flex items-center gap-1">
           <i data-lucide="check" class="w-3 h-3"></i> Approve
         </button>
-        <button type="button" onclick="setQuickAnswer('${task.id}', 'Rejected. Please rethink or try an alternative approach.')" class="px-2 py-0.5 rounded bg-rose-950/50 border border-rose-800/70 text-rose-300 text-[11px] hover:bg-rose-900/70 transition flex items-center gap-1">
+        <button type="button" onclick="setQuickAnswer(${jsArg(task.id)}, 'Rejected. Please rethink or try an alternative approach.')" class="px-2 py-0.5 rounded bg-rose-950/50 border border-rose-800/70 text-rose-300 text-[11px] hover:bg-rose-900/70 transition flex items-center gap-1">
           <i data-lucide="x" class="w-3 h-3"></i> Reject
         </button>
-        <button type="button" onclick="setQuickAnswer('${task.id}', 'Skip this requirement for now and proceed with next steps.')" class="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 text-[11px] hover:bg-slate-700 transition flex items-center gap-1">
+        <button type="button" onclick="setQuickAnswer(${jsArg(task.id)}, 'Skip this requirement for now and proceed with next steps.')" class="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 text-[11px] hover:bg-slate-700 transition flex items-center gap-1">
           <i data-lucide="skip-forward" class="w-3 h-3"></i> Skip
         </button>
       </div>
 
-      <form onsubmit="handleAnswerQuestion(event, '${task.id}')" class="flex gap-2">
-        <input type="text" id="inbox-answer-${task.id}" required placeholder="Type answer or decision to resume agent..." class="input-field text-xs flex-1">
+      <form onsubmit="handleAnswerQuestion(event, ${jsArg(task.id)})" class="flex gap-2">
+        <input type="text" id="inbox-answer-${escapeHtml(task.id)}" required placeholder="Type answer or decision to resume agent..." class="input-field text-xs flex-1">
         <button type="submit" class="btn-primary text-xs flex items-center gap-1">
           <i data-lucide="send" class="w-3 h-3"></i> Resume Agent
         </button>
@@ -3788,7 +3829,7 @@ function renderReviewFeed() {
           <i data-lucide="${isCompleted ? 'shield-check' : 'x-circle'}" class="w-4 h-4"></i>
           ${isCompleted ? 'Agent Claimed Done (Awaiting Verification)' : 'Dropped Task'}
         </span>
-        <span class="text-xs font-mono text-slate-500">${task.id}</span>
+        <span class="text-xs font-mono text-slate-500">${escapeHtml(task.id)}</span>
       </div>
       <div class="flex items-center justify-between">
         <h3 class="text-sm font-bold text-slate-100">${escapeHtml(task.title)}</h3>
@@ -3832,19 +3873,19 @@ function renderReviewFeed() {
       ${task.droppedReason ? `<div class="p-2.5 rounded bg-rose-950/25 border border-rose-900/40 text-xs text-rose-300 italic">Dropped Reason: "${escapeHtml(task.droppedReason)}"</div>` : ''}
 
       <div class="flex items-center justify-between border-t border-subtle pt-3">
-        <button class="btn-secondary text-xs" onclick="openInspector('${task.id}')">
+        <button class="btn-secondary text-xs" onclick="openInspector(${jsArg(task.id)})">
           <i data-lucide="eye" class="w-3.5 h-3.5"></i> Inspect Details
         </button>
         <div class="flex items-center gap-2">
           ${isCompleted ? `
-            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask('${task.id}')">
+            <button class="btn-danger text-xs flex items-center gap-1" onclick="promptRejectTask(${jsArg(task.id)})">
               <i data-lucide="ban" class="w-3.5 h-3.5"></i> Reject
             </button>
-            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask('${task.id}')">
+            <button class="btn-success text-xs flex items-center gap-1" onclick="verifyTask(${jsArg(task.id)})">
               <i data-lucide="check-check" class="w-3.5 h-3.5"></i> Verify Done
             </button>
           ` : `
-            <button class="btn-secondary text-xs flex items-center gap-1" onclick="reopenTask('${task.id}')">
+            <button class="btn-secondary text-xs flex items-center gap-1" onclick="reopenTask(${jsArg(task.id)})">
               <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Issue
             </button>
           `}
@@ -3882,22 +3923,22 @@ function renderDecisionsView() {
     const card = document.createElement('div');
     card.className = 'bg-surface border border-subtle rounded-lg p-4';
 
-    const tagsHtml = dec.tags.map((t) => `<span class="text-[10px] px-2 py-0.5 rounded bg-card text-slate-400 font-mono border border-subtle">${t}</span>`).join(' ');
+    const tagsHtml = dec.tags.map((t) => `<span class="text-[10px] px-2 py-0.5 rounded bg-card text-slate-400 font-mono border border-subtle">${escapeHtml(t)}</span>`).join(' ');
 
     card.innerHTML = `
       <div class="flex items-center justify-between mb-2">
-        <span class="text-xs px-2 py-0.5 rounded border border-indigo-500/20 text-indigo-400 bg-indigo-950/20 font-mono uppercase">${dec.status}</span>
-        <span class="text-xs font-mono text-slate-500">${dec.id}</span>
+        <span class="text-xs px-2 py-0.5 rounded border border-indigo-500/20 text-indigo-400 bg-indigo-950/20 font-mono uppercase">${escapeHtml(dec.status)}</span>
+        <span class="text-xs font-mono text-slate-500">${escapeHtml(dec.id)}</span>
       </div>
-      <h3 class="text-sm font-bold text-slate-100 mb-2">${dec.title}</h3>
+      <h3 class="text-sm font-bold text-slate-100 mb-2">${escapeHtml(dec.title)}</h3>
       <div class="space-y-2 text-xs mb-3">
         <div><span class="text-slate-500 font-semibold">Context:</span> <div class="text-slate-300 markdown-body">${renderMarkdown(dec.context)}</div></div>
-        <div><span class="text-slate-500 font-semibold">Choice:</span> <div class="text-slate-200 font-medium">${dec.choice}</div></div>
+        <div><span class="text-slate-500 font-semibold">Choice:</span> <div class="text-slate-200 font-medium">${escapeHtml(dec.choice)}</div></div>
         <div><span class="text-slate-500 font-semibold">Rationale:</span> <div class="text-slate-300 markdown-body">${renderMarkdown(dec.rationale)}</div></div>
       </div>
       <div class="flex items-center justify-between border-t border-subtle pt-2">
         <div class="flex items-center gap-1.5">${tagsHtml}</div>
-        ${dec.status === 'accepted' ? `<button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptSupersedeDecision('${dec.id}', '${dec.title.replace(/'/g, "\\'")}')"><i data-lucide="refresh-cw" class="w-3 h-3"></i> Supersede</button>` : ''}
+        ${dec.status === 'accepted' ? `<button class="btn-secondary text-[11px] py-0.5 px-2 flex items-center gap-1" onclick="promptSupersedeDecision(${jsArg(dec.id)}, ${jsArg(dec.title)})"><i data-lucide="refresh-cw" class="w-3 h-3"></i> Supersede</button>` : ''}
       </div>
     `;
 
@@ -3973,8 +4014,8 @@ function renderActivityFeed() {
       <span class="text-slate-500 text-[10px] whitespace-nowrap">${new Date(note.createdAt).toLocaleTimeString()}</span>
       <div class="flex-1">
         <div class="flex items-center gap-2 mb-1">
-          <span class="text-indigo-400 font-bold flex items-center gap-1"><i data-lucide="${note.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${note.authorId} (${note.authorType})</span>
-          <span class="text-slate-500 font-mono text-[10px]">task:${note.taskId}</span>
+          <span class="text-indigo-400 font-bold flex items-center gap-1"><i data-lucide="${note.authorType === 'agent' ? 'bot' : 'user'}" class="w-3 h-3"></i> ${escapeHtml(note.authorId)} (${escapeHtml(note.authorType)})</span>
+          <span class="text-slate-500 font-mono text-[10px]">task:${escapeHtml(note.taskId)}</span>
         </div>
         <div class="text-slate-300 text-xs markdown-body">${renderMarkdown(note.content)}</div>
       </div>
@@ -4014,10 +4055,10 @@ async function renderResumeView() {
         ${sum.unblockedReadyTasks.length > 0 ? `
           <div class="p-3 bg-card rounded border border-emerald-500/30 flex items-center justify-between">
             <div>
-              <span class="text-xs font-mono text-emerald-400 font-semibold">[READY] ${sum.unblockedReadyTasks[0].id}</span>
-              <div class="text-sm font-bold text-slate-100">${sum.unblockedReadyTasks[0].title}</div>
+              <span class="text-xs font-mono text-emerald-400 font-semibold">[READY] ${escapeHtml(sum.unblockedReadyTasks[0].id)}</span>
+              <div class="text-sm font-bold text-slate-100">${escapeHtml(sum.unblockedReadyTasks[0].title)}</div>
             </div>
-            <button class="btn-primary text-xs flex items-center gap-1" onclick="openInspector('${sum.unblockedReadyTasks[0].id}')">
+            <button class="btn-primary text-xs flex items-center gap-1" onclick="openInspector(${jsArg(sum.unblockedReadyTasks[0].id)})">
               <i data-lucide="eye" class="w-3.5 h-3.5"></i> Inspect Issue
             </button>
           </div>
@@ -4090,7 +4131,7 @@ function renderPaletteResults(query) {
   matchedTasks.forEach((t) => {
     const item = document.createElement('div');
     item.className = 'palette-item';
-    item.innerHTML = `<div class="flex items-center gap-2"><span class="font-mono text-slate-500 text-[10px]">${formatIssueKey(t.id, t)}</span><span>${t.title}</span></div><span class="status-pill text-[10px]">${t.status}</span>`;
+    item.innerHTML = `<div class="flex items-center gap-2"><span class="font-mono text-slate-500 text-[10px]">${escapeHtml(formatIssueKey(t.id, t))}</span><span>${escapeHtml(t.title)}</span></div><span class="status-pill text-[10px]">${escapeHtml(t.status)}</span>`;
     item.onclick = () => {
       closeCommandPalette();
       openInspector(t.id);

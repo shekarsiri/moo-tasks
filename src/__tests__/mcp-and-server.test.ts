@@ -1030,7 +1030,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(updateData.workspace.name).toBe('Microservice X Core');
       expect(updateData.workspace.gitRemote).toBe('git@github.com:org/ms-x.git');
 
-      // 5. Delete workspace
+      // 5. Deleting a workspace is reserved for the human in the web board
       const delRes = await callTool({
         method: 'tools/call',
         params: {
@@ -1041,7 +1041,8 @@ describe('MCP Tools & Fastify HTTP Server', () => {
         },
       });
       const delData = JSON.parse(delRes.content[0].text);
-      expect(delData.success).toBe(true);
+      expect(delData.success).toBe(false);
+      expect(delData.code).toBe('HUMAN_ONLY_ACTION');
     });
 
     it('handles Fastify HTTP API workspace management, rename, and deletion', async () => {
@@ -1097,10 +1098,11 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(switchData.success).toBe(true);
       expect(switchData.activeWorkspace.name).toBe('Mobile App iOS & Android');
 
-      // 5. Check project info reflects switched workspace
+      // 5. Project info follows the tab's selection, sent as X-Moo-Workspace
       const projRes = await app.inject({
         method: 'GET',
         url: '/api/project',
+        headers: { 'x-moo-workspace': switchData.activeWorkspace.id },
       });
       expect(projRes.statusCode).toBe(200);
       const projData = JSON.parse(projRes.body);

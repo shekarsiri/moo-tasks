@@ -11,10 +11,12 @@ import { ServiceContainer } from '../services/index.js';
 import { CreateTaskDTO } from '../services/task-lifecycle-service.js';
 import { ClaimTaskResult } from '../services/claim-service.js';
 import { DependencyGraph } from '../domain/dependency.js';
-import { HumanOnlyActionError, InvalidArgumentsError } from '../domain/errors.js';
+import { HumanOnlyActionError, InvalidArgumentsError, TaskNotFoundError } from '../domain/errors.js';
 import { formatAgentIdentity } from '../domain/lease.js';
 import { Decision, Task, TaskEvidence } from '../domain/types.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
+import { withoutOthersClaimedFiles } from '../services/task-state.js';
+import { VERSION } from '../version.js';
 import { TOOL_DEFS, ToolDef } from './tool-defs.js';
 import { LEGACY_TOOL_DEFS } from './tool-defs-legacy.js';
 
@@ -41,8 +43,17 @@ const NO_RENEW_TOOLS = new Set([
   'moo_quick_start',
 ]);
 
-/** Humans answer questions and sign off work in the web board; agents must not do it for them. */
-const HUMAN_ONLY_TOOLS = new Set(['moo_verify_task', 'moo_answer_human']);
+/**
+ * Humans answer questions, sign off or reject work, undo transitions and delete workspaces in the
+ * web board; agents must not do it for them (an undo could flip a rejected task back to done).
+ */
+const HUMAN_ONLY_TOOLS = new Set([
+  'moo_verify_task',
+  'moo_answer_human',
+  'moo_reject_task',
+  'moo_undo_status_change',
+  'moo_delete_workspace',
+]);
 
 const RECOVERY: Record<string, { action: string; nextTool?: string }> = {
   TASK_BLOCKED_ON_DEPENDENCY: { action: 'Finish its blockers first, or pick other ready work.', nextTool: 'moo_get_next_task' },
@@ -99,7 +110,7 @@ const decisionSummary = (d: Decision) => ({ id: d.id, title: d.title, choice: d.
 
 export function setupMcpServer(container: ServiceContainer, options: McpServerOptions = {}): Server {
   const server = new Server(
-    { name: 'moo-tasks', version: '1.1.0' },
+    { name: 'moo-tasks', version: VERSION },
     { capabilities: { tools: {}, resources: {}, prompts: {} } }
   );
 
@@ -163,7 +174,9 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
 
   const createTasks = (a: Args, agent: string) => {
     if (Array.isArray(a.tasks) && a.tasks.length > 0) {
-      const results = container.taskLifecycleService.createBatch(a.tasks.map(toDto), agent, 'agent');
+      // Items inherit the call's goalId unless they name their own.
+      const dtos = a.tasks.map((t: Args) => toDto({ ...t, goalId: t.goalId ?? a.goalId }));
+      const results = container.taskLifecycleService.createBatch(dtos, agent, 'agent');
       return {
         success: true,
         createdCount: results.length,
@@ -250,7 +263,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     // The work is already done, so there is no claim-time baseline: accept uncommitted changes as proof.
     if (!evidence.testProof?.trim() && !evidence.outputSnippet?.trim()) {
       const ctx = GitContextService.getContext(container.projectPath);
-      const dirty = ctx.modifiedFiles || [];
+      const dirty = withoutOthersClaimedFiles(container.taskRepo, ctx.modifiedFiles || [], { id: '', workspaceId: wsId, declaredFiles: [] });
       const claimed = arr(evidence.filesModified);
       const touched = claimed ? dirty.filter((f) => claimed.some((c) => f === c || f.endsWith('/' + c))) : dirty;
       if (touched.length > 0) {
@@ -271,13 +284,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       agent,
       'agent'
     );
-    container.claimService.claimTask(created.task.id, agent, sessionId, { maxConcurrentTasksPerAgent: 2 });
     try {
+      container.claimService.claimTask(created.task.id, agent, sessionId, { maxConcurrentTasksPerAgent: 2 });
       const task = container.verificationService.completeTask(created.task.id, agent, evidence);
       return { success: true, task: taskSummary(task), filesModified: task.evidence?.filesModified };
     } catch (err) {
-      // Do not leave an empty claimed task behind when the evidence is rejected.
-      container.taskLifecycleService.dropTask(created.task.id, 'moo_log_work rejected: missing evidence', agent, 'agent');
+      // Do not leave an empty task behind when the claim or the evidence is rejected.
+      container.taskLifecycleService.dropTask(created.task.id, `moo_log_work rejected: ${(err as Error)?.message || 'error'}`, agent, 'agent');
       throw err;
     }
   };
@@ -595,10 +608,6 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       task: container.claimService.heartbeatTask(a.taskId, agent, a.extensionSeconds),
     }),
     moo_complete_and_claim_next: (a, agent) => completeTask({ ...a, autoClaimNext: true }, agent),
-    moo_reject_task: (a, agent) => ({
-      success: true,
-      task: taskSummary(container.verificationService.rejectTask(a.taskId, agent, 'agent', a.reason)),
-    }),
     moo_get_human_inbox: (a) => {
       const inbox = container.humanCollabService.getHumanInbox(a.goalId, wsId);
       return { success: true, total: inbox.length, inbox };
@@ -607,10 +616,6 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       const notes = container.noteRepo.listByTaskId(a.taskId);
       return { success: true, total: notes.length, notes };
     },
-    moo_undo_status_change: (a, agent) => ({
-      success: true,
-      task: container.taskLifecycleService.undoStatusChange(a.taskId, agent, 'agent'),
-    }),
     moo_bulk_drop_tasks: (a, agent) => dropOrReopen(a, agent, 'drop'),
     moo_bulk_reopen_tasks: (a, agent) => dropOrReopen(a, agent, 'reopen'),
     moo_supersede_decision: recordDecision,
@@ -638,8 +643,8 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         hint: `Imported ${result.importedCount} tasks from the markdown plan.`,
       };
     },
-    moo_export_project: (a) => container.housekeepingService.exportProject(container.projectPath, a.format || 'markdown'),
-    moo_archive_completed: (a) => ({ success: true, archivedCount: container.housekeepingService.archiveCompleted(a.goalId) }),
+    moo_export_project: (a) => container.housekeepingService.exportProject(container.projectPath, a.format || 'markdown', wsId),
+    moo_archive_completed: (a) => ({ success: true, archivedCount: container.housekeepingService.archiveCompleted(a.goalId, wsId) }),
     moo_list_workspaces: () => {
       const workspaces = container.workspaceService.listWorkspaces();
       return { success: true, activeWorkspace: container.activeWorkspace, total: workspaces.length, workspaces };
@@ -659,7 +664,34 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         gitRemote: a.gitRemote,
       }),
     }),
-    moo_delete_workspace: (a) => ({ success: container.workspaceService.deleteWorkspace(a.workspaceId) }),
+  };
+
+  /**
+   * Task id arguments must name a task in this workspace. Short keys (MO-12) are resolved here to
+   * the real id, and a task from another project is reported as not found rather than touched.
+   */
+  const TASK_ID_ARGS = ['taskId', 'targetTaskId', 'sourceTaskId', 'currentTaskId', 'parentId'];
+  const scopeTaskIds = (a: Args) => {
+    const resolve = (id: unknown) => {
+      if (typeof id !== 'string' || !id) return id;
+      const task = container.taskRepo.findById(id, wsId);
+      if (!task || (wsId && task.workspaceId && task.workspaceId !== wsId)) throw new TaskNotFoundError(id);
+      return task.id;
+    };
+    for (const key of TASK_ID_ARGS) if (a[key] !== undefined) a[key] = resolve(a[key]);
+    if (Array.isArray(a.taskIds)) a.taskIds = a.taskIds.map(resolve);
+    for (const key of ['dependsOnTaskIds', 'addDependsOn', 'removeDependsOn']) {
+      if (Array.isArray(a[key])) a[key] = a[key].map(resolve);
+      else if (typeof a[key] === 'string') a[key] = resolve(a[key]);
+    }
+    if (Array.isArray(a.tasks)) {
+      for (const t of a.tasks) {
+        if (t && typeof t === 'object') {
+          if (t.parentId) t.parentId = resolve(t.parentId);
+          if (Array.isArray(t.dependsOnTaskIds)) t.dependsOnTaskIds = t.dependsOnTaskIds.map(resolve);
+        }
+      }
+    }
   };
 
   const validate = (name: string, a: Args) => {
@@ -686,6 +718,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         throw new InvalidArgumentsError(`Unknown tool: ${name}. Available: ${TOOL_DEFS.map((t) => t.name).join(', ')}`);
       }
       validate(name, args);
+      scopeTaskIds(args);
       cleanupLeases();
 
       const agent = agentOf(args);

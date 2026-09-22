@@ -1,10 +1,12 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { GitBaseline, GitContext } from '../../domain/types.js';
 
 const MAX_TRACKED_DIRTY_FILES = 500;
+const COMMIT_HASH = /^[0-9a-f]{7,64}$/i;
 
-function git(args: string, cwd: string): string {
-  return execSync(`git ${args}`, {
+/** Runs git with an argv array: no shell, so file names and stored hashes are never interpreted. */
+function git(args: string[], cwd?: string): string {
+  return execFileSync('git', args, {
     cwd,
     stdio: ['ignore', 'pipe', 'ignore'],
     encoding: 'utf-8',
@@ -12,25 +14,28 @@ function git(args: string, cwd: string): string {
   });
 }
 
-function parsePorcelain(output: string): string[] {
-  return output
-    .split('\n')
-    .map((line) => {
-      if (!line.trim()) return '';
-      let filename = line.slice(3).trim();
-      if (filename.includes(' -> ')) filename = filename.split(' -> ')[1].trim();
-      return filename.replace(/^"|"$/g, '');
-    })
-    .filter(Boolean);
+/** Parses `git status --porcelain -z`: NUL-separated entries; renames and copies carry the old path next. */
+function parsePorcelainZ(output: string): string[] {
+  const entries = output.split('\0');
+  const files: string[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.length < 4) continue;
+    files.push(entry.slice(3));
+    if (entry[0] === 'R' || entry[0] === 'C') i++;
+  }
+  return files;
 }
 
-function hashFiles(files: string[], cwd: string): Record<string, string> {
+function splitZ(output: string): string[] {
+  return output.split('\0').filter(Boolean);
+}
+
+function hashFiles(files: string[], cwd?: string): Record<string, string> {
   const hashes: Record<string, string> = {};
-  if (files.length === 0) return hashes;
-  const existing = files.slice(0, MAX_TRACKED_DIRTY_FILES);
-  for (const file of existing) {
+  for (const file of files.slice(0, MAX_TRACKED_DIRTY_FILES)) {
     try {
-      hashes[file] = git(`hash-object -- ${JSON.stringify(file)}`, cwd).trim();
+      hashes[file] = git(['hash-object', '--', file], cwd).trim();
     } catch {
       hashes[file] = 'deleted';
     }
@@ -38,59 +43,21 @@ function hashFiles(files: string[], cwd: string): Record<string, string> {
   return hashes;
 }
 
-
 export class GitContextService {
   static getContext(cwd: string = process.cwd()): GitContext {
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        encoding: 'utf-8',
-      }).trim();
+      const branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd).trim();
+      const commitHash = git(['rev-parse', '--short', 'HEAD'], cwd).trim();
+      const modifiedFiles = parsePorcelainZ(git(['status', '--porcelain', '-z', '-uall'], cwd));
 
-      const commitHash = execSync('git rev-parse --short HEAD', {
-        cwd,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        encoding: 'utf-8',
-      }).trim();
-
-      const statusOutput = execSync('git status --porcelain -uall', {
-        cwd,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        encoding: 'utf-8',
-      });
-
-      const modifiedFiles = statusOutput
-        ? statusOutput
-            .split('\n')
-            .map((line) => {
-              if (!line.trim()) return '';
-              const trimmed = line.trimStart();
-              const match = trimmed.match(/^([A-Z?]{1,2})\s+(.*)$/);
-              let filename = match ? match[2].trim() : line.slice(3).trim();
-              if (filename.includes(' -> ')) {
-                filename = filename.split(' -> ')[1].trim();
-              }
-              return filename;
-            })
-            .filter(Boolean)
-        : [];
       let commitSubject: string | undefined;
       try {
-        commitSubject = execSync('git log -1 --format=%s', {
-          cwd,
-          stdio: ['ignore', 'pipe', 'ignore'],
-          encoding: 'utf-8',
-        }).trim() || undefined;
+        commitSubject = git(['log', '-1', '--format=%s'], cwd).trim() || undefined;
       } catch {}
 
       let diffSummary: string | undefined;
       try {
-        diffSummary = execSync('git diff --stat', {
-          cwd,
-          stdio: ['ignore', 'pipe', 'ignore'],
-          encoding: 'utf-8',
-        }).trim() || undefined;
+        diffSummary = git(['diff', '--stat'], cwd).trim() || undefined;
       } catch {}
 
       return {
@@ -113,8 +80,8 @@ export class GitContextService {
    */
   static captureBaseline(cwd: string = process.cwd()): GitBaseline | undefined {
     try {
-      const commitHash = git('rev-parse HEAD', cwd).trim();
-      const dirty = parsePorcelain(git('status --porcelain -uall', cwd));
+      const commitHash = git(['rev-parse', 'HEAD'], cwd).trim();
+      const dirty = parsePorcelainZ(git(['status', '--porcelain', '-z', '-uall'], cwd));
       return {
         commitHash: commitHash || undefined,
         dirtyFileHashes: hashFiles(dirty, cwd),
@@ -133,15 +100,12 @@ export class GitContextService {
     baseline: GitBaseline,
     cwd: string = process.cwd()
   ): { files: string[]; diffSummary?: string } | null {
-    if (!baseline.commitHash) return null;
+    // The hash comes from the database; only a plain hex object id is ever passed to git.
+    if (!baseline.commitHash || !COMMIT_HASH.test(baseline.commitHash)) return null;
     try {
       const changed = new Set<string>();
-      for (const f of git(`diff --name-only ${baseline.commitHash}`, cwd).split('\n')) {
-        if (f.trim()) changed.add(f.trim());
-      }
-      for (const f of git('ls-files --others --exclude-standard', cwd).split('\n')) {
-        if (f.trim()) changed.add(f.trim());
-      }
+      for (const f of splitZ(git(['diff', '--name-only', '-z', baseline.commitHash, '--'], cwd))) changed.add(f);
+      for (const f of splitZ(git(['ls-files', '--others', '--exclude-standard', '-z'], cwd))) changed.add(f);
 
       const preDirty = Object.keys(baseline.dirtyFileHashes || {}).filter((f) => changed.has(f));
       const currentHashes = hashFiles(preDirty, cwd);
@@ -151,10 +115,10 @@ export class GitContextService {
 
       let diffSummary: string | undefined;
       try {
-        const tracked = [...changed].map((f) => JSON.stringify(f)).join(' ');
-        diffSummary = tracked
-          ? git(`diff --shortstat ${baseline.commitHash} -- ${tracked}`, cwd).trim() || undefined
-          : undefined;
+        diffSummary =
+          changed.size > 0
+            ? git(['diff', '--shortstat', baseline.commitHash, '--', ...changed], cwd).trim() || undefined
+            : undefined;
       } catch {}
 
       return { files: [...changed].sort(), diffSummary };

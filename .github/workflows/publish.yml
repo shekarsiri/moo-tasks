@@ -22,17 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22.x
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+
+      - name: Upgrade npm (trusted publishing needs npm 11.5.1 or newer)
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: npm ci
@@ -48,10 +51,25 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
+      # Release commits cannot always be pushed to main, so package.json can lag behind the
+      # registry. Bumping from a stale base would publish a version below `latest`.
+      - name: Start from the newest of package.json and the npm registry
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view moo-tasks version 2>/dev/null || echo 0.0.0)
+          NEWEST=$(printf '%s\n%s\n' "$LOCAL" "$PUBLISHED" | sort -V | tail -1)
+          echo "package.json: $LOCAL, npm latest: $PUBLISHED, bumping from: $NEWEST"
+          if [ "$NEWEST" != "$LOCAL" ]; then
+            npm version "$NEWEST" --no-git-tag-version --allow-same-version
+            git commit -am "chore(release): sync version to $NEWEST [skip ci]"
+          fi
+
       - name: Bump version and create git tag
         run: |
           npm version ${{ inputs.bump }} --force -m "chore(release): %s [skip ci]"
 
+      # Uses npm trusted publishing (OIDC via id-token: write) when it is configured for this
+      # repository on npmjs.com; otherwise falls back to the NPM_TOKEN secret.
       - name: Publish to npm
         run: |
           npm publish --access public --provenance
@@ -61,4 +79,4 @@ jobs:
       - name: Push git tag and commit
         run: |
           git push origin --tags
-          git push origin main || echo "::warning::Direct commit push to main blocked by branch protection. Git tag was pushed successfully."
+          git push origin main || echo "::warning::Could not push the release commit to main. Open a PR that sets package.json to $(node -p "require('./package.json').version"); the next release syncs from npm either way."

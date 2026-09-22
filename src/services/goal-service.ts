@@ -7,6 +7,7 @@ import {
 } from '../domain/types.js';
 import { GoalCapExceededError, GoalNotFoundError, MandatoryReasonMissingError } from '../domain/errors.js';
 import { IGoalRepository, ITaskRepository, IWorkspaceRepository } from '../infrastructure/repositories/interfaces.js';
+import { clearClaim, returnToQueue } from './task-state.js';
 
 export const ADHOC_GOAL_TITLE = 'Ad-hoc work';
 const ADHOC_GOAL_CAP = 25;
@@ -147,6 +148,10 @@ export class GoalService {
   }
 
   killGoal(goalId: string, reason: string, authorId: string): { goal: Goal; droppedTaskCount: number } {
+    return this.taskRepo.runExclusive(() => this.killGoalLocked(goalId, reason, authorId));
+  }
+
+  private killGoalLocked(goalId: string, reason: string, authorId: string): { goal: Goal; droppedTaskCount: number } {
     if (!reason || !reason.trim()) {
       throw new MandatoryReasonMissingError('killing/dropping a goal');
     }
@@ -168,9 +173,7 @@ export class GoalService {
       task.droppedReason = `Goal dropped: ${reason.trim()}`;
       task.updatedAt = now;
       task.lastStateChangeAt = now;
-      task.claimedByAgent = undefined;
-      task.claimedSessionId = undefined;
-      task.leaseExpiresAt = undefined;
+      clearClaim(task);
       this.taskRepo.update(task);
     }
 
@@ -178,6 +181,10 @@ export class GoalService {
   }
 
   reopenGoal(goalId: string, authorId: string, reopenTasks: boolean = true): Goal {
+    return this.taskRepo.runExclusive(() => this.reopenGoalLocked(goalId, authorId, reopenTasks));
+  }
+
+  private reopenGoalLocked(goalId: string, authorId: string, reopenTasks: boolean = true): Goal {
     const goal = this.getGoal(goalId);
     const now = new Date().toISOString();
     goal.status = 'active';
@@ -189,7 +196,7 @@ export class GoalService {
     if (reopenTasks) {
       const droppedTasks = this.taskRepo.listByGoalId(goalId).filter((t) => t.status === 'dropped');
       for (const task of droppedTasks) {
-        task.status = 'todo';
+        returnToQueue(this.taskRepo, task);
         task.droppedReason = undefined;
         task.reopenCount += 1;
         task.updatedAt = now;

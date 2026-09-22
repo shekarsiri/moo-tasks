@@ -1,4 +1,4 @@
-# 3. Agent identity derived from MCP client name, host and parent pid
+# 2. Agent identity derived from MCP client name, host and parent pid
 
 * **Status**: ACCEPTED
 * **Decision ID**: `dec-31a93dac`

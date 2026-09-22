@@ -6,6 +6,7 @@ import {
   INoteRepository,
   IStatusHistoryRepository,
 } from '../infrastructure/repositories/interfaces.js';
+import { clearClaim } from './task-state.js';
 
 export class DuplicateMergeService {
   constructor(
@@ -14,7 +15,11 @@ export class DuplicateMergeService {
     private statusHistoryRepo: IStatusHistoryRepository
   ) {}
 
-  mergeTasks(
+  mergeTasks(targetTaskId: string, sourceTaskId: string, authorId: string, reason?: string): { targetTask: Task; mergedSourceTask: Task } {
+    return this.taskRepo.runExclusive(() => this.mergeTasksLocked(targetTaskId, sourceTaskId, authorId, reason));
+  }
+
+  private mergeTasksLocked(
     targetTaskId: string,
     sourceTaskId: string,
     authorId: string,
@@ -59,6 +64,7 @@ export class DuplicateMergeService {
     // 3. Mark source task as dropped/merged
     const prevStatus = sourceTask.status;
     sourceTask.status = 'dropped';
+    clearClaim(sourceTask);
     sourceTask.droppedReason = `Merged into task ${targetTaskId}: ${reason || 'Duplicate task'}`;
     sourceTask.updatedAt = now;
     sourceTask.lastStateChangeAt = now;

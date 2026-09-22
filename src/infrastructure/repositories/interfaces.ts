@@ -55,8 +55,11 @@ export interface ITaskRepository {
   /** Serialize a read-check-write sequence against all other writers (BEGIN IMMEDIATE). */
   runExclusive<T>(fn: () => T): T;
   updateLease(taskId: string, leaseExpiresAt: string, updatedAt: string): void;
+  /** Extends the lease only while agentId holds the task in progress; true when it did. */
+  renewLeaseIfHolder(taskId: string, agentId: string, leaseExpiresAt: string, updatedAt: string): boolean;
   nextOrderIndex(): number;
-  findById(id: string): Task | null;
+  /** Real ids resolve anywhere; short keys (MO-12) only inside workspaceId and only when unambiguous. */
+  findById(id: string, workspaceId?: string): Task | null;
   findByIdempotencyKey(key: string): Task | null;
   list(filter?: TaskFilter): Task[];
   listByGoalId(goalId: string): Task[];

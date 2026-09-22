@@ -14,9 +14,9 @@ import {
   INoteRepository,
   IStatusHistoryRepository,
 } from '../infrastructure/repositories/interfaces.js';
-import { DependencyGraph } from '../domain/dependency.js';
 import { ClaimService, ClaimTaskOptions, ClaimTaskResult, RepoRootResolver } from './claim-service.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
+import { reblockDependents, resolveDependents, returnToQueue, withoutOthersClaimedFiles } from './task-state.js';
 
 export interface CompleteAndClaimNextResult {
   completedTask: Task;
@@ -67,17 +67,21 @@ export class VerificationService {
 
       // 2. Evidence: real output, or code changes git can attribute to this claim
       const finalEvidence: TaskEvidence = { ...evidence, gitContext };
-      if (changes && changes.files.length > 0) {
+      const ownChanges = changes ? withoutOthersClaimedFiles(this.taskRepo, changes.files, task) : [];
+      if (ownChanges.length > 0) {
         if (!finalEvidence.filesModified || finalEvidence.filesModified.length === 0) {
-          finalEvidence.filesModified = changes.files;
+          finalEvidence.filesModified = ownChanges;
         }
-        gitContext.diffSummary = changes.diffSummary || gitContext.diffSummary;
-        gitContext.modifiedFiles = changes.files;
+        // The shortstat covers every changed file, so it is only kept when all of them are ours
+        if (ownChanges.length === changes!.files.length) {
+          gitContext.diffSummary = changes!.diffSummary || gitContext.diffSummary;
+        }
+        gitContext.modifiedFiles = ownChanges;
       }
       const hasOutputProof =
         Boolean(evidence.testProof && evidence.testProof.trim()) ||
         Boolean(evidence.outputSnippet && evidence.outputSnippet.trim());
-      const hasGitProof = Boolean(changes && changes.files.length > 0);
+      const hasGitProof = ownChanges.length > 0;
       if (!hasOutputProof && !hasGitProof) {
         throw new MissingEvidenceError(taskId);
       }
@@ -107,8 +111,8 @@ export class VerificationService {
       if (gitContext.commitHash) {
         gitInfo = `\nGit: ${gitContext.commitHash}${gitContext.commitSubject ? ` - "${gitContext.commitSubject}"` : ''}${gitContext.branch ? ` on [${gitContext.branch}]` : ''}${gitContext.isDirty ? ' [dirty]' : ''}`;
       }
-      if (changes?.diffSummary) {
-        gitInfo += `\nChanges since claim: ${changes.diffSummary}`;
+      if (ownChanges.length > 0) {
+        gitInfo += `\nChanges since claim: ${ownChanges.length === changes!.files.length && changes!.diffSummary ? changes!.diffSummary : ownChanges.join(', ')}`;
       }
 
       this.noteRepo.create({
@@ -133,7 +137,7 @@ export class VerificationService {
         timestamp: now,
       });
 
-      this.resolveDependents(taskId);
+      resolveDependents(this.taskRepo, this.statusHistoryRepo, taskId);
       return saved;
     });
 
@@ -192,30 +196,36 @@ export class VerificationService {
     verifierType: AuthorType = 'human',
     notes?: string
   ): Task {
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
-      throw new TaskNotFoundError(taskId);
-    }
+    return this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
+      }
+      // Only finished work can be signed off
+      if (task.status !== 'done') {
+        throw new InvalidTaskStateError(taskId, 'verify', task.status, ['done']);
+      }
 
-    const now = new Date().toISOString();
-    task.verificationState = 'verified_done';
-    task.verifiedBy = verifierId;
-    task.verifiedAt = now;
-    task.updatedAt = now;
+      const now = new Date().toISOString();
+      task.verificationState = 'verified_done';
+      task.verifiedBy = verifierId;
+      task.verifiedAt = now;
+      task.updatedAt = now;
 
-    const updated = this.taskRepo.update(task);
+      const updated = this.taskRepo.update(task);
 
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType: verifierType,
-      authorId: verifierId,
-      noteType: 'verification_note',
-      content: `Task verified as DONE by ${verifierType} '${verifierId}'. ${notes ? `Notes: ${notes}` : ''}`,
-      createdAt: now,
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType: verifierType,
+        authorId: verifierId,
+        noteType: 'verification_note',
+        content: `Task verified as DONE by ${verifierType} '${verifierId}'. ${notes ? `Notes: ${notes}` : ''}`,
+        createdAt: now,
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   rejectTask(
@@ -228,114 +238,53 @@ export class VerificationService {
       throw new MandatoryReasonMissingError('rejecting completed task');
     }
 
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
-      throw new TaskNotFoundError(taskId);
-    }
-
-    const now = new Date().toISOString();
-    const prevStatus = task.status;
-
-    task.status = 'todo';
-    task.verificationState = 'rejected';
-    task.rejectionReason = reason.trim();
-    task.reopenCount += 1;
-    task.completedAt = undefined;
-    task.updatedAt = now;
-    task.lastStateChangeAt = now;
-
-    const updated = this.taskRepo.update(task);
-
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType: rejecterType,
-      authorId: rejecterId,
-      noteType: 'rejection_reason',
-      content: `Rejected by ${rejecterType} '${rejecterId}': ${reason.trim()}`,
-      createdAt: now,
-    });
-
-    this.statusHistoryRepo.create({
-      id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      fromStatus: prevStatus,
-      toStatus: 'todo',
-      changedBy: rejecterId,
-      authorType: rejecterType,
-      reason: `Rejected: ${reason.trim()}`,
-      timestamp: now,
-    });
-
-    // Re-block downstream dependents that relied on this rejected task
-    this.reblockDependents(taskId, rejecterId);
-
-    return updated;
-  }
-
-  private reblockDependents(uncompletedTaskId: string, rejecterId: string = 'system'): void {
-    const dependentTaskIds = this.taskRepo.getDependents(uncompletedTaskId);
-    if (dependentTaskIds.length === 0) return;
-
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-
-    for (const depId of dependentTaskIds) {
-      const depTask = taskMap.get(depId);
-      if (depTask && depTask.status === 'todo') {
-        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
-        if (!isUnblocked) {
-          depTask.status = 'blocked-on-dependency';
-          depTask.blockedReason = `Blocked on rejected prerequisite: ${uncompletedTaskId}`;
-          depTask.updatedAt = new Date().toISOString();
-          depTask.lastStateChangeAt = new Date().toISOString();
-          this.taskRepo.update(depTask);
-          this.statusHistoryRepo.create({
-            id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-            taskId: depId,
-            fromStatus: 'todo',
-            toStatus: 'blocked-on-dependency',
-            changedBy: rejecterId,
-            authorType: 'system',
-            reason: `Auto-reblocked: Prerequisite ${uncompletedTaskId} was rejected`,
-            timestamp: new Date().toISOString(),
-          });
-        }
+    return this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
       }
-    }
-  }
-
-  private resolveDependents(finishedTaskId: string): void {
-    const dependentTaskIds = this.taskRepo.getDependents(finishedTaskId);
-    if (dependentTaskIds.length === 0) return;
-
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-
-    for (const depId of dependentTaskIds) {
-      const depTask = taskMap.get(depId);
-      if (depTask && depTask.status === 'blocked-on-dependency') {
-        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
-        if (isUnblocked) {
-          depTask.status = 'todo';
-          depTask.blockedReason = undefined;
-          depTask.updatedAt = new Date().toISOString();
-          depTask.lastStateChangeAt = new Date().toISOString();
-          this.taskRepo.update(depTask);
-          this.statusHistoryRepo.create({
-            id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-            taskId: depId,
-            fromStatus: 'blocked-on-dependency',
-            toStatus: 'todo',
-            changedBy: 'system',
-            authorType: 'system',
-            reason: `Auto-unblocked: Dependency ${finishedTaskId} completed`,
-            timestamp: new Date().toISOString(),
-          });
-        }
+      if (task.status !== 'done') {
+        throw new InvalidTaskStateError(taskId, 'reject', task.status, ['done']);
       }
-    }
+
+      const now = new Date().toISOString();
+      const prevStatus = task.status;
+
+      // Rejected work returns to the queue unclaimed, blocked again if its own blockers reopened
+      const nextStatus = returnToQueue(this.taskRepo, task);
+      task.verificationState = 'rejected';
+      task.rejectionReason = reason.trim();
+      task.reopenCount += 1;
+      task.completedAt = undefined;
+      task.updatedAt = now;
+      task.lastStateChangeAt = now;
+
+      const updated = this.taskRepo.update(task);
+
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType: rejecterType,
+        authorId: rejecterId,
+        noteType: 'rejection_reason',
+        content: `Rejected by ${rejecterType} '${rejecterId}': ${reason.trim()}`,
+        createdAt: now,
+      });
+
+      this.statusHistoryRepo.create({
+        id: `hist-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        fromStatus: prevStatus,
+        toStatus: nextStatus,
+        changedBy: rejecterId,
+        authorType: rejecterType,
+        reason: `Rejected: ${reason.trim()}`,
+        timestamp: now,
+      });
+
+      reblockDependents(this.taskRepo, this.statusHistoryRepo, taskId, rejecterId, 'rejected');
+
+      return updated;
+    });
   }
 }

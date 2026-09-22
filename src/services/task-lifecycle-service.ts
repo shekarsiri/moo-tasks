@@ -24,6 +24,15 @@ import {
   INoteRepository,
 } from '../infrastructure/repositories/interfaces.js';
 import { GoalService } from './goal-service.js';
+import {
+  clearClaim,
+  openBlockerIds,
+  reblockDependents,
+  recordHistory,
+  resolveDependents,
+  returnToQueue,
+  unblockIfReady,
+} from './task-state.js';
 
 export interface CreateTaskDTO {
   title: string;
@@ -73,6 +82,11 @@ export class TaskLifecycleService {
   ) {}
 
   createTask(dto: CreateTaskDTO, authorId: string = 'system', authorType: AuthorType = 'system'): CreateTaskResult {
+    // The idempotency check, goal cap and insert must not interleave with another process.
+    return this.taskRepo.runExclusive(() => this.createTaskLocked(dto, authorId, authorType));
+  }
+
+  private createTaskLocked(dto: CreateTaskDTO, authorId: string, authorType: AuthorType): CreateTaskResult {
     // 1. Check idempotency
     if (dto.idempotencyKey) {
       const existing = this.taskRepo.findByIdempotencyKey(dto.idempotencyKey);
@@ -224,6 +238,13 @@ export class TaskLifecycleService {
     taskId: string,
     updates: Partial<Pick<Task, 'title' | 'description' | 'type' | 'tags' | 'priority' | 'acceptanceCriteria' | 'declaredFiles' | 'goalId' | 'isDeferred' | 'claimedByAgent'>>
   ): Task {
+    return this.taskRepo.runExclusive(() => this.updateTaskLocked(taskId, updates));
+  }
+
+  private updateTaskLocked(
+    taskId: string,
+    updates: Partial<Pick<Task, 'title' | 'description' | 'type' | 'tags' | 'priority' | 'acceptanceCriteria' | 'declaredFiles' | 'goalId' | 'isDeferred' | 'claimedByAgent'>>
+  ): Task {
     const task = this.getTask(taskId);
     const now = new Date().toISOString();
 
@@ -262,37 +283,63 @@ export class TaskLifecycleService {
     return this.taskRepo.update(task);
   }
 
+  /**
+   * Deletes a task and its subtasks. Dependency rows cascade away with them, so tasks that were
+   * waiting only on the deleted work are unblocked here instead of staying blocked forever.
+   */
+  deleteTask(taskId: string): boolean {
+    return this.taskRepo.runExclusive(() => {
+      const task = this.getTask(taskId);
+      const removed = [task.id, ...this.taskRepo.listSubtasks(task.id).map((t) => t.id)];
+      const waiting = new Set(removed.flatMap((id) => this.taskRepo.getDependents(id)));
+      for (const id of removed) waiting.delete(id);
+
+      const deleted = this.taskRepo.delete(task.id);
+      for (const depId of waiting) {
+        unblockIfReady(this.taskRepo, this.statusHistoryRepo, depId, `Auto-unblocked: Dependency ${task.id} deleted`);
+      }
+      return deleted;
+    });
+  }
+
   addDependency(taskId: string, dependsOnTaskId: string): void {
     if (taskId === dependsOnTaskId) {
       throw new Error('A task cannot depend on itself');
     }
-    const target = this.getTask(dependsOnTaskId);
-    const existingDeps = this.taskRepo.getAllDependencies();
-    DependencyGraph.validateNoCycles(existingDeps, taskId, [dependsOnTaskId]);
-    this.taskRepo.addDependency(taskId, dependsOnTaskId);
+    this.taskRepo.runExclusive(() => {
+      const target = this.getTask(dependsOnTaskId);
+      const task = this.getTask(taskId);
+      DependencyGraph.validateNoCycles(this.taskRepo.getAllDependencies(), taskId, [dependsOnTaskId]);
+      this.taskRepo.addDependency(taskId, dependsOnTaskId);
 
-    // If blocker is not done, update task status to blocked-on-dependency
-    const task = this.getTask(taskId);
-    if (target.status !== 'done' && task.status === 'todo') {
-      this.transitionStatus(taskId, 'blocked-on-dependency', 'system', 'system', `Blocked on ${dependsOnTaskId}`);
-    }
+      // A ready task that now waits on unfinished work goes back to blocked
+      if (target.status !== 'done' && target.status !== 'dropped' && task.status === 'todo') {
+        this.transitionStatus(taskId, 'blocked-on-dependency', 'system', 'system', `Blocked on ${dependsOnTaskId}`);
+      }
+    });
   }
 
   removeDependency(taskId: string, dependsOnTaskId: string): void {
-    this.taskRepo.removeDependency(taskId, dependsOnTaskId);
-    // If task was blocked, check if it is now unblocked
-    const task = this.getTask(taskId);
-    if (task.status === 'blocked-on-dependency') {
-      const allTasks = this.taskRepo.list();
-      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-      const allDeps = this.taskRepo.getAllDependencies();
-      if (DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap)) {
+    this.taskRepo.runExclusive(() => {
+      this.taskRepo.removeDependency(taskId, dependsOnTaskId);
+      const task = this.getTask(taskId);
+      if (task.status === 'blocked-on-dependency' && openBlockerIds(this.taskRepo, taskId).length === 0) {
         this.transitionStatus(taskId, 'todo', 'system', 'system', `Auto-unblocked: Dependency ${dependsOnTaskId} removed`);
       }
-    }
+    });
   }
 
   transitionStatus(
+    taskId: string,
+    newStatus: TaskStatus,
+    authorId: string,
+    authorType: AuthorType,
+    reason?: string
+  ): Task {
+    return this.taskRepo.runExclusive(() => this.transitionStatusLocked(taskId, newStatus, authorId, authorType, reason));
+  }
+
+  private transitionStatusLocked(
     taskId: string,
     newStatus: TaskStatus,
     authorId: string,
@@ -326,56 +373,29 @@ export class TaskLifecycleService {
     if (newStatus === 'done') {
       task.completedAt = now;
       task.closeCount += 1;
-      task.claimedByAgent = undefined;
-      task.claimedSessionId = undefined;
-      task.leaseExpiresAt = undefined;
     } else if (newStatus === 'dropped') {
       task.droppedReason = reason?.trim();
-      task.claimedByAgent = undefined;
-      task.claimedSessionId = undefined;
-      task.leaseExpiresAt = undefined;
+    }
+    if (newStatus === 'blocked-on-dependency' && !task.blockedReason) {
+      task.blockedReason = reason;
+    } else if (newStatus !== 'blocked-on-dependency') {
+      task.blockedReason = undefined;
+    }
+    // Only an in-progress task has an owner; waiting-on-human keeps the asker's claim.
+    if (newStatus !== 'doing' && newStatus !== 'waiting-on-human') {
+      clearClaim(task);
     }
 
     const updated = this.taskRepo.update(task);
     this.recordStatusHistory(taskId, previousStatus, newStatus, authorId, authorType, reason);
 
-    // Auto-resolve dependents when completing or dropping a blocker
     if (newStatus === 'done' || newStatus === 'dropped') {
-      this.resolveDependents(taskId, authorId);
+      resolveDependents(this.taskRepo, this.statusHistoryRepo, taskId, newStatus === 'done' ? 'completed' : 'dropped');
+    } else if (previousStatus === 'done') {
+      reblockDependents(this.taskRepo, this.statusHistoryRepo, taskId, authorId);
     }
 
     return updated;
-  }
-
-  private resolveDependents(finishedTaskId: string, authorId: string): void {
-    const dependentTaskIds = this.taskRepo.getDependents(finishedTaskId);
-    if (dependentTaskIds.length === 0) return;
-
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-
-    for (const depId of dependentTaskIds) {
-      const depTask = taskMap.get(depId);
-      if (depTask && depTask.status === 'blocked-on-dependency') {
-        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
-        if (isUnblocked) {
-          depTask.status = 'todo';
-          depTask.blockedReason = undefined;
-          depTask.updatedAt = new Date().toISOString();
-          depTask.lastStateChangeAt = new Date().toISOString();
-          this.taskRepo.update(depTask);
-          this.recordStatusHistory(
-            depId,
-            'blocked-on-dependency',
-            'todo',
-            'system',
-            'system',
-            `Auto-unblocked: Dependency ${finishedTaskId} completed`
-          );
-        }
-      }
-    }
   }
 
   getNextUnblockedTask(
@@ -441,189 +461,172 @@ export class TaskLifecycleService {
     if (!reason || !reason.trim()) {
       throw new MandatoryReasonMissingError('dropping task');
     }
-    const task = this.transitionStatus(taskId, 'dropped', authorId, authorType, reason);
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType,
-      authorId,
-      noteType: 'drop_reason',
-      content: `Task dropped: ${reason.trim()}`,
-      createdAt: new Date().toISOString(),
+    return this.taskRepo.runExclusive(() => {
+      const task = this.transitionStatus(taskId, 'dropped', authorId, authorType, reason);
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType,
+        authorId,
+        noteType: 'drop_reason',
+        content: `Task dropped: ${reason.trim()}`,
+        createdAt: new Date().toISOString(),
+      });
+      return task;
     });
-    return task;
   }
 
   reopenTask(taskId: string, reason?: string, authorId: string = 'human', authorType: AuthorType = 'human'): Task {
-    const task = this.getTask(taskId);
-    const now = new Date().toISOString();
-    const prevStatus = task.status;
+    return this.taskRepo.runExclusive(() => {
+      const task = this.getTask(taskId);
+      const now = new Date().toISOString();
+      const prevStatus = task.status;
 
-    task.status = 'todo';
-    task.reopenCount += 1;
-    task.droppedReason = undefined;
-    task.completedAt = undefined;
-    task.verificationState = 'unverified';
-    task.rejectionReason = undefined;
-    task.updatedAt = now;
-    task.lastStateChangeAt = now;
+      // Reopened work goes back to the queue unclaimed, and waits again if its blockers are open
+      const nextStatus = returnToQueue(this.taskRepo, task);
+      task.reopenCount += 1;
+      task.droppedReason = undefined;
+      task.completedAt = undefined;
+      task.verificationState = 'unverified';
+      task.rejectionReason = undefined;
+      task.updatedAt = now;
+      task.lastStateChangeAt = now;
 
-    const updated = this.taskRepo.update(task);
-    this.recordStatusHistory(taskId, prevStatus, 'todo', authorId, authorType, reason || 'Task reopened');
+      const updated = this.taskRepo.update(task);
+      this.recordStatusHistory(taskId, prevStatus, nextStatus, authorId, authorType, reason || 'Task reopened');
 
-    // If reopening a completed task, re-block downstream dependents that were unblocked
-    if (prevStatus === 'done') {
-      this.reblockDependents(taskId, authorId);
-    }
+      if (prevStatus === 'done') {
+        reblockDependents(this.taskRepo, this.statusHistoryRepo, taskId, authorId);
+      }
 
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType,
-      authorId,
-      noteType: 'reopen_reason',
-      content: `Task reopened (reopen #${task.reopenCount}): ${reason || 'No reason specified'}`,
-      createdAt: now,
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType,
+        authorId,
+        noteType: 'reopen_reason',
+        content: `Task reopened (reopen #${task.reopenCount}): ${reason || 'No reason specified'}`,
+        createdAt: now,
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
   undoStatusChange(taskId: string, authorId: string, authorType: AuthorType): Task {
-    const previousEntry = this.statusHistoryRepo.findPreviousState(taskId);
-    if (!previousEntry) {
-      throw new Error(`No previous status history found to undo for task ${taskId}`);
-    }
-
-    const task = this.getTask(taskId);
-    const currentStatus = task.status;
-    task.status = previousEntry.fromStatus;
-    task.updatedAt = new Date().toISOString();
-    task.lastStateChangeAt = new Date().toISOString();
-
-    const updated = this.taskRepo.update(task);
-    this.recordStatusHistory(
-      taskId,
-      currentStatus,
-      task.status,
-      authorId,
-      authorType,
-      `Undid transition from ${currentStatus} back to ${task.status}`
-    );
-
-    if (currentStatus === 'done' && task.status !== 'done') {
-      this.reblockDependents(taskId, authorId);
-    } else if (task.status === 'done' || task.status === 'dropped') {
-      this.resolveDependents(taskId, authorId);
-    }
-
-    return updated;
-  }
-
-  private reblockDependents(uncompletedTaskId: string, authorId: string = 'system'): void {
-    const dependentTaskIds = this.taskRepo.getDependents(uncompletedTaskId);
-    if (dependentTaskIds.length === 0) return;
-
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-
-    for (const depId of dependentTaskIds) {
-      const depTask = taskMap.get(depId);
-      if (depTask && depTask.status === 'todo') {
-        const isUnblocked = DependencyGraph.isTaskUnblocked(depId, allDeps, taskMap);
-        if (!isUnblocked) {
-          depTask.status = 'blocked-on-dependency';
-          depTask.blockedReason = `Blocked on incomplete prerequisite: ${uncompletedTaskId}`;
-          depTask.updatedAt = new Date().toISOString();
-          depTask.lastStateChangeAt = new Date().toISOString();
-          this.taskRepo.update(depTask);
-          this.recordStatusHistory(
-            depId,
-            'todo',
-            'blocked-on-dependency',
-            authorId,
-            'system',
-            `Auto-reblocked: Prerequisite ${uncompletedTaskId} was reopened`
-          );
-        }
+    return this.taskRepo.runExclusive(() => {
+      const previousEntry = this.statusHistoryRepo.findPreviousState(taskId);
+      if (!previousEntry) {
+        throw new Error(`No previous status history found to undo for task ${taskId}`);
       }
-    }
+
+      const task = this.getTask(taskId);
+      const currentStatus = task.status;
+      const target = previousEntry.fromStatus;
+      if (target === 'doing' || target === 'todo' || target === 'blocked-on-dependency') {
+        // A claim cannot be restored by undo, and blockers decide between todo and blocked
+        returnToQueue(this.taskRepo, task);
+      } else {
+        task.status = target;
+        if (target !== 'waiting-on-human') clearClaim(task);
+      }
+      task.updatedAt = new Date().toISOString();
+      task.lastStateChangeAt = task.updatedAt;
+
+      const updated = this.taskRepo.update(task);
+      this.recordStatusHistory(
+        taskId,
+        currentStatus,
+        task.status,
+        authorId,
+        authorType,
+        `Undid transition from ${currentStatus} back to ${task.status}`
+      );
+
+      if (currentStatus === 'done' && task.status !== 'done') {
+        reblockDependents(this.taskRepo, this.statusHistoryRepo, taskId, authorId, 'undone');
+      } else if (task.status === 'done' || task.status === 'dropped') {
+        resolveDependents(this.taskRepo, this.statusHistoryRepo, taskId, task.status === 'done' ? 'completed' : 'dropped');
+      }
+
+      return updated;
+    });
   }
 
   bulkDrop(taskIds: string[], reason: string, authorId: string, authorType: AuthorType = 'human'): number {
-    let count = 0;
-    for (const id of taskIds) {
-      this.dropTask(id, reason, authorId, authorType);
-      count++;
-    }
-    return count;
+    return this.taskRepo.runExclusive(() => {
+      for (const id of taskIds) this.dropTask(id, reason, authorId, authorType);
+      return taskIds.length;
+    });
   }
 
   bulkReopen(taskIds: string[], reason: string, authorId: string, authorType: AuthorType = 'human'): number {
-    let count = 0;
-    for (const id of taskIds) {
-      this.reopenTask(id, reason, authorId, authorType);
-      count++;
-    }
-    return count;
+    return this.taskRepo.runExclusive(() => {
+      for (const id of taskIds) this.reopenTask(id, reason, authorId, authorType);
+      return taskIds.length;
+    });
   }
 
   logAttemptFailure(dto: LogAttemptFailureDTO): LogAttemptFailureResult {
-    const task = this.getTask(dto.taskId);
-    const now = new Date().toISOString();
-    const prevStatus = task.status;
+    return this.taskRepo.runExclusive(() => {
+      const task = this.getTask(dto.taskId);
+      const now = new Date().toISOString();
+      const prevStatus = task.status;
 
-    task.attemptCount += 1;
-    let autoEscalatedToHuman = false;
+      task.attemptCount += 1;
+      let autoEscalatedToHuman = false;
 
-    if (task.attemptCount > task.maxAttemptsAllowed) {
-      task.status = 'waiting-on-human';
-      task.humanQuestion = `Task exceeded ${task.maxAttemptsAllowed} max allowed attempts (${dto.failureCategory || 'failure'}). Automated looping halted for human guidance.`;
-      task.humanQuestionType = 'decision';
-      autoEscalatedToHuman = true;
-    }
+      if (task.attemptCount > task.maxAttemptsAllowed) {
+        task.status = 'waiting-on-human';
+        task.humanQuestion = `Task exceeded ${task.maxAttemptsAllowed} max allowed attempts (${dto.failureCategory || 'failure'}). Automated looping halted for human guidance.`;
+        task.humanQuestionType = 'decision';
+        task.humanAnswer = undefined;
+        // Escalated work is off the agent's plate until the user answers
+        clearClaim(task);
+        autoEscalatedToHuman = true;
+      }
 
-    task.updatedAt = now;
-    task.lastStateChangeAt = now;
-    this.taskRepo.update(task);
+      task.updatedAt = now;
+      task.lastStateChangeAt = now;
+      this.taskRepo.update(task);
 
-    const noteLines = [
-      `### ⚠️ Attempt Failure Log (Attempt #${task.attemptCount})`,
-      dto.failureCategory ? `- **Category**: ${dto.failureCategory}` : '',
-      `- **Error**:\n\`\`\`\n${dto.errorSnippet.trim()}\n\`\`\``,
-      dto.hypothesis ? `- **Hypothesis**: ${dto.hypothesis.trim()}` : '',
-      dto.nextAttemptPlan ? `- **Next Plan**: ${dto.nextAttemptPlan.trim()}` : '',
-    ].filter(Boolean);
+      const noteLines = [
+        `### ⚠️ Attempt Failure Log (Attempt #${task.attemptCount})`,
+        dto.failureCategory ? `- **Category**: ${dto.failureCategory}` : '',
+        `- **Error**:\n\`\`\`\n${dto.errorSnippet.trim()}\n\`\`\``,
+        dto.hypothesis ? `- **Hypothesis**: ${dto.hypothesis.trim()}` : '',
+        dto.nextAttemptPlan ? `- **Next Plan**: ${dto.nextAttemptPlan.trim()}` : '',
+      ].filter(Boolean);
 
-    const note: TaskNote = {
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId: task.id,
-      authorType: 'agent',
-      authorId: dto.agentId,
-      noteType: 'attempt_failure',
-      content: noteLines.join('\n'),
-      createdAt: now,
-    };
-    this.noteRepo.create(note);
+      const note: TaskNote = {
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId: task.id,
+        authorType: 'agent',
+        authorId: dto.agentId,
+        noteType: 'attempt_failure',
+        content: noteLines.join('\n'),
+        createdAt: now,
+      };
+      this.noteRepo.create(note);
 
-    if (autoEscalatedToHuman) {
-      this.recordStatusHistory(
-        task.id,
-        prevStatus,
-        'waiting-on-human',
-        dto.agentId,
-        'agent',
-        `Auto-escalated: Max attempts (${task.maxAttemptsAllowed}) exceeded after attempt #${task.attemptCount}`
-      );
-    }
+      if (autoEscalatedToHuman) {
+        this.recordStatusHistory(
+          task.id,
+          prevStatus,
+          'waiting-on-human',
+          dto.agentId,
+          'agent',
+          `Auto-escalated: Max attempts (${task.maxAttemptsAllowed}) exceeded after attempt #${task.attemptCount}`
+        );
+      }
 
-    return {
-      task,
-      attemptCount: task.attemptCount,
-      autoEscalatedToHuman,
-      note,
-    };
+      return {
+        task,
+        attemptCount: task.attemptCount,
+        autoEscalatedToHuman,
+        note,
+      };
+    });
   }
 
   reorderTasks(updates: { id: string; orderIndex: number }[]): void {
@@ -638,15 +641,6 @@ export class TaskLifecycleService {
     authorType: AuthorType,
     reason?: string
   ): void {
-    this.statusHistoryRepo.create({
-      id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      fromStatus,
-      toStatus,
-      changedBy,
-      authorType,
-      reason,
-      timestamp: new Date().toISOString(),
-    });
+    recordHistory(this.statusHistoryRepo, taskId, fromStatus, toStatus, changedBy, authorType, reason);
   }
 }

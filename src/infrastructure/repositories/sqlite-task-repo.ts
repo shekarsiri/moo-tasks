@@ -192,22 +192,22 @@ export class SqliteTaskRepository implements ITaskRepository {
     return tasks;
   }
 
-  findById(id: string): Task | null {
-    let stmt = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`);
-    let row = stmt.get(id);
+  findById(id: string, workspaceId?: string): Task | null {
+    const row = this.db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
     if (row) return this.mapRow(row);
 
-    // Support short code sequence lookup (e.g. MO-123, SH-123, or numeric 123)
-    // Real task ids are `task-<hex>`; a missing one must not resolve to an unrelated task.
+    // Short keys (MO-123 or 123) only make sense inside one project, and only when a single task
+    // carries that sequence number; a real `task-<hex>` id never falls back to one.
     const match = String(id).match(/^(?:[A-Za-z]{2,}-)?(\d+)$/);
-    if (match && !/^task-/i.test(String(id))) {
-      const orderIdx = parseInt(match[1], 10);
-      stmt = this.db.prepare(`SELECT * FROM tasks WHERE order_index = ?`);
-      row = stmt.get(orderIdx);
-      if (row) return this.mapRow(row);
-    }
-
-    return null;
+    if (!match || !workspaceId) return null;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE order_index = ?
+           AND (workspace_id = ? OR (workspace_id IS NULL AND goal_id IN (SELECT id FROM goals WHERE workspace_id = ?)))
+         LIMIT 2`
+      )
+      .all(parseInt(match[1], 10), workspaceId, workspaceId);
+    return rows.length === 1 ? this.mapRow(rows[0]) : null;
   }
 
   /**
@@ -228,6 +228,13 @@ export class SqliteTaskRepository implements ITaskRepository {
     this.db
       .prepare(`UPDATE tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ?`)
       .run(leaseExpiresAt, updatedAt, taskId);
+  }
+
+  renewLeaseIfHolder(taskId: string, agentId: string, leaseExpiresAt: string, updatedAt: string): boolean {
+    const result = this.db
+      .prepare(`UPDATE tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'doing' AND claimed_by_agent = ?`)
+      .run(leaseExpiresAt, updatedAt, taskId, agentId);
+    return result.changes > 0;
   }
 
   findByIdempotencyKey(key: string): Task | null {

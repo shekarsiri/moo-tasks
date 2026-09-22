@@ -36,13 +36,19 @@ export function ancestorPids(start: number = process.ppid, maxDepth = 12): Set<n
 }
 
 /**
- * Claims this agent session can be said to hold: identities whose pid is one of our
- * ancestors, plus custom agentIds we cannot attribute to any process.
+ * Claims this agent session can be said to hold: identities whose pid is one of our ancestors.
+ * With includeUnattributed, custom agentIds (sub-agents) that no process can be matched to count
+ * too; that is enough to allow an edit, but never to renew a lease another agent may own.
  */
-export function claimsForSession(liveTasks: Task[], ancestors: Set<number>, host: string = os.hostname()): Task[] {
+export function claimsForSession(
+  liveTasks: Task[],
+  ancestors: Set<number>,
+  host: string = os.hostname(),
+  includeUnattributed: boolean = true
+): Task[] {
   return liveTasks.filter((t) => {
     const parsed = parseAgentIdentity(t.claimedByAgent || '');
-    if (!parsed) return true;
+    if (!parsed) return includeUnattributed;
     return parsed.host === host && ancestors.has(parsed.pid);
   });
 }
@@ -93,9 +99,10 @@ export async function hookCommand(event: string) {
 
   const taskRepo = new SqliteTaskRepository(db);
   const live = taskRepo.list({ status: 'doing', isArchived: false, workspaceId: workspace.id }).filter((t) => hasLiveLease(t));
-  const mine = claimsForSession(live, ancestorPids());
+  const ancestors = ancestorPids();
 
   if (event === 'pre-edit') {
+    const mine = claimsForSession(live, ancestors);
     const target = input.tool_input?.file_path || input.tool_input?.notebook_path;
     if (!isInside(workspace.rootPath, target)) return;
     if (mine.length === 0) {
@@ -108,7 +115,9 @@ export async function hookCommand(event: string) {
   if (event === 'post-edit') {
     const now = new Date();
     const expires = new Date(now.getTime() + DEFAULT_LEASE_SECONDS * 1000).toISOString();
-    for (const task of mine) taskRepo.updateLease(task.id, expires, now.toISOString());
+    for (const task of claimsForSession(live, ancestors, os.hostname(), false)) {
+      taskRepo.renewLeaseIfHolder(task.id, task.claimedByAgent!, expires, now.toISOString());
+    }
     return;
   }
 

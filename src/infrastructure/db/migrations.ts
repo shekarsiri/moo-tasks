@@ -1,5 +1,73 @@
 import { Database as DatabaseType } from 'better-sqlite3';
 
+interface Migration {
+  version: number;
+  name: string;
+  up: (db: DatabaseType) => void;
+}
+
+function hasColumn(db: DatabaseType, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+}
+
+function addColumn(db: DatabaseType, table: string, definition: string): void {
+  const column = definition.split(/\s+/)[0];
+  if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition};`);
+}
+
+/**
+ * Ordered, append-only schema changes. Each runs once, in its own IMMEDIATE transaction, and is
+ * recorded in schema_version; a failure rolls that step back and surfaces instead of being swallowed.
+ * Steps must stay idempotent: databases created before versioning already have some of them applied.
+ */
+const MIGRATIONS: Migration[] = [
+  {
+    version: 2,
+    name: 'workspace scoping, task type/tags, human options, git baseline',
+    up: (db) => {
+      addColumn(db, 'tasks', 'claim_git_baseline TEXT');
+      addColumn(db, 'goals', 'workspace_id TEXT');
+      addColumn(db, 'tasks', 'workspace_id TEXT');
+      addColumn(db, 'decisions', 'workspace_id TEXT');
+      addColumn(db, 'goals', 'description TEXT');
+      addColumn(db, 'tasks', 'human_options TEXT');
+      addColumn(db, 'tasks', "type TEXT NOT NULL DEFAULT 'feature'");
+      addColumn(db, 'tasks', "tags TEXT NOT NULL DEFAULT '[]'");
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_goals_workspace ON goals(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_decisions_workspace ON decisions(workspace_id);
+      `);
+    },
+  },
+  {
+    version: 3,
+    name: 'full-text search tables and triggers',
+    up: (db) => db.exec(FTS_SQL),
+  },
+  {
+    version: 4,
+    name: 'backfill workspace ids',
+    up: (db) => db.exec(WORKSPACE_BACKFILL_SQL),
+  },
+  {
+    version: 5,
+    name: 'unique task idempotency keys',
+    up: (db) => {
+      // Keep the key on the oldest task of each duplicate group; later copies lose it.
+      db.exec(`
+        UPDATE tasks SET idempotency_key = NULL
+        WHERE idempotency_key IS NOT NULL
+          AND rowid NOT IN (SELECT MIN(rowid) FROM tasks WHERE idempotency_key IS NOT NULL GROUP BY idempotency_key);
+        DROP INDEX IF EXISTS idx_tasks_idempotency;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_idempotency_unique ON tasks(idempotency_key) WHERE idempotency_key IS NOT NULL;
+      `);
+    },
+  },
+];
+
+export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
+
 export class DatabaseMigrator {
   static runMigrations(db: DatabaseType): void {
     db.exec(`
@@ -146,75 +214,39 @@ export class DatabaseMigrator {
         FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
       );
 
-      -- Indexes for performance
+      -- Indexes on columns every schema version has
       CREATE INDEX IF NOT EXISTS idx_workspaces_root ON workspaces(root_path);
-      CREATE INDEX IF NOT EXISTS idx_goals_workspace ON goals(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_goals_project ON goals(project_path);
-      CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_goal_id ON tasks(goal_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
       CREATE INDEX IF NOT EXISTS idx_tasks_parent_id ON tasks(parent_id);
       CREATE INDEX IF NOT EXISTS idx_tasks_claimed_by ON tasks(claimed_by_agent);
-      CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key);
       CREATE INDEX IF NOT EXISTS idx_task_deps_task ON task_dependencies(task_id);
       CREATE INDEX IF NOT EXISTS idx_task_deps_depends ON task_dependencies(depends_on_task_id);
       CREATE INDEX IF NOT EXISTS idx_task_notes_task ON task_notes(task_id);
-      CREATE INDEX IF NOT EXISTS idx_decisions_workspace ON decisions(workspace_id);
       CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_path);
       CREATE INDEX IF NOT EXISTS idx_status_history_task ON status_history(task_id);
     `);
 
-    // Dynamic column additions for existing installations
-    try {
-      db.exec(`ALTER TABLE tasks ADD COLUMN claim_git_baseline TEXT;`);
-    } catch {
-      // Column already exists
-    }
-    try {
-      db.exec(`ALTER TABLE goals ADD COLUMN workspace_id TEXT;`);
-    } catch {
-      // column already exists
-    }
+    // Version 1 is the baseline above; databases from before versioning may lack its row.
+    db.prepare(`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?)`).run(new Date().toISOString());
 
-    try {
-      db.exec(`ALTER TABLE tasks ADD COLUMN workspace_id TEXT;`);
-    } catch {
-      // column already exists
+    for (const migration of MIGRATIONS) {
+      db.transaction(() => {
+        // Re-checked inside the lock: another process may have applied it a moment ago.
+        const applied = db.prepare(`SELECT 1 FROM schema_version WHERE version = ?`).get(migration.version);
+        if (applied) return;
+        migration.up(db);
+        db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
+          migration.version,
+          new Date().toISOString()
+        );
+      }).immediate();
     }
+  }
+}
 
-    try {
-      db.exec(`ALTER TABLE decisions ADD COLUMN workspace_id TEXT;`);
-    } catch {
-      // column already exists
-    }
-
-    try {
-      db.exec(`ALTER TABLE goals ADD COLUMN description TEXT;`);
-    } catch {
-      // column already exists
-    }
-
-    try {
-      db.exec(`ALTER TABLE tasks ADD COLUMN human_options TEXT;`);
-    } catch {
-      // column already exists
-    }
-
-    try {
-      db.exec(`ALTER TABLE tasks ADD COLUMN type TEXT NOT NULL DEFAULT 'feature';`);
-    } catch {
-      // column already exists
-    }
-
-    try {
-      db.exec(`ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';`);
-    } catch {
-      // column already exists
-    }
-
-    // FTS5 Virtual Tables & Triggers for Full-Text Search
-    try {
-      db.exec(`
+const FTS_SQL = `
         CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
           id UNINDEXED,
           title,
@@ -274,14 +306,9 @@ export class DatabaseMigrator {
         INSERT INTO decisions_fts(id, title, context, choice, rationale, tags)
         SELECT id, title, context, choice, rationale, tags FROM decisions
         WHERE id NOT IN (SELECT id FROM decisions_fts);
-      `);
-    } catch {
-      // FTS5 extension already enabled or table exists
-    }
+`;
 
-    // Backfill workspace_id for goals, tasks, decisions if missing
-    try {
-      db.exec(`
+const WORKSPACE_BACKFILL_SQL = `
         -- Goals backfill from workspaces by project_path
         UPDATE goals
         SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.root_path = goals.project_path LIMIT 1)
@@ -300,19 +327,4 @@ export class DatabaseMigrator {
         SET workspace_id = (SELECT id FROM workspaces WHERE workspaces.root_path = decisions.project_path LIMIT 1)
         WHERE (workspace_id IS NULL OR workspace_id = '')
           AND EXISTS (SELECT 1 FROM workspaces WHERE workspaces.root_path = decisions.project_path);
-      `);
-    } catch {
-      // ignore
-    }
-
-    // Record schema version
-    try {
-      const row = db.prepare(`SELECT version FROM schema_version WHERE version = ?`).get(1);
-      if (!row) {
-        db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(1, new Date().toISOString());
-      }
-    } catch {
-      // ignore
-    }
-  }
-}
+`;

@@ -1149,22 +1149,22 @@ Plan description details.
       expect(claimResult.relatedDecisions![0].title).toBe('Use Redis for Session Storage');
     });
 
-    it('resolves tasks by short code sequence (e.g. MO-1, SH-1, 1)', () => {
+    it('resolves short codes (e.g. MO-1, 1) only inside the given workspace', () => {
+      const wsId = container.activeWorkspace.id;
       const created = container.taskLifecycleService.createTask({
         title: 'Short code test issue',
         acceptanceCriteria: 'Findable by short code',
+        workspaceId: wsId,
       });
 
-      const foundByDirectId = container.taskRepo.findById(created.task.id);
-      expect(foundByDirectId).toBeDefined();
+      expect(container.taskRepo.findById(created.task.id)?.id).toBe(created.task.id);
+      expect(container.taskRepo.findById(`MO-${created.task.orderIndex}`, wsId)?.id).toBe(created.task.id);
+      expect(container.taskRepo.findById(String(created.task.orderIndex), wsId)?.id).toBe(created.task.id);
 
-      const foundByShortCode = container.taskRepo.findById(`MO-${created.task.orderIndex}`);
-      expect(foundByShortCode).toBeDefined();
-      expect(foundByShortCode!.id).toBe(created.task.id);
-
-      const foundByNumeric = container.taskRepo.findById(String(created.task.orderIndex));
-      expect(foundByNumeric).toBeDefined();
-      expect(foundByNumeric!.id).toBe(created.task.id);
+      // Without a workspace, or from another project, a short code names nothing
+      const other = container.workspaceService.getOrCreateWorkspace('/test/short-code-other');
+      expect(container.taskRepo.findById(`MO-${created.task.orderIndex}`)).toBeNull();
+      expect(container.taskRepo.findById(`MO-${created.task.orderIndex}`, other.id)).toBeNull();
     });
 
     it('sanitizes requirement prefixes and extracts priority, type, tags, and files from title or payload', () => {

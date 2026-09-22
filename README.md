@@ -48,17 +48,17 @@ Standard AI coding agents often suffer from:
 - **Finite State Machine**: `todo`, `doing`, `blocked-on-dependency`, `waiting-on-human`, `done`, `dropped`.
 - **DAG Dependency Graph**: Automatic cycle detection and automatic unblocking of downstream tasks.
 - **Parent Closure Guard**: Prevents closing parent tasks while any subtask remains open.
-- **Status Undo & History**: Roll back accidental state transitions using full transition audit history.
+- **Status Undo & History**: Roll back accidental state transitions from the web board, using full transition audit history.
 
 ### 🛡️ 3. Completion, Verification & Proof of Work
 - **Acceptance Criteria**: Mandatory criteria written in Markdown *before* work starts.
 - **Evidence Requirement**: Closing a task requires verifiable proof (commands run, stdout output, test proofs).
 - **Two-Phase Verification**: Distinguishes `agent_completed` from human `verified_done`.
-- **Rejection with Reason**: Humans or peer agents can reject completed work with feedback; the task reverts to `todo` and increments the reopen counter.
+- **Rejection with Reason**: Humans can reject completed work from the web board with feedback; the task returns to the queue unclaimed (`todo`, or `blocked-on-dependency` while its blockers are open) and increments the reopen counter.
 
 ### 🙋 4. Human Collaboration & Blocking
 - **Waiting-on-Human Queue**: Agents pause blockers with attached questions (`clarification`, `approval`, `credential`, `decision`).
-- **Reactive Resume**: Answering a question via Web UI or MCP automatically transitions the task back into the ready queue without agent restarts.
+- **Reactive Resume**: Answering a question in the web board automatically transitions the task back into the ready queue without agent restarts.
 - **Dedicated Human Inbox**: Real-time queue of everything needing human attention.
 
 ### 🔍 5. Discovered Work
@@ -66,8 +66,8 @@ Standard AI coding agents often suffer from:
 - **Must-Fix vs Deferred**: Mark as `must-fix-now` (inserted as blocker) or `deferred` (backlog pile).
 
 ### 🤖 6. Ownership, Concurrency & Leases
-- **Exclusive Task Claims**: Leases with automatic timeout (default 5 minutes) when agents go silent.
-- **Heartbeat Mechanism**: Extend leases during long-running tasks.
+- **Exclusive Task Claims**: 30-minute leases, renewed whenever the agent calls a tool with the task's `taskId`; claims held by a dead agent process are released.
+- **Checkpoints**: `moo_checkpoint` logs progress and renews the lease during long-running tasks.
 - **Agent Concurrency Limits**: Cap simultaneous tasks held per agent (default: 1).
 - **File Touch Conflict Warnings**: Declared files are checked for overlaps against other active claims.
 
@@ -93,12 +93,14 @@ npm install -g moo-tasks
 ```
 Once installed, you can use `moo` directly:
 ```bash
-moo init       # Initialize .moo workspace in current project
-moo start      # Launch real-time Web UI (http://127.0.0.1:4242)
-moo ws         # List registered global workspaces
-moo status     # Show Where-Did-I-Leave-Off context
-moo search     # Full-text SQLite search
+moo init           # Register this repo as a workspace & write agent rule files
+moo install claude # Configure an agent's MCP server (add --hooks for Claude Code)
+moo start          # Launch real-time Web UI (http://127.0.0.1:4242)
+moo ws             # List registered global workspaces
+moo status         # Show Where-Did-I-Leave-Off context
+moo search <query> # Full-text SQLite search
 ```
+Other commands: `moo list`, `moo next`, `moo run <prompt>`, `moo import <file>`, `moo export`, `moo ws:add|ws:rename|ws:remote|ws:remove`. Run `moo --help` for details.
 
 > 💡 **Note on `moo` vs `npx`**:
 > - Bare `moo <command>` works when installed globally via `npm install -g moo-tasks`.
@@ -119,14 +121,16 @@ Run in your project root:
 npx moo-tasks init
 ```
 This:
-- Initializes `.moo/tasks.db` SQLite database with WAL mode.
-- Generates `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, and `.windsurfrules`.
+- Registers the project as a workspace in the global SQLite database (`~/.moo/tasks.db`, WAL mode; override with `MOO_HOME` or `MOO_DB_PATH`).
+- Writes (or refreshes) a managed Moo protocol block in `AGENTS.md`, `CLAUDE.md` (which imports `@AGENTS.md`), `.cursor/rules/moo-tasks.mdc`, and `.windsurf/rules/moo-tasks.md`. Text outside the block is left untouched; legacy `.cursorrules` / `.windsurfrules` are refreshed only if they already exist.
 
-#### 2. Launch Local Web UI
+#### 2. Web Board
+The MCP server starts the web board automatically in the background, so once an agent is connected it is available at **`http://localhost:4242`** (one board is shared by every agent on the machine). Set `MOO_NO_UI=1` to disable auto-start, or `MOO_PORT` to change the port.
+
+To run it manually:
 ```bash
 npx moo-tasks start
 ```
-Open **`http://127.0.0.1:4242`** in your browser.
 
 To access the Web UI from another device or tablet on your local network (LAN):
 ```bash
@@ -148,7 +152,20 @@ npx moo-tasks install claude       # Updates ~/.claude.json
 npx moo-tasks install cursor       # Generates .cursor/mcp.json
 npx moo-tasks install windsurf     # Updates ~/.codeium/windsurf/mcp_config.json
 npx moo-tasks install antigravity  # Generates .gemini/settings.json
+npx moo-tasks install codex        # Prints a generic MCP config snippet
 ```
+
+### Claude Code Hooks (optional)
+```bash
+npx moo-tasks install claude --hooks                # project: .claude/settings.json
+npx moo-tasks install claude --hooks --scope user   # user: ~/.claude/settings.json
+```
+This adds `SessionStart`, `PreToolUse` and `PostToolUse` hooks that run `moo hook <session-start|pre-edit|post-edit>`:
+- **session-start** injects the Where-Did-I-Leave-Off context.
+- **pre-edit** blocks `Edit` / `Write` / `MultiEdit` / `NotebookEdit` on files inside the workspace when this session holds no claimed task in the workspace.
+- **post-edit** renews the claim's lease.
+
+Re-running the installer replaces earlier Moo hooks and leaves other hooks alone. Projects that never ran `moo init` are ignored; set `MOO_HOOKS=off` to disable the hooks temporarily.
 
 ### Manual Configuration
 ```json
@@ -156,7 +173,7 @@ npx moo-tasks install antigravity  # Generates .gemini/settings.json
   "mcpServers": {
     "moo-tasks": {
       "command": "npx",
-      "args": ["moo-tasks", "mcp"]
+      "args": ["-y", "moo-tasks", "mcp"]
     }
   }
 }
@@ -166,17 +183,22 @@ npx moo-tasks install antigravity  # Generates .gemini/settings.json
 
 ## 🤖 Mandatory Agent Protocol
 
-All AI coding agents are instructed to follow this 6-step lifecycle:
+`moo init` writes this protocol into `AGENTS.md` (and the other agent rule files):
 
 ```
-1. SESSION RESUME  → Call moo_session_resume() & moo_list_decisions()
-2. ANCHOR GOAL     → Call moo_create_goal(title, verbatimPrompt)
-3. PLAN & CRITERIA → Call moo_create_task() with markdown criteria BEFORE code
-4. EXCLUSIVE CLAIM → Call moo_claim_task(taskId, agentId, sessionId)
-5. IMPLEMENTATION  → If blocked, call moo_ask_human() or link blockers
-6. VERIFIED PROOF  → Call moo_complete_task() with test proof & output snippet
-7. ADR RECORD      → Call moo_record_decision() for architectural choices
+1. SESSION RESUME → moo_session_resume() at session start
+2. CLAIM FIRST    → Before the first edit, hold a claimed task:
+                    moo_quick_start(title, acceptanceCriteria, description, declaredFiles) for new work,
+                    or moo_get_next_task(claim: true) for planned work.
+                    Small change already done? moo_log_work(title, evidence).
+3. LARGER WORK    → moo_create_goal(title, verbatimPrompt, description), then
+                    moo_create_task(goalId, tasks: [...]) with criteria, declaredFiles, dependsOnTaskIds
+4. WHILE WORKING  → moo_checkpoint (renews the 30-min lease), moo_capture_discovered_work,
+                    moo_ask_human, moo_log_attempt_failure, moo_record_decision
+5. FINISH         → moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun })
 ```
+
+Reading, searching and read-only commands never need a task. Parallel sub-agents each pass their own `agentId`.
 
 ---
 
@@ -184,47 +206,37 @@ All AI coding agents are instructed to follow this 6-step lifecycle:
 
 | Tool Name | Purpose |
 |---|---|
-| `moo_create_goal` | Record human's verbatim prompt and set open task cap |
-| `moo_list_goals` | List project goals and statuses |
-| `moo_get_goal_status` | View goal coverage, open vs cap, and loose ends |
-| `moo_kill_goal` | Drop goal and cascade drop all child tasks with reason |
-| `moo_reopen_goal` | Reopen goal and its tasks |
-| `moo_create_task` | Create task under goal with acceptance criteria & declared files |
-| `moo_create_tasks_batch` | Batch create multiple tasks atomically |
-| `moo_quick_start` | ⚡ 1-call express vibe tool: Atomically creates and claims task with lease and declared files |
-| `moo_checkpoint` | ⚡ Fast progress checkpoint: Appends attempt note & extends heartbeat |
-| `moo_get_compact_context` | 🧠 Ultra-dense token-optimized context block (< 400 tokens) for prompt injection |
-| `moo_update_task` | Update title, criteria, priority, declared files, or goal |
-| `moo_link_dependencies` | Link prerequisite blockers with cycle validation |
-| `moo_unlink_dependencies` | Unlink prerequisite blocker |
-| `moo_get_next_task` | Auto-surface next unblocked, highest-priority task |
-| `moo_get_task` | Get full task details, subtasks, notes, dependencies |
-| `moo_list_tasks` | Filter tasks by goal, status, priority, agent, deferred |
-| `moo_claim_task` | Exclusively claim task (enforces lease & conflict checks) |
-| `moo_heartbeat_task` | Extend active lease during long-running tasks |
-| `moo_release_task` | Voluntarily release claim back to todo |
-| `moo_handoff_task` | Handoff in-flight task to another agent with notes |
-| `moo_complete_task` | Mark task done with mandatory commands/proof evidence |
-| `moo_verify_task` | Verify task done (human or verification agent) |
-| `moo_reject_task` | Reject completed task with mandatory reason |
-| `moo_ask_human` | Escalate question to human and pause task |
-| `moo_get_human_inbox` | List all tasks waiting on human guidance |
-| `moo_answer_human` | Answer question and auto-resume task |
-| `moo_capture_discovered_work` | Add discovered work (must-fix or deferred) |
-| `moo_add_task_note` | Append timestamped, attributed context/attempt note |
-| `moo_list_task_notes` | List context history and attempt logs |
-| `moo_drop_task` | Drop task with mandatory reason |
-| `moo_reopen_task` | Reopen task without losing audit history |
-| `moo_undo_status_change` | Undo last status transition |
-| `moo_bulk_drop_tasks` | Drop multiple tasks in single operation |
-| `moo_bulk_reopen_tasks` | Reopen multiple tasks in single operation |
-| `moo_record_decision` | Record project-level architectural decision |
-| `moo_list_decisions` | List settled decisions before planning |
-| `moo_supersede_decision` | Supersede decision with new rationale |
-| `moo_merge_tasks` | Merge duplicate tasks |
-| `moo_session_resume` | "Where did I leave off?" session summary |
-| `moo_export_project` | Export project to Markdown, JSON, or Plain Text |
-| `moo_archive_completed` | Archive done/dropped tasks out of active list |
+| `moo_create_goal` | Anchor a request as a goal: verbatim prompt plus Markdown PRD (caps open tasks, default 10) |
+| `moo_get_goal` | Goal spec, progress metrics and loose ends; optionally lists its tasks |
+| `moo_update_goal` | Edit a goal; `dropped` (with reason) drops its open tasks, `active` reopens it |
+| `moo_list_goals` | List this workspace's goals |
+| `moo_create_task` | Create one task, or many via `tasks[]` (all-or-nothing); `claim=true` also claims it |
+| `moo_quick_start` | ⚡ Create and claim a task in one call; `goalId` optional |
+| `moo_log_work` | Record small, already-finished work as a completed task in one call |
+| `moo_update_task` | Edit task fields and dependencies (`addDependsOn` / `removeDependsOn`) |
+| `moo_get_task` | Full task with dependencies, subtasks and notes |
+| `moo_list_tasks` | Filterable task summaries in this workspace |
+| `moo_get_next_task` | Highest-priority unblocked todo task; `claim=true` claims it |
+| `moo_claim_task` | Claim a task exclusively (30-min lease, renewed on any tool call with its `taskId`) |
+| `moo_checkpoint` | ⚡ Log a progress note on your claimed task and renew its lease |
+| `moo_release_task` | Give up your claim; the task returns to the queue |
+| `moo_handoff_task` | Transfer your claim to another agent with a summary |
+| `moo_complete_task` | Complete your claimed task with evidence; `autoClaimNext` claims the next ready task |
+| `moo_log_attempt_failure` | Record a failed attempt; repeated failures escalate to a human |
+| `moo_drop_task` | Drop one or several tasks with a reason |
+| `moo_reopen_task` | Reopen one or several tasks |
+| `moo_ask_human` | Pause a task on a question for the user (clarification, approval, credential, decision) |
+| `moo_add_task_note` | Attach a note to a task |
+| `moo_capture_discovered_work` | Record work found mid-task (must-fix-now blocks the current task, otherwise deferred) |
+| `moo_record_decision` | Record an architectural decision; `supersedesDecisionId` replaces an older one |
+| `moo_list_decisions` | This workspace's decisions |
+| `moo_session_resume` | Where you left off: claimed task, ready work, waiting-on-human, decisions, stall warnings |
+| `moo_get_file_context` | Before editing: who holds the files now, plus past tasks, decisions and notes about them |
+| `moo_search` | Full-text search over tasks and decisions in this workspace |
+
+**Board-only actions**: verifying completed work, answering human questions, rejecting a completed task, undoing a status change, and deleting a workspace are done by humans in the web board, not by agents.
+
+> Older tool names from earlier releases (e.g. `moo_create_tasks_batch`, `moo_heartbeat_task`) are still accepted as hidden aliases for compatibility, but are no longer listed.
 
 ---
 
@@ -243,6 +255,7 @@ src/
 │   ├── db/database.ts        # SQLite manager (WAL mode, busy timeout)
 │   ├── db/migrations.ts      # Schema DDL and versioning
 │   ├── git/git-context.ts    # Git branch, commit, dirty status extractor
+│   ├── web/web-ui.ts         # Web board auto-start (shared, one per machine)
 │   └── repositories/         # SQLite Repository Implementations
 │
 ├── services/                  # Application Services (Use Cases)
@@ -256,11 +269,14 @@ src/
 │   ├── duplicate-merge-service.ts # Idempotency & task merging
 │   ├── session-service.ts     # Where-did-I-leave-off session resume
 │   ├── housekeeping-service.ts# Archiving & multi-format export
+│   ├── markdown-import-service.ts # PRD / checklist import into goals & tasks
+│   ├── search-service.ts      # FTS5 full-text search
+│   ├── workspace-service.ts   # Global workspace registry
 │   └── index.ts               # Dependency Injection Container
 │
 ├── mcp/                       # Model Context Protocol Stdio Server
 ├── server/                    # Fastify HTTP + Server-Sent Events (SSE) Engine
-├── cli/                       # CLI Commands (start, init, install, mcp)
+├── cli/                       # CLI Commands (init, install, hook, start, mcp, ws, status, ...)
 └── ui/                        # Vanilla JS + Tailwind + Lucide Icons Web UI
 ```
 

@@ -13,8 +13,8 @@ export class HousekeepingService {
     private noteRepo: INoteRepository
   ) {}
 
-  archiveCompleted(goalId?: string): number {
-    const filter: any = { isArchived: false };
+  archiveCompleted(goalId?: string, workspaceId?: string): number {
+    const filter: any = { isArchived: false, workspaceId };
     if (goalId) filter.goalId = goalId;
 
     const tasks = this.taskRepo.list(filter);
@@ -29,10 +29,16 @@ export class HousekeepingService {
     return completedTasks.length;
   }
 
-  exportProject(projectPath: string, format: 'markdown' | 'json' | 'text' = 'markdown'): string {
-    const goals = this.goalRepo.list(projectPath);
-    const tasks = this.taskRepo.list({ isArchived: false });
-    const decisions = this.decisionRepo.list(projectPath);
+  exportProject(projectPath: string, format: 'markdown' | 'json' | 'text' = 'markdown', workspaceId?: string): string {
+    // Scope by workspace when known; tasks are never exported from other projects.
+    const goals = workspaceId ? this.goalRepo.list(undefined, undefined, workspaceId) : this.goalRepo.list(projectPath);
+    const goalIds = new Set(goals.map((g) => g.id));
+    const tasks = workspaceId
+      ? this.taskRepo.list({ isArchived: false, workspaceId })
+      : this.taskRepo.list({ isArchived: false }).filter((t) => t.goalId && goalIds.has(t.goalId));
+    const decisions = workspaceId
+      ? this.decisionRepo.list(undefined, undefined, undefined, workspaceId)
+      : this.decisionRepo.list(projectPath);
 
     if (format === 'json') {
       return JSON.stringify(

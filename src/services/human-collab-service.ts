@@ -6,6 +6,7 @@ import {
   INoteRepository,
   IStatusHistoryRepository,
 } from '../infrastructure/repositories/interfaces.js';
+import { returnToQueue } from './task-state.js';
 
 export class HumanCollabService {
   constructor(
@@ -14,7 +15,11 @@ export class HumanCollabService {
     private statusHistoryRepo: IStatusHistoryRepository
   ) {}
 
-  askHuman(
+  askHuman(taskId: string, agentId: string, question: string, questionType: 'clarification' | 'approval' | 'credential' | 'decision' = 'clarification', options?: string[]): Task {
+    return this.taskRepo.runExclusive(() => this.askHumanLocked(taskId, agentId, question, questionType, options));
+  }
+
+  private askHumanLocked(
     taskId: string,
     agentId: string,
     question: string,
@@ -70,6 +75,10 @@ export class HumanCollabService {
   }
 
   answerHuman(taskId: string, humanId: string, answer: string): Task {
+    return this.taskRepo.runExclusive(() => this.answerHumanLocked(taskId, humanId, answer));
+  }
+
+  private answerHumanLocked(taskId: string, humanId: string, answer: string): Task {
     if (!answer || !answer.trim()) {
       throw new MandatoryReasonMissingError('providing human answer');
     }
@@ -85,7 +94,8 @@ export class HumanCollabService {
     task.humanAnswer = answer.trim();
     task.humanAnsweredAt = now;
     task.humanAnsweredBy = humanId;
-    task.status = 'todo'; // Resumes ready to be picked up
+    // Resumes in the queue unclaimed (or blocked if its blockers reopened meanwhile)
+    returnToQueue(this.taskRepo, task);
     if (task.attemptCount >= task.maxAttemptsAllowed) {
       // Human guidance restarts the attempt budget; otherwise the next claim re-escalates forever.
       task.attemptCount = 0;

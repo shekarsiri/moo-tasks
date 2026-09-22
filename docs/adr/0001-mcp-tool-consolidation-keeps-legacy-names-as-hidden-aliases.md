@@ -1,4 +1,4 @@
-# 2. MCP tool consolidation keeps legacy names as hidden aliases
+# 1. MCP tool consolidation keeps legacy names as hidden aliases
 
 * **Status**: ACCEPTED
 * **Decision ID**: `dec-b5f5dc5e`

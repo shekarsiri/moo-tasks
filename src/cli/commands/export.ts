@@ -11,7 +11,7 @@ export async function exportCommand(options: {
   const container = createServiceContainer({ projectPath: root });
   const format = options.format || 'markdown';
 
-  const output = container.housekeepingService.exportProject(root, format);
+  const output = container.housekeepingService.exportProject(root, format, container.activeWorkspace.id);
 
   if (options.out) {
     fs.writeFileSync(options.out, output, 'utf-8');

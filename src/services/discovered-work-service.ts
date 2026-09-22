@@ -5,6 +5,7 @@ import {
   ITaskRepository,
   INoteRepository,
 } from '../infrastructure/repositories/interfaces.js';
+import { clearClaim } from './task-state.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
 
 export interface CaptureDiscoveredWorkDTO {
@@ -28,6 +29,10 @@ export class DiscoveredWorkService {
   ) {}
 
   captureWork(dto: CaptureDiscoveredWorkDTO): { newTask: Task; currentTask: Task } {
+    return this.taskRepo.runExclusive(() => this.captureWorkLocked(dto));
+  }
+
+  private captureWorkLocked(dto: CaptureDiscoveredWorkDTO): { newTask: Task; currentTask: Task } {
     const currentTask = this.taskRepo.findById(dto.currentTaskId);
     if (!currentTask) {
       throw new TaskNotFoundError(dto.currentTaskId);
@@ -61,6 +66,8 @@ export class DiscoveredWorkService {
     if (dto.isMustFixNow) {
       this.taskRepo.addDependency(currentTask.id, newTask.id);
       currentTask.status = 'blocked-on-dependency';
+      // The blocked task waits unclaimed so the agent is free to pick up the must-fix work
+      clearClaim(currentTask);
       currentTask.blockedReason = `Blocked on discovered must-fix work: ${newTask.id} (${newTask.title})`;
       currentTask.updatedAt = new Date().toISOString();
       currentTask.lastStateChangeAt = new Date().toISOString();

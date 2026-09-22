@@ -14,6 +14,7 @@ import { ConflictWarning, FileConflictDetector } from '../domain/conflict.js';
 import { DependencyGraph } from '../domain/dependency.js';
 import { DEFAULT_LEASE_SECONDS, hasLiveLease, isHolderProcessDead } from '../domain/lease.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
+import { clearClaim, returnToQueue } from './task-state.js';
 import {
   ITaskRepository,
   INoteRepository,
@@ -120,9 +121,7 @@ export class ClaimService {
         task.humanQuestion = `Task has reached ${task.attemptCount} attempts. Automated looping halted for human guidance.`;
         task.humanQuestionType = 'decision';
         task.humanAnswer = undefined;
-        task.claimedByAgent = undefined;
-        task.claimedSessionId = undefined;
-        task.leaseExpiresAt = undefined;
+        clearClaim(task);
         autoEscalatedToHuman = true;
       } else {
         task.status = 'doing';
@@ -250,11 +249,14 @@ export class ClaimService {
 
   /** Extend the lease if agentId currently holds taskId; silently ignore otherwise. */
   renewIfHolder(taskId: string, agentId: string, extensionSeconds: number = DEFAULT_LEASE_SECONDS): boolean {
-    const task = this.taskRepo.findById(taskId);
-    if (!task || task.status !== 'doing' || task.claimedByAgent !== agentId) return false;
+    // One conditional UPDATE: a claim that moved to someone else in between is never extended.
     const now = new Date();
-    this.taskRepo.updateLease(taskId, new Date(now.getTime() + extensionSeconds * 1000).toISOString(), now.toISOString());
-    return true;
+    return this.taskRepo.renewLeaseIfHolder(
+      taskId,
+      agentId,
+      new Date(now.getTime() + extensionSeconds * 1000).toISOString(),
+      now.toISOString()
+    );
   }
 
   releaseTask(taskId: string, agentId: string, notes?: string): Task {
@@ -271,7 +273,7 @@ export class ClaimService {
       }
 
       const now = new Date().toISOString();
-      const nextStatus = this.returnToQueue(task);
+      const nextStatus = returnToQueue(this.taskRepo, task);
       task.updatedAt = now;
       task.lastStateChangeAt = now;
       const updated = this.taskRepo.update(task);
@@ -363,7 +365,7 @@ export class ClaimService {
         const expiredAgent = task.claimedByAgent;
         const reason = isHolderProcessDead(expiredAgent) ? 'holder process exited' : 'lease expired';
         const now = new Date().toISOString();
-        const nextStatus = this.returnToQueue(task);
+        const nextStatus = returnToQueue(this.taskRepo, task);
         task.updatedAt = now;
         task.lastStateChangeAt = now;
         this.taskRepo.update(task);
@@ -394,21 +396,5 @@ export class ClaimService {
     }
 
     return releasedCount;
-  }
-
-  /** Clears ownership and sets todo or blocked-on-dependency. Caller persists the task. */
-  private returnToQueue(task: Task): TaskStatus {
-    const blockerIds = this.taskRepo.getDependencies(task.id);
-    const blockers = blockerIds.map((id) => this.taskRepo.findById(id)).filter((t): t is Task => Boolean(t));
-    const deps = blockerIds.map((id) => ({ taskId: task.id, dependsOnTaskId: id, createdAt: '' }));
-    const isUnblocked = DependencyGraph.isTaskUnblocked(task.id, deps, new Map(blockers.map((t) => [t.id, t])));
-
-    task.status = isUnblocked ? 'todo' : 'blocked-on-dependency';
-    task.blockedReason = isUnblocked ? undefined : `Waiting on blocker tasks: ${blockerIds.join(', ')}`;
-    task.claimedByAgent = undefined;
-    task.claimedSessionId = undefined;
-    task.claimedAt = undefined;
-    task.leaseExpiresAt = undefined;
-    return task.status;
   }
 }
