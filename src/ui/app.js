@@ -1992,12 +1992,10 @@ window.grpAddHandler = (groupId) => {
 // Sub-Issue Progress Pill Helper (e.g. ⭕ 0/8)
 function getSubissueProgressPill(task) {
   if (state.viewShowSubIssues === false) return '';
-  const totalSubtasks = (task.dependsOnTaskIds && task.dependsOnTaskIds.length > 0) ? task.dependsOnTaskIds.length : 0;
+  const subtasks = state.tasks.filter((t) => t.parentId === task.id);
+  const totalSubtasks = subtasks.length;
   if (totalSubtasks === 0) return '';
-  const doneSubtasks = task.dependsOnTaskIds.filter((id) => {
-    const dep = state.tasks.find((t) => t.id === id);
-    return dep && dep.status === 'done';
-  }).length;
+  const doneSubtasks = subtasks.filter((t) => t.status === 'done').length;
   return `
     <span class="subissue-progress-pill ml-1.5" title="${doneSubtasks}/${totalSubtasks} subtasks completed">
       <svg class="w-3 h-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="8"/></svg>

@@ -330,7 +330,17 @@ export class SqliteTaskRepository implements ITaskRepository {
     }
 
     const rows = this.db.prepare(query).all(...params);
-    return rows.map((r) => this.mapRow(r));
+    const tasks = rows.map((r) => this.mapRow(r));
+    // Hydrate dependsOnTaskIds so consumers (REST /api/tasks, MCP moo_list_tasks,
+    // and the UI DAG graph view) can draw dependency edges without N+1 lookups.
+    const depsByTask = new Map<string, string[]>();
+    for (const d of this.getAllDependencies()) {
+      const ids = depsByTask.get(d.taskId);
+      if (ids) ids.push(d.dependsOnTaskId);
+      else depsByTask.set(d.taskId, [d.dependsOnTaskId]);
+    }
+    for (const t of tasks) t.dependsOnTaskIds = depsByTask.get(t.id) ?? [];
+    return tasks;
   }
 
   listByGoalId(goalId: string): Task[] {
