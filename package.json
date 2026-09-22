@@ -4,8 +4,8 @@
   "description": "Robust, agentic task orchestration & management engine with MCP, Web UI, and human-in-the-loop controls",
   "type": "module",
   "bin": {
-    "moo-tasks": "./dist/cli/index.js",
-    "moo": "./dist/cli/index.js"
+    "moo-tasks": "dist/cli/index.js",
+    "moo": "dist/cli/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
