@@ -91,6 +91,7 @@ const taskSummary = (t: Task) => ({
   claimedByAgent: t.claimedByAgent,
   leaseExpiresAt: t.leaseExpiresAt,
   declaredFiles: t.declaredFiles?.length ? t.declaredFiles : undefined,
+  dependsOnTaskIds: t.dependsOnTaskIds?.length ? t.dependsOnTaskIds : undefined,
   isDeferred: t.isDeferred || undefined,
 });
 
