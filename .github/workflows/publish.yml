@@ -71,13 +71,12 @@ jobs:
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@11
 
-      # Uses npm trusted publishing (OIDC via id-token: write) when it is configured for this
-      # repository on npmjs.com; otherwise falls back to the NPM_TOKEN secret.
+      # Authenticates with npm trusted publishing (OIDC via id-token: write), configured on
+      # npmjs.com for this repository and publish.yml; no token is passed. Verbose logging
+      # shows the OIDC token exchange, which npm otherwise hides when it fails.
       - name: Publish to npm
         run: |
-          npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          npm publish --access public --provenance --loglevel verbose
 
       - name: Push git tag and commit
         run: |
