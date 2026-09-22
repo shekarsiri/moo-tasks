@@ -23,6 +23,7 @@ export interface MarkdownImportOptions {
   authorId?: string;
   authorType?: "agent" | "human" | "system";
   sequentialPhases?: boolean;
+  workspaceId?: string;
 }
 
 export interface MarkdownImportResult {
@@ -146,7 +147,8 @@ export class MarkdownImportService {
         title,
         projectPath,
         Math.max(10, parsed.tasks.length + 5),
-        parsed.goalDescription || content
+        parsed.goalDescription || content,
+        options.workspaceId
       );
     }
 
@@ -170,6 +172,7 @@ export class MarkdownImportService {
       const createRes = this.taskLifecycleService.createTask(
         {
           goalId: goal?.id,
+          workspaceId: options.workspaceId || goal?.workspaceId,
           title: draft.title,
           description: draft.description,
           type: draft.type,

@@ -2,6 +2,7 @@ import os from 'os';
 import picocolors from 'picocolors';
 import { createServiceContainer } from '../../services/index.js';
 import { buildServer } from '../../server/app.js';
+import { probeWebUi } from '../../infrastructure/web/web-ui.js';
 
 function getLocalIpAddresses(): string[] {
   const interfaces = os.networkInterfaces();
@@ -30,7 +31,7 @@ export async function startServerCommand(options: {
   const port = parseInt(options.port || '4242', 10);
   const host = options.lan ? '0.0.0.0' : options.host || '127.0.0.1';
   const container = createServiceContainer({ projectPath: options.projectPath });
-  const app = buildServer(container);
+  const app = buildServer(container, { lan: host === '0.0.0.0' });
 
   try {
     await app.listen({ port, host });
@@ -56,6 +57,11 @@ export async function startServerCommand(options: {
     console.log(`   ${picocolors.gray('Project:')}      ${picocolors.yellow(container.projectPath)}`);
     console.log(`\n${picocolors.gray('Press Ctrl+C to stop.')}\n`);
   } catch (err: any) {
+    if (err?.code === 'EADDRINUSE' && (await probeWebUi(port))) {
+      // Another agent session (or an earlier `moo start`) already runs the shared board.
+      console.log(`${picocolors.green('✔')} Moo Tasks board already running at ${picocolors.cyan(`http://localhost:${port}`)}`);
+      process.exit(0);
+    }
     console.error(picocolors.red(`Error starting server: ${err.message}`));
     process.exit(1);
   }

@@ -2,13 +2,76 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import picocolors from 'picocolors';
+import { fileURLToPath } from 'url';
+import { EDIT_TOOL_MATCHER } from './hook.js';
 
-export async function installCommand(target: string) {
+const HOOK_COMMAND_PATTERN = /\bhook (session-start|pre-edit|post-edit)\b/;
+
+/** Shell command that runs this installation's CLI directly (no npx startup cost per edit). */
+export function hookCommandPrefix(): string {
+  const cli = fileURLToPath(new URL('../index.js', import.meta.url));
+  return `"${process.execPath}" "${cli}" hook`;
+}
+
+/**
+ * Adds the Moo hooks to a Claude Code settings object. Earlier Moo hook entries are replaced,
+ * other hooks are left untouched, so running the installer repeatedly is safe.
+ */
+export function mergeClaudeHooks(settings: any, commandPrefix: string): any {
+  const next = { ...(settings || {}) };
+  const hooks: Record<string, any[]> = { ...(next.hooks || {}) };
+
+  const withoutMoo = (entries: any[] = []) =>
+    entries
+      .map((entry) => ({
+        ...entry,
+        hooks: (entry.hooks || []).filter((h: any) => !HOOK_COMMAND_PATTERN.test(String(h.command || ''))),
+      }))
+      .filter((entry) => entry.hooks.length > 0);
+
+  const add = (event: string, command: string, matcher?: string) => {
+    hooks[event] = [
+      ...withoutMoo(hooks[event]),
+      { ...(matcher ? { matcher } : {}), hooks: [{ type: 'command', command }] },
+    ];
+  };
+
+  add('SessionStart', `${commandPrefix} session-start`);
+  add('PreToolUse', `${commandPrefix} pre-edit`, EDIT_TOOL_MATCHER);
+  add('PostToolUse', `${commandPrefix} post-edit`, EDIT_TOOL_MATCHER);
+
+  next.hooks = hooks;
+  return next;
+}
+
+function installClaudeHooks(scope: string) {
+  const settingsPath =
+    scope === 'user'
+      ? path.join(os.homedir(), '.claude', 'settings.json')
+      : path.join(process.cwd(), '.claude', 'settings.json');
+  let settings: any = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    } catch {
+      console.log(`${picocolors.yellow('!')} ${settingsPath} is not valid JSON; hooks not installed.`);
+      return;
+    }
+  }
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(mergeClaudeHooks(settings, hookCommandPrefix()), null, 2) + '\n');
+  console.log(`${picocolors.green('✔')} Installed Claude Code hooks (${scope}): ${picocolors.cyan(settingsPath)}`);
+  console.log(
+    `  ${picocolors.dim('SessionStart resumes context; edits without a claimed task are blocked; edits renew the lease. Disable with MOO_HOOKS=off.')}`
+  );
+}
+
+export async function installCommand(target: string, options: { hooks?: boolean; scope?: string } = {}) {
   const normalized = (target || 'all').toLowerCase();
 
   const mcpConfigEntry = {
     command: 'npx',
-    args: ['moo-tasks', 'mcp'],
+    args: ['-y', 'moo-tasks', 'mcp'],
   };
 
   console.log(`\n${picocolors.bold(picocolors.blue('🐮 Moo Tasks Multi-Agent MCP Installer'))}\n`);
@@ -31,6 +94,9 @@ export async function installCommand(target: string) {
       console.log(`${picocolors.green('✔')} Configured Claude Code: ${picocolors.cyan(claudeConfigPath)}`);
     } catch (err: any) {
       console.log(`${picocolors.yellow('!')} Claude Code config update skipped: ${err.message}`);
+    }
+    if (options.hooks) {
+      installClaudeHooks(options.scope === 'user' ? 'user' : 'project');
     }
   }
 

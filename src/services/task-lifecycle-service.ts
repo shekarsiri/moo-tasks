@@ -81,22 +81,9 @@ export class TaskLifecycleService {
       }
     }
 
-    // 2. Resolve and check Goal open task cap (auto-link primary active goal if not specified)
-    let effectiveGoalId = dto.goalId;
-    if (!effectiveGoalId && !dto.parentId) {
-      const activeGoals = this.goalService.listGoals(undefined, 'active');
-      if (activeGoals.length > 0) {
-        effectiveGoalId = activeGoals[0].id;
-      }
-    }
-
-    if (effectiveGoalId) {
-      this.goalService.checkGoalCap(effectiveGoalId);
-    }
-
-    // 3. Subtask 1-level limit validation
+    // 2. Subtask 1-level limit validation; subtasks inherit the parent's goal and workspace
+    const parent = dto.parentId ? this.taskRepo.findById(dto.parentId) : null;
     if (dto.parentId) {
-      const parent = this.taskRepo.findById(dto.parentId);
       if (!parent) {
         throw new TaskNotFoundError(dto.parentId);
       }
@@ -105,9 +92,22 @@ export class TaskLifecycleService {
       }
     }
 
-    // 4. Duplicate similarity check
-    const existingTasks = this.taskRepo.list();
-    const duplicateWarnings = TaskSimilarityDetector.findPotentialDuplicates(dto.title, existingTasks);
+    // 3. Resolve the goal within the task's own workspace, never another project's
+    let effectiveGoalId = dto.goalId || parent?.goalId;
+    const workspaceForGoal = dto.workspaceId || parent?.workspaceId;
+    if (!effectiveGoalId && workspaceForGoal) {
+      effectiveGoalId = this.goalService.getOrCreateAdhocGoal(workspaceForGoal).id;
+    }
+    if (effectiveGoalId) {
+      this.goalService.checkGoalCap(effectiveGoalId);
+    }
+
+    // 4. Duplicate similarity check against open work in the same workspace
+    const existingTasks = this.taskRepo.list(workspaceForGoal ? { workspaceId: workspaceForGoal } : {});
+    const duplicateWarnings = TaskSimilarityDetector.findPotentialDuplicates(
+      dto.title,
+      existingTasks.filter((t) => t.status !== 'done' && t.status !== 'dropped' && !t.isArchived)
+    );
 
     // 5. Dependency existence and cycle validation
     if (dto.dependsOnTaskIds && dto.dependsOnTaskIds.length > 0) {
@@ -144,15 +144,8 @@ export class TaskLifecycleService {
         // ignore if goal not found
       }
     }
-    if (!effectiveWorkspaceId && dto.parentId) {
-      try {
-        const parent = this.taskRepo.findById(dto.parentId);
-        if (parent?.workspaceId) {
-          effectiveWorkspaceId = parent.workspaceId;
-        }
-      } catch {
-        // ignore
-      }
+    if (!effectiveWorkspaceId && parent?.workspaceId) {
+      effectiveWorkspaceId = parent.workspaceId;
     }
 
     const task: Task = {
@@ -166,7 +159,7 @@ export class TaskLifecycleService {
       tags: parsedTitle.tags,
       status: 'todo',
       priority: parsedTitle.priority || 'medium',
-      orderIndex: existingTasks.length + 1,
+      orderIndex: this.taskRepo.nextOrderIndex(),
       acceptanceCriteria: dto.acceptanceCriteria?.trim() || 'Criteria not specified',
       declaredFiles: parsedTitle.declaredFiles,
       verificationState: 'unverified',
@@ -185,7 +178,8 @@ export class TaskLifecycleService {
 
     // If initial dependencies are not all done, start as blocked-on-dependency
     if (dto.dependsOnTaskIds && dto.dependsOnTaskIds.length > 0) {
-      const taskMap = new Map(existingTasks.map((t) => [t.id, t]));
+      const blockers = dto.dependsOnTaskIds.map((id) => this.taskRepo.findById(id)).filter((t): t is Task => Boolean(t));
+      const taskMap = new Map(blockers.map((t) => [t.id, t]));
       const allDeps = dto.dependsOnTaskIds.map((id) => ({ taskId, dependsOnTaskId: id, createdAt: now }));
       const isUnblocked = DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap);
       if (!isUnblocked) {
@@ -214,11 +208,8 @@ export class TaskLifecycleService {
   }
 
   createBatch(dtos: CreateTaskDTO[], authorId: string = 'system', authorType: AuthorType = 'system'): CreateTaskResult[] {
-    const results: CreateTaskResult[] = [];
-    for (const dto of dtos) {
-      results.push(this.createTask(dto, authorId, authorType));
-    }
-    return results;
+    // All-or-nothing: hitting a goal cap halfway must not leave a partial batch behind.
+    return this.taskRepo.runExclusive(() => dtos.map((dto) => this.createTask(dto, authorId, authorType)));
   }
 
   getTask(taskId: string): Task {
@@ -387,14 +378,20 @@ export class TaskLifecycleService {
     }
   }
 
-  getNextUnblockedTask(goalId?: string, agentId?: string, avoidFileConflicts: boolean = false): Task | null {
+  getNextUnblockedTask(
+    goalId?: string,
+    agentId?: string,
+    avoidFileConflicts: boolean = false,
+    workspaceId?: string
+  ): Task | null {
     const filter: any = { status: 'todo', isDeferred: false, isArchived: false };
     if (goalId) filter.goalId = goalId;
+    if (workspaceId) filter.workspaceId = workspaceId;
 
     const candidateTasks = this.taskRepo.list(filter);
     if (candidateTasks.length === 0) return null;
 
-    const allTasks = this.taskRepo.list();
+    const allTasks = this.taskRepo.list(workspaceId ? { workspaceId } : {});
     const taskMap = new Map(allTasks.map((t) => [t.id, t]));
     const allDeps = this.taskRepo.getAllDependencies();
 

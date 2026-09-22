@@ -52,12 +52,16 @@ export interface TaskFilter {
 export interface ITaskRepository {
   create(task: Task): Task;
   createBatch(tasks: Task[]): Task[];
+  /** Serialize a read-check-write sequence against all other writers (BEGIN IMMEDIATE). */
+  runExclusive<T>(fn: () => T): T;
+  updateLease(taskId: string, leaseExpiresAt: string, updatedAt: string): void;
+  nextOrderIndex(): number;
   findById(id: string): Task | null;
   findByIdempotencyKey(key: string): Task | null;
   list(filter?: TaskFilter): Task[];
   listByGoalId(goalId: string): Task[];
   listSubtasks(parentId: string): Task[];
-  listOrphanTasks(): Task[];
+  listOrphanTasks(workspaceId?: string): Task[];
   update(task: Task): Task;
   updateBatch(tasks: Task[]): void;
   delete(id: string): boolean;

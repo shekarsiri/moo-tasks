@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { createServiceContainer, ServiceContainer } from '../services/index.js';
 import {
   GoalCapExceededError,
+  InvalidTaskStateError,
   MissingEvidenceError,
+  NotTaskHolderError,
   ParentHasOpenSubtasksError,
   SubtaskNestingError,
   TaskAlreadyClaimedError,
@@ -147,6 +149,7 @@ describe('Moo Tasks Core Domain & Services', () => {
         acceptanceCriteria: 'Child done',
       });
 
+      container.claimService.claimTask(parent.task.id, 'agent-1', 'sess-1');
       expect(() => {
         container.verificationService.completeTask(
           parent.task.id,
@@ -171,6 +174,7 @@ describe('Moo Tasks Core Domain & Services', () => {
       expect(blocked.task.status).toBe('blocked-on-dependency');
 
       // Complete blocker with evidence
+      container.claimService.claimTask(blocker.task.id, 'agent-1', 'sess-1');
       container.verificationService.completeTask(
         blocker.task.id,
         'agent-1',
@@ -254,9 +258,11 @@ describe('Moo Tasks Core Domain & Services', () => {
         tags: ['sqlite', 'database', 'storage'],
         projectPath: '/test/project',
         authorId: 'architect-1',
+        workspaceId: container.activeWorkspace.id,
       });
 
       const t = container.taskLifecycleService.createTask({
+        workspaceId: container.activeWorkspace.id,
         title: 'Optimize SQLite database queries',
         acceptanceCriteria: 'Queries under 10ms',
         declaredFiles: ['src/db/sqlite-storage.ts'],
@@ -328,9 +334,26 @@ describe('Moo Tasks Core Domain & Services', () => {
         acceptanceCriteria: 'Feature ac',
       });
 
+      // Completing without holding the claim is refused
+      expect(() => {
+        container.verificationService.completeTask(t.task.id, 'agent-1', { testProof: 'ok' });
+      }).toThrow(InvalidTaskStateError);
+
+      container.claimService.claimTask(t.task.id, 'agent-1', 'sess-1');
+
+      // Another agent cannot complete a task it does not hold
+      expect(() => {
+        container.verificationService.completeTask(t.task.id, 'agent-2', { testProof: 'ok' });
+      }).toThrow(NotTaskHolderError);
+
       // Missing evidence throws
       expect(() => {
         container.verificationService.completeTask(t.task.id, 'agent-1', {});
+      }).toThrow(MissingEvidenceError);
+
+      // A bare command list is not proof
+      expect(() => {
+        container.verificationService.completeTask(t.task.id, 'agent-1', { commandsRun: ['echo'] });
       }).toThrow(MissingEvidenceError);
 
       // Valid evidence succeeds
@@ -380,6 +403,7 @@ describe('Moo Tasks Core Domain & Services', () => {
         acceptanceCriteria: 'Buttons aligned',
       });
 
+      container.claimService.claimTask(t.task.id, 'agent-1', 'sess-1');
       container.verificationService.completeTask(t.task.id, 'agent-1', {
         outputSnippet: 'Rendered properly',
       });
@@ -414,6 +438,7 @@ describe('Moo Tasks Core Domain & Services', () => {
       expect(dependent.task.status).toBe('blocked-on-dependency');
 
       // Complete blocker
+      container.claimService.claimTask(blocker.task.id, 'agent-1', 'sess-1');
       container.verificationService.completeTask(blocker.task.id, 'agent-1', {
         outputSnippet: 'API online',
       });
@@ -441,6 +466,7 @@ describe('Moo Tasks Core Domain & Services', () => {
         dependsOnTaskIds: [blocker.task.id],
       });
 
+      container.claimService.claimTask(blocker.task.id, 'agent-1', 'sess-1');
       container.verificationService.completeTask(blocker.task.id, 'agent-1', {
         outputSnippet: 'DB migrated',
       });
@@ -756,13 +782,31 @@ describe('Moo Tasks Core Domain & Services', () => {
       expect(container.workspaceService.getWorkspaceById(ws1.id)).toBeNull();
     });
 
-    it('auto-links tasks to the primary active goal when goalId is omitted', () => {
-      const goal = container.goalService.createGoal('Main Feature Goal', 'Verbatim prompt', '/test/project');
+    it('files goal-less tasks under the workspace ad-hoc goal, never another workspace goal', () => {
+      const wsA = container.workspaceService.getOrCreateWorkspace('/test/project-a');
+      const wsB = container.workspaceService.getOrCreateWorkspace('/test/project-b');
+      const goalA = container.goalService.createGoal('A goal', 'prompt', '/test/project-a', 10, undefined, wsA.id);
+
       const created = container.taskLifecycleService.createTask({
         title: 'Task without explicit goalId',
         acceptanceCriteria: 'Criteria',
+        workspaceId: wsB.id,
       });
-      expect(created.task.goalId).toBe(goal.id);
+      expect(created.task.goalId).not.toBe(goalA.id);
+      const adhoc = container.goalService.getGoal(created.task.goalId!);
+      expect(adhoc.title).toBe('Ad-hoc work');
+      expect(adhoc.workspaceId).toBe(wsB.id);
+
+      // The ad-hoc goal is reused, and next-task never crosses workspaces
+      const second = container.taskLifecycleService.createTask({
+        title: 'Second quick fix',
+        acceptanceCriteria: 'Criteria',
+        workspaceId: wsB.id,
+      });
+      expect(second.task.goalId).toBe(adhoc.id);
+      container.taskLifecycleService.createTask({ title: 'A only', acceptanceCriteria: 'x', goalId: goalA.id, workspaceId: wsA.id, priority: 'critical' });
+      const next = container.taskLifecycleService.getNextUnblockedTask(undefined, undefined, false, wsB.id);
+      expect(next?.workspaceId).toBe(wsB.id);
     });
 
     it('surfaces conflict-free unblocked tasks for parallel agents when avoidFileConflicts is enabled', () => {
@@ -1088,9 +1132,11 @@ Plan description details.
         tags: ['session', 'redis', 'cache'],
         projectPath: '/test/project',
         authorId: 'tester',
+        workspaceId: container.activeWorkspace.id,
       });
 
       const task = container.taskLifecycleService.createTask({
+        workspaceId: container.activeWorkspace.id,
         title: 'Implement session management',
         type: 'feature',
         tags: ['redis', 'session'],

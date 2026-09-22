@@ -1,8 +1,8 @@
 import Fastify, { FastifyInstance } from 'fastify';
-import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { ServiceContainer } from '../services/index.js';
 import { DatabaseManager } from '../infrastructure/db/database.js';
@@ -19,12 +19,58 @@ const __dirname = path.dirname(__filename);
 export interface ServerOptions {
   port?: number;
   host?: string;
+  /** Serving on the LAN: also accept requests addressed to this machine's network IPs. */
+  lan?: boolean;
 }
 
-export function buildServer(container: ServiceContainer): FastifyInstance {
+/** Hostnames a request may be addressed to. Anything else is DNS rebinding or a stray proxy. */
+function allowedHostnames(lan: boolean): Set<string> {
+  const names = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+  const host = os.hostname().toLowerCase();
+  names.add(host);
+  names.add(host.endsWith('.local') ? host : `${host}.local`);
+  if (lan) {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const net of list || []) {
+        names.add(net.family === 'IPv6' ? `[${net.address}]` : net.address);
+      }
+    }
+  }
+  return names;
+}
+
+function hostnameOf(hostHeader: string): string {
+  const value = hostHeader.trim().toLowerCase();
+  if (value.startsWith('[')) return value.slice(0, value.indexOf(']') + 1);
+  return value.split(':')[0];
+}
+
+export function buildServer(container: ServiceContainer, options: ServerOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: false,
   });
+
+  // The board has no login, so only same-machine (or explicitly LAN) requests are served,
+  // and browsers may only call the API from the board's own pages.
+  const hostnames = allowedHostnames(Boolean(options.lan));
+  app.addHook('onRequest', async (req, reply) => {
+    const host = hostnameOf(String(req.headers.host || ''));
+    if (!hostnames.has(host)) {
+      return reply.status(403).send({ success: false, error: `Host '${host}' is not allowed.` });
+    }
+    const origin = req.headers.origin;
+    if (origin) {
+      let originHost = '';
+      try {
+        originHost = new URL(origin).hostname.toLowerCase();
+      } catch {}
+      if (!hostnames.has(originHost) && !hostnames.has(`[${originHost}]`)) {
+        return reply.status(403).send({ success: false, error: 'Cross-origin requests are not allowed.' });
+      }
+    }
+  });
+
+  app.get('/api/health', async () => ({ ok: true, service: 'moo-tasks', pid: process.pid }));
 
   app.setErrorHandler((error: any, request, reply) => {
     if (error instanceof DomainError) {
@@ -44,9 +90,6 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     });
   });
 
-  app.register(cors, {
-    origin: '*',
-  });
 
   // SSE client connections registry
   const sseClients = new Set<(event: string, data: any) => void>();
@@ -176,8 +219,6 @@ export function buildServer(container: ServiceContainer): FastifyInstance {
     reply.raw.setHeader('Pragma', 'no-cache');
     reply.raw.setHeader('Expires', '0');
     reply.raw.setHeader('X-Accel-Buffering', 'no');
-    reply.raw.setHeader('Access-Control-Allow-Origin', '*');
-    reply.raw.setHeader('Access-Control-Allow-Headers', '*');
     reply.raw.flushHeaders();
 
     // 2KB initial comment padding to bypass buffering on mobile browsers / routers

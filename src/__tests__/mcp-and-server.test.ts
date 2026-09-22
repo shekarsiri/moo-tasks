@@ -30,16 +30,19 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(toolNames).toContain('moo_create_goal');
       expect(toolNames).toContain('moo_create_task');
       expect(toolNames).toContain('moo_update_task');
-      expect(toolNames).toContain('moo_link_dependencies');
-      expect(toolNames).toContain('moo_unlink_dependencies');
-      expect(toolNames).toContain('moo_bulk_drop_tasks');
-      expect(toolNames).toContain('moo_bulk_reopen_tasks');
       expect(toolNames).toContain('moo_claim_task');
       expect(toolNames).toContain('moo_complete_task');
+      expect(toolNames).toContain('moo_log_work');
       expect(toolNames).toContain('moo_ask_human');
-      expect(toolNames).toContain('moo_answer_human');
       expect(toolNames).toContain('moo_record_decision');
       expect(toolNames).toContain('moo_session_resume');
+      expect(toolNames).toContain('moo_quick_start');
+
+      // Legacy and human-only tools are callable but not listed
+      expect(toolNames).not.toContain('moo_link_dependencies');
+      expect(toolNames).not.toContain('moo_answer_human');
+      expect(toolNames).not.toContain('moo_verify_task');
+      expect(res.tools.length).toBeLessThanOrEqual(28);
     });
 
     it('executes moo_create_goal, moo_create_task, and moo_claim_task through MCP tool handler', async () => {
@@ -447,7 +450,8 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       });
       const claimData = JSON.parse(claimRes.content[0].text);
       expect(claimData.success).toBe(true);
-      expect(claimData.task.claimedByAgent).toBe('agent');
+      // Without an agentId the MCP session identity is used, never a shared 'agent' default
+      expect(claimData.task.claimedByAgent).toMatch(/^mcp-client@.+:\d+$/);
 
       // Heartbeat without passing agentId
       const hbRes = await callTool({
@@ -523,7 +527,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(data.completedTask.id).toBe(t1.task.id);
       expect(data.completedTask.status).toBe('done');
 
-      expect(data.nextTask).toBeDefined();
+      expect(data.nextTask).toBeTruthy();
       expect(data.nextTask.id).toBe(t2.task.id);
       expect(data.nextTask.status).toBe('doing');
       expect(data.nextTask.claimedByAgent).toBe('pipeline-agent');
@@ -552,11 +556,13 @@ describe('MCP Tools & Fastify HTTP Server', () => {
         'Human requested resource testing',
         container.projectPath,
         5,
-        '# PRD Specification\n- Detail A\n- Detail B'
+        '# PRD Specification\n- Detail A\n- Detail B',
+        container.activeWorkspace.id
       );
       container.taskLifecycleService.createTask({
         title: 'Ready Queue Task',
         goalId: goal.id,
+        workspaceId: container.activeWorkspace.id,
         acceptanceCriteria: 'Ready test criteria',
       });
       container.decisionService.recordDecision({
@@ -566,6 +572,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
         rationale: 'Allows IDEs to pull fresh context automatically',
         projectPath: container.projectPath,
         authorId: 'architect-1',
+        workspaceId: container.activeWorkspace.id,
       });
 
       // 3. Read moo://context/compact
@@ -641,7 +648,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
         },
       });
       expect(executePromptRes.messages[0].content.text).toContain("coder-bot");
-      expect(executePromptRes.messages[0].content.text).toContain('moo_claim_task');
+      expect(executePromptRes.messages[0].content.text).toContain('moo_get_next_task');
     });
 
     it('handles moo_check_file_lock and detects active locks held by other agents', async () => {
@@ -652,6 +659,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       const task = container.taskLifecycleService.createTask({
         title: 'Edit Auth Middleware',
         acceptanceCriteria: 'Middleware updated',
+        workspaceId: container.activeWorkspace.id,
         declaredFiles: ['src/middleware/auth.ts'],
       });
       container.claimService.claimTask(task.task.id, 'agent-alpha', 'sess-alpha', {
@@ -723,7 +731,8 @@ describe('MCP Tools & Fastify HTTP Server', () => {
       expect(claimRes.isError).toBe(true);
       const errData = JSON.parse(claimRes.content[0].text);
       expect(errData.code).toBe('TASK_BLOCKED_ON_DEPENDENCY');
-      expect(errData.recoveryAction).toContain('Prerequisites must be completed first');
+      expect(errData.recoveryAction).toContain('Finish its blockers first');
+      expect(errData.nextTool).toBe('moo_get_next_task');
     });
 
     it('supports options parameter in moo_ask_human tool', async () => {

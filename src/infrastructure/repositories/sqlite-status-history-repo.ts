@@ -41,7 +41,7 @@ export class SqliteStatusHistoryRepository implements IStatusHistoryRepository {
 
   listByTaskId(taskId: string): StatusHistoryEntry[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp ASC
+      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp ASC, rowid ASC
     `);
     const rows = stmt.all(taskId);
     return rows.map((r) => this.mapRow(r));
@@ -49,7 +49,7 @@ export class SqliteStatusHistoryRepository implements IStatusHistoryRepository {
 
   findLatestByTaskId(taskId: string): StatusHistoryEntry | null {
     const stmt = this.db.prepare(`
-      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp DESC LIMIT 1
+      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1
     `);
     const row = stmt.get(taskId);
     return row ? this.mapRow(row) : null;
@@ -57,7 +57,7 @@ export class SqliteStatusHistoryRepository implements IStatusHistoryRepository {
 
   findPreviousState(taskId: string): StatusHistoryEntry | null {
     const stmt = this.db.prepare(`
-      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp DESC LIMIT 1 OFFSET 1
+      SELECT * FROM status_history WHERE task_id = ? ORDER BY timestamp DESC, rowid DESC LIMIT 1 OFFSET 1
     `);
     const row = stmt.get(taskId);
     return row ? this.mapRow(row) : null;

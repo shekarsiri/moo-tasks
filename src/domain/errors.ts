@@ -49,7 +49,7 @@ export class AgentConcurrencyLimitError extends DomainError {
 
 export class MissingEvidenceError extends DomainError {
   constructor(taskId: string) {
-    super(`Cannot close task ${taskId} without verifiable evidence (commands run, output snippet, or test proofs).`, 'MISSING_EVIDENCE');
+    super(`Cannot close task ${taskId} without verifiable evidence: provide testProof or outputSnippet (real command output), or make code changes git can see since the claim.`, 'MISSING_EVIDENCE');
     this.name = 'MissingEvidenceError';
   }
 }
@@ -93,5 +93,45 @@ export class TaskWaitingOnHumanError extends DomainError {
   constructor(taskId: string, question?: string) {
     super(`Task ${taskId} is paused waiting on human guidance and cannot be claimed until answered (${question || 'pending question'}).`, 'TASK_WAITING_ON_HUMAN');
     this.name = 'TaskWaitingOnHumanError';
+  }
+}
+
+export class TaskNotClaimableError extends DomainError {
+  constructor(taskId: string, status: string) {
+    super(`Task ${taskId} is '${status}' and cannot be claimed. Only todo tasks (or answered waiting-on-human tasks) can be claimed.`, 'TASK_NOT_CLAIMABLE');
+    this.name = 'TaskNotClaimableError';
+  }
+}
+
+export class NotTaskHolderError extends DomainError {
+  constructor(taskId: string, action: string, agentId: string, holder?: string) {
+    super(
+      holder
+        ? `Cannot ${action} task ${taskId}: it is claimed by '${holder}', not '${agentId}'.`
+        : `Cannot ${action} task ${taskId}: it is not claimed by anyone.`,
+      'NOT_TASK_HOLDER'
+    );
+    this.name = 'NotTaskHolderError';
+  }
+}
+
+export class InvalidTaskStateError extends DomainError {
+  constructor(taskId: string, action: string, status: string, expected: string[]) {
+    super(`Cannot ${action} task ${taskId} while it is '${status}' (expected: ${expected.join(' or ')}).`, 'INVALID_TASK_STATE');
+    this.name = 'InvalidTaskStateError';
+  }
+}
+
+export class HumanOnlyActionError extends DomainError {
+  constructor(action: string) {
+    super(`'${action}' is reserved for humans. Use the web UI (moo start) or ask the user.`, 'HUMAN_ONLY_ACTION');
+    this.name = 'HumanOnlyActionError';
+  }
+}
+
+export class InvalidArgumentsError extends DomainError {
+  constructor(message: string) {
+    super(message, 'INVALID_ARGUMENTS');
+    this.name = 'InvalidArgumentsError';
   }
 }

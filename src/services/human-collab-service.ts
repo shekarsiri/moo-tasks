@@ -86,6 +86,10 @@ export class HumanCollabService {
     task.humanAnsweredAt = now;
     task.humanAnsweredBy = humanId;
     task.status = 'todo'; // Resumes ready to be picked up
+    if (task.attemptCount >= task.maxAttemptsAllowed) {
+      // Human guidance restarts the attempt budget; otherwise the next claim re-escalates forever.
+      task.attemptCount = 0;
+    }
     task.updatedAt = now;
     task.lastStateChangeAt = now;
 
@@ -115,9 +119,10 @@ export class HumanCollabService {
     return updated;
   }
 
-  getHumanInbox(goalId?: string): Task[] {
+  getHumanInbox(goalId?: string, workspaceId?: string): Task[] {
     const filter: any = { status: 'waiting-on-human', isArchived: false };
     if (goalId) filter.goalId = goalId;
+    if (workspaceId) filter.workspaceId = workspaceId;
     return this.taskRepo.list(filter);
   }
 }

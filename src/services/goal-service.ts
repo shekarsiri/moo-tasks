@@ -6,13 +6,37 @@ import {
   Task,
 } from '../domain/types.js';
 import { GoalCapExceededError, GoalNotFoundError, MandatoryReasonMissingError } from '../domain/errors.js';
-import { IGoalRepository, ITaskRepository } from '../infrastructure/repositories/interfaces.js';
+import { IGoalRepository, ITaskRepository, IWorkspaceRepository } from '../infrastructure/repositories/interfaces.js';
+
+export const ADHOC_GOAL_TITLE = 'Ad-hoc work';
+const ADHOC_GOAL_CAP = 25;
 
 export class GoalService {
   constructor(
     private goalRepo: IGoalRepository,
-    private taskRepo: ITaskRepository
+    private taskRepo: ITaskRepository,
+    private workspaceRepo?: IWorkspaceRepository
   ) {}
+
+  /**
+   * Standing per-workspace goal for small fixes and one-off requests, so agents can create
+   * a task without first inventing a goal.
+   */
+  getOrCreateAdhocGoal(workspaceId: string, projectPath?: string): Goal {
+    const existing = this.goalRepo
+      .list(undefined, 'active', workspaceId)
+      .find((g) => g.title === ADHOC_GOAL_TITLE && g.workspaceId === workspaceId);
+    if (existing) return existing;
+    const rootPath = projectPath || this.workspaceRepo?.findById(workspaceId)?.rootPath || '';
+    return this.createGoal(
+      ADHOC_GOAL_TITLE,
+      'Standing goal for small fixes and one-off requests created without an explicit goal.',
+      rootPath,
+      ADHOC_GOAL_CAP,
+      undefined,
+      workspaceId
+    );
+  }
 
   createGoal(
     title: string,

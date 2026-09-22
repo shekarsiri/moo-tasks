@@ -57,6 +57,13 @@ export interface GitContext {
   modifiedFiles?: string[];
 }
 
+export interface GitBaseline {
+  commitHash?: string;
+  /** Files already dirty when the task was claimed, with their blob hash at that moment. */
+  dirtyFileHashes: Record<string, string>;
+  capturedAt: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -101,6 +108,7 @@ export interface Task {
   claimedAt?: string;
   leaseExpiresAt?: string;
   declaredFiles: string[];
+  claimGitBaseline?: GitBaseline;
 
   // Completion & Proof
   verificationState: VerificationState;

@@ -166,6 +166,11 @@ export class DatabaseMigrator {
 
     // Dynamic column additions for existing installations
     try {
+      db.exec(`ALTER TABLE tasks ADD COLUMN claim_git_baseline TEXT;`);
+    } catch {
+      // Column already exists
+    }
+    try {
       db.exec(`ALTER TABLE goals ADD COLUMN workspace_id TEXT;`);
     } catch {
       // column already exists

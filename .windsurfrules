@@ -1,63 +1,28 @@
-# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
+<!-- moo-tasks:start (managed by `moo init`; edits inside this block are overwritten) -->
+# 🐮 Moo Tasks protocol
 
-> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server.
-> For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks with **FULL TECHNICAL DETAILS** **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
+You are connected to the **Moo Tasks** MCP server. Every code change you make is tracked as a Moo task.
 
----
+## Before editing code
+- Reading, searching and read-only commands (git status, running tests, builds) never need a task.
+- Before your **first edit**, hold a claimed task:
+  - New work: `moo_quick_start(title, acceptanceCriteria, description, declaredFiles)` creates and claims it in one call. `goalId` is optional; without it the task goes under this workspace's "Ad-hoc work" goal.
+  - Planned work: `moo_get_next_task(claim: true)`.
+- A small change is already finished? `moo_log_work(title, evidence)` records it in one call.
 
-## ⚡ 1-Call Fast-Path for Rapid Coding (Recommended)
+## Larger requests (multi-step or multi-file)
+1. `moo_create_goal(title, verbatimPrompt, description)`: the user's exact words plus a Markdown PRD.
+2. `moo_create_task(goalId, tasks: [...])`: atomic tasks, each with a description (overview and numbered plan), `- [ ]` acceptance criteria, `declaredFiles` and `dependsOnTaskIds`. Titles are plain text; use `priority`, `type` and `tags` instead of prefixes like "C1:".
+3. Work through them with `moo_get_next_task(claim: true)`.
 
-When the user asks you to implement a feature or fix an issue, use **`moo_quick_start`** to atomically create and claim the task in a single step with complete specifications:
+## While working
+- Long task: `moo_checkpoint(taskId, note)` logs progress and renews your 30-minute lease.
+- Found other work: `moo_capture_discovered_work`. Need the user: `moo_ask_human`. An attempt failed: `moo_log_attempt_failure`.
+- Chose a library, pattern or trade-off: `moo_record_decision(title, context, choice, rationale)`.
 
-```json
-{
-  "title": "Implement feature X",
-  "type": "feature",
-  "tags": ["backend", "api"],
-  "description": "### Technical Overview\nDetailed design, architectural breakdown, and step-by-step implementation plan.\n\n### Implementation Plan\n1. Step 1...\n2. Step 2...",
-  "acceptanceCriteria": "- [ ] Clear, testable markdown definition of done\n- [ ] Unit tests pass",
-  "priority": "high",
-  "declaredFiles": ["src/feature.ts"]
-}
-```
+## Finishing
+- `moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun })`. Files changed since the claim are captured from git automatically.
+- Parallel sub-agents each pass their own `agentId`.
 
----
-
-## 🎯 Full Mandatory 6-Step Workflow Protocol
-
-### 1. Goal Anchoring (Prevent Scope Drift)
-- Always anchor the human user's overarching request with `moo_create_goal(title, verbatimPrompt, description)`.
-- Always include:
-  - **verbatimPrompt**: Store the user's EXACT verbatim prompt to maintain fidelity.
-  - **description**: Full rich Markdown PRD, architectural breakdown, component boundaries, and milestones.
-
-### 2. Task Planning & Full Specifications
-- Break down the goal into small, atomic tasks before touching code:
-  - Call `moo_create_task` or `moo_create_tasks_batch`.
-  - **Task titles must be clean, descriptive text** — do NOT embed priority codes, category prefixes, or sequence numbers in titles (e.g. avoid `"C1: …"`, `"H2: …"`, `"UX-3: …"`, `"M1 — …"`). Use the `priority`, `type`, and `tags` fields for classification.
-  - ALWAYS write a comprehensive **`description`** containing:
-    1. **Technical Overview & Architecture**: Why and how this is built.
-    2. **Step-by-Step Implementation Plan**: Numbered actionable steps.
-    3. **Design Decisions / Code Snippets**: Key types, schemas, or endpoints.
-  - ALWAYS write testable **`acceptanceCriteria`** in Markdown with checkboxes (`- [ ]`) BEFORE touching code.
-  - Declare **`declaredFiles`** and prerequisite **`dependsOnTaskIds`** (DAG cycle prevention is enforced).
-  - Open tasks cap (max 10 open items per goal) is strictly enforced to prevent over-planning.
-
-### 3. Exclusive Claim & Ownership
-- Claim a task exclusively before starting implementation:
-  - Call `moo_claim_task(taskId, agentId, sessionId, declaredFiles)` or use `moo_quick_start`.
-  - This acquires a lease and protects against file collisions with concurrent agents.
-
-### 4. Mid-Task Progress Checkpoints
-- During implementation loops or long refactors, log progress:
-  - Call `moo_checkpoint(taskId, note: "Added fixtures, mock APIs ready", heartbeat: true)`.
-  - This automatically renews your lease so other agents don't reclaim your task.
-
-### 5. Verified Completion (Mandatory Proof)
-- When implementation is complete and tests pass, close the task:
-  - Call `moo_complete_task(taskId, agentId, evidence: { commandsRun, outputSnippet, filesModified, testProof })`.
-  - Tasks without verifiable proof cannot be marked done.
-
-### 6. Architectural Decisions (ADR)
-- Whenever choosing a library, database, pattern, or system design trade-off:
-  - Call `moo_record_decision(title, context, choice, rationale, tags)` so subsequent agents never re-debate established decisions.
+At session start call `moo_session_resume`. The board runs at http://localhost:4242.
+<!-- moo-tasks:end -->

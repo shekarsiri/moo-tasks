@@ -1,7 +1,9 @@
 import crypto from 'crypto';
 import { AuthorType, Task, TaskEvidence } from '../domain/types.js';
 import {
+  InvalidTaskStateError,
   MandatoryReasonMissingError,
+  NotTaskHolderError,
   MissingEvidenceError,
   ParentHasOpenSubtasksError,
   TaskNotFoundError,
@@ -13,7 +15,7 @@ import {
   IStatusHistoryRepository,
 } from '../infrastructure/repositories/interfaces.js';
 import { DependencyGraph } from '../domain/dependency.js';
-import { ClaimService, ClaimTaskOptions, ClaimTaskResult } from './claim-service.js';
+import { ClaimService, ClaimTaskOptions, ClaimTaskResult, RepoRootResolver } from './claim-service.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
 
 export interface CompleteAndClaimNextResult {
@@ -29,7 +31,8 @@ export class VerificationService {
     private noteRepo: INoteRepository,
     private statusHistoryRepo: IStatusHistoryRepository,
     private taskLifecycleService?: TaskLifecycleService,
-    private claimService?: ClaimService
+    private claimService?: ClaimService,
+    private resolveRepoRoot: RepoRootResolver = () => undefined
   ) {}
 
   completeTask(
@@ -38,86 +41,101 @@ export class VerificationService {
     evidence: TaskEvidence,
     notes?: string
   ): Task {
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
+    const preview = this.taskRepo.findById(taskId);
+    if (!preview) {
       throw new TaskNotFoundError(taskId);
     }
 
-    // 1. Evidence is mandatory to close (must supply commands, test proof, snippet, or explicit files/gitContext)
-    const hasEvidence =
-      Boolean(evidence.commandsRun && evidence.commandsRun.length > 0) ||
-      Boolean(evidence.outputSnippet && evidence.outputSnippet.trim().length > 0) ||
-      Boolean(evidence.testProof && evidence.testProof.trim().length > 0) ||
-      Boolean(evidence.filesModified && evidence.filesModified.length > 0) ||
-      Boolean(evidence.gitContext?.modifiedFiles && evidence.gitContext.modifiedFiles.length > 0);
+    // Git is read outside the write lock; caller-supplied gitContext is never trusted as proof.
+    const gitCwd = this.resolveRepoRoot(preview);
+    const gitContext = GitContextService.getContext(gitCwd);
+    const changes = preview.claimGitBaseline ? GitContextService.changesSince(preview.claimGitBaseline, gitCwd) : null;
 
-    if (!hasEvidence) {
-      throw new MissingEvidenceError(taskId);
-    }
+    const updated = this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
+      }
 
-    // Auto-capture Git Context and auto-populate filesModified if missing
-    const gitContext = evidence.gitContext || GitContextService.getContext();
-    evidence.gitContext = gitContext;
+      // 1. Only the current holder of an in-progress task can complete it
+      if (task.status !== 'doing') {
+        throw new InvalidTaskStateError(taskId, 'complete', task.status, ['doing']);
+      }
+      if (task.claimedByAgent !== agentId) {
+        throw new NotTaskHolderError(taskId, 'complete', agentId, task.claimedByAgent);
+      }
 
-    if ((!evidence.filesModified || evidence.filesModified.length === 0) && gitContext.modifiedFiles && gitContext.modifiedFiles.length > 0) {
-      evidence.filesModified = gitContext.modifiedFiles;
-    }
+      // 2. Evidence: real output, or code changes git can attribute to this claim
+      const finalEvidence: TaskEvidence = { ...evidence, gitContext };
+      if (changes && changes.files.length > 0) {
+        if (!finalEvidence.filesModified || finalEvidence.filesModified.length === 0) {
+          finalEvidence.filesModified = changes.files;
+        }
+        gitContext.diffSummary = changes.diffSummary || gitContext.diffSummary;
+        gitContext.modifiedFiles = changes.files;
+      }
+      const hasOutputProof =
+        Boolean(evidence.testProof && evidence.testProof.trim()) ||
+        Boolean(evidence.outputSnippet && evidence.outputSnippet.trim());
+      const hasGitProof = Boolean(changes && changes.files.length > 0);
+      if (!hasOutputProof && !hasGitProof) {
+        throw new MissingEvidenceError(taskId);
+      }
 
-    // 2. Cannot close parent if subtasks are open
-    const subtasks = this.taskRepo.listSubtasks(taskId);
-    const openSubtasks = subtasks.filter((s) =>
-      ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'].includes(s.status)
-    );
-    if (openSubtasks.length > 0) {
-      throw new ParentHasOpenSubtasksError(taskId, openSubtasks.length);
-    }
+      // 3. Cannot close parent if subtasks are open
+      const openSubtasks = this.taskRepo
+        .listSubtasks(taskId)
+        .filter((s) => ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'].includes(s.status));
+      if (openSubtasks.length > 0) {
+        throw new ParentHasOpenSubtasksError(taskId, openSubtasks.length);
+      }
 
-    const now = new Date().toISOString();
-    const prevStatus = task.status;
+      const now = new Date().toISOString();
+      task.status = 'done';
+      task.verificationState = 'agent_completed';
+      task.evidence = finalEvidence;
+      task.closeCount += 1;
+      task.completedAt = now;
+      task.updatedAt = now;
+      task.lastStateChangeAt = now;
+      task.claimedByAgent = undefined;
+      task.claimedSessionId = undefined;
+      task.leaseExpiresAt = undefined;
+      const saved = this.taskRepo.update(task);
 
-    // Set completion fields
-    task.status = 'done';
-    task.verificationState = 'agent_completed';
-    task.evidence = evidence;
-    task.closeCount += 1;
-    task.completedAt = now;
-    task.updatedAt = now;
-    task.lastStateChangeAt = now;
-    task.claimedByAgent = undefined;
-    task.claimedSessionId = undefined;
-    task.leaseExpiresAt = undefined;
+      let gitInfo = '';
+      if (gitContext.commitHash) {
+        gitInfo = `\nGit: ${gitContext.commitHash}${gitContext.commitSubject ? ` - "${gitContext.commitSubject}"` : ''}${gitContext.branch ? ` on [${gitContext.branch}]` : ''}${gitContext.isDirty ? ' [dirty]' : ''}`;
+      }
+      if (changes?.diffSummary) {
+        gitInfo += `\nChanges since claim: ${changes.diffSummary}`;
+      }
 
-    const updated = this.taskRepo.update(task);
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType: 'agent',
+        authorId: agentId,
+        noteType: 'verification_note',
+        content: `Completed by agent ${agentId}.\nCommands: ${evidence.commandsRun?.join(', ') || 'N/A'}\nProof: ${evidence.testProof || evidence.outputSnippet || 'git changes since claim'}${gitInfo}\n${notes ? `Notes: ${notes}` : ''}`.trim(),
+        gitContext,
+        createdAt: now,
+      });
 
-    let gitInfo = '';
-    if (gitContext.commitHash) {
-      gitInfo = `\nGit: ${gitContext.commitHash}${gitContext.commitSubject ? ` - "${gitContext.commitSubject}"` : ''}${gitContext.branch ? ` on [${gitContext.branch}]` : ''}${gitContext.isDirty ? ' [dirty]' : ''}`;
-    }
+      this.statusHistoryRepo.create({
+        id: `hist-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        fromStatus: 'doing',
+        toStatus: 'done',
+        changedBy: agentId,
+        authorType: 'agent',
+        reason: `Agent completed with proof`,
+        timestamp: now,
+      });
 
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType: 'agent',
-      authorId: agentId,
-      noteType: 'verification_note',
-      content: `Completed by agent ${agentId}.\nCommands: ${evidence.commandsRun?.join(', ') || 'N/A'}\nProof: ${evidence.testProof || evidence.outputSnippet || 'Provided'}${gitInfo}\n${notes ? `Notes: ${notes}` : ''}`.trim(),
-      gitContext,
-      createdAt: now,
+      this.resolveDependents(taskId);
+      return saved;
     });
-
-    this.statusHistoryRepo.create({
-      id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      fromStatus: prevStatus,
-      toStatus: 'done',
-      changedBy: agentId,
-      authorType: 'agent',
-      reason: `Agent completed with proof`,
-      timestamp: now,
-    });
-
-    // Auto resolve downstream dependencies
-    this.resolveDependents(taskId);
 
     return updated;
   }
@@ -143,7 +161,7 @@ export class VerificationService {
       };
     }
 
-    const nextTask = this.taskLifecycleService.getNextUnblockedTask(completedTask.goalId, agentId);
+    const nextTask = this.taskLifecycleService.getNextUnblockedTask(completedTask.goalId, agentId, false, completedTask.workspaceId);
     if (!nextTask) {
       return {
         completedTask,

@@ -5,6 +5,7 @@ import { startServerCommand } from './commands/start.js';
 import { mcpCommand } from './commands/mcp.js';
 import { initCommand } from './commands/init.js';
 import { installCommand } from './commands/install.js';
+import { hookCommand } from './commands/hook.js';
 import { runCommand } from './commands/run.js';
 import { statusCommand } from './commands/status.js';
 import { listCommand } from './commands/list.js';
@@ -154,16 +155,23 @@ program
 
 program
   .command('init')
-  .description('Initialize .moo workspace in current repository (or update rules)')
-  .option('-f, --force', 'Overwrite and refresh existing AGENTS.md, CLAUDE.md, and rule files with latest protocol')
-  .option('--rules', 'Refresh agent guidelines and prompt rule files')
+  .description('Register this repository and write or refresh the Moo protocol block in agent rule files')
+  .option('-f, --force', 'Kept for compatibility; init always refreshes only its managed block')
+  .option('--rules', 'Kept for compatibility; same as plain init')
   .option('--project-path <path>', 'Custom project root path')
   .action(initCommand);
 
 program
   .command('install [target]')
-  .description('Install & configure MCP plugin for claude, antigravity, codex, or all')
+  .description('Install & configure MCP plugin for claude, cursor, windsurf, antigravity, codex, or all')
+  .option('--hooks', 'Claude Code: also install SessionStart/PreToolUse/PostToolUse hooks that enforce claiming')
+  .option('--scope <scope>', 'Where to install hooks: project (.claude/settings.json) or user (~/.claude/settings.json)', 'project')
   .action(installCommand);
+
+program
+  .command('hook <event>')
+  .description('Claude Code hook runner (session-start | pre-edit | post-edit); reads hook JSON on stdin')
+  .action(hookCommand);
 
 // Default to start command if no subcommand provided
 if (process.argv.length <= 2) {

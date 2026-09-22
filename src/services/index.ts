@@ -80,10 +80,20 @@ export function createServiceContainer(config: DatabaseConfig = {}): ServiceCont
   const noteRepo = new SqliteNoteRepository(db);
   const statusHistoryRepo = new SqliteStatusHistoryRepository(db);
 
-  const goalService = new GoalService(goalRepo, taskRepo);
+  const goalService = new GoalService(goalRepo, taskRepo, workspaceRepo);
   const taskLifecycleService = new TaskLifecycleService(taskRepo, statusHistoryRepo, noteRepo, goalService);
-  const claimService = new ClaimService(taskRepo, noteRepo, statusHistoryRepo, decisionRepo);
-  const verificationService = new VerificationService(taskRepo, noteRepo, statusHistoryRepo, taskLifecycleService, claimService);
+  // Git evidence is read from the task's own workspace root, not the process cwd.
+  const resolveRepoRoot = (task: { workspaceId?: string }) =>
+    (task.workspaceId && workspaceRepo.findById(task.workspaceId)?.rootPath) || projectPath;
+  const claimService = new ClaimService(taskRepo, noteRepo, statusHistoryRepo, decisionRepo, resolveRepoRoot);
+  const verificationService = new VerificationService(
+    taskRepo,
+    noteRepo,
+    statusHistoryRepo,
+    taskLifecycleService,
+    claimService,
+    resolveRepoRoot
+  );
   const humanCollabService = new HumanCollabService(taskRepo, noteRepo, statusHistoryRepo);
   const discoveredWorkService = new DiscoveredWorkService(taskRepo, noteRepo, taskLifecycleService);
   const decisionService = new DecisionService(decisionRepo);

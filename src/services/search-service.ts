@@ -27,13 +27,19 @@ export class SearchService {
     private decisionRepo: IDecisionRepository
   ) {}
 
-  search(query: string, options: { limit?: number; type?: "all" | "tasks" | "decisions" } = {}): SearchResults {
+  search(
+    query: string,
+    options: { limit?: number; type?: "all" | "tasks" | "decisions"; workspaceId?: string } = {}
+  ): SearchResults {
     const rawQuery = (query || "").trim();
     if (!rawQuery) {
       return { query: "", total: 0, results: [] };
     }
 
     const limit = options.limit || 20;
+    const workspaceId = options.workspaceId;
+    // Over-fetch when scoped so filtering by workspace still fills the page.
+    const ftsLimit = workspaceId ? limit * 5 : limit;
     const searchType = options.type || "all";
     const results: SearchResultItem[] = [];
 
@@ -52,23 +58,23 @@ export class SearchService {
         if (ftsQuery) {
           const rows = this.db
             .prepare(`SELECT id FROM tasks_fts WHERE tasks_fts MATCH ? ORDER BY rank LIMIT ?`)
-            .all(ftsQuery, limit) as { id: string }[];
+            .all(ftsQuery, ftsLimit) as { id: string }[];
           taskIds = rows.map((r) => r.id);
         }
       } catch {
         // Fallback to LIKE
-        const fallbackTasks = this.taskRepo.list({ searchQuery: rawQuery, limit });
+        const fallbackTasks = this.taskRepo.list({ searchQuery: rawQuery, limit, workspaceId });
         taskIds = fallbackTasks.map((t) => t.id);
       }
 
       if (taskIds.length === 0) {
-        const fallbackTasks = this.taskRepo.list({ searchQuery: rawQuery, limit });
+        const fallbackTasks = this.taskRepo.list({ searchQuery: rawQuery, limit, workspaceId });
         taskIds = fallbackTasks.map((t) => t.id);
       }
 
       for (const id of taskIds) {
         const task = this.taskRepo.findById(id);
-        if (task && !task.isArchived) {
+        if (task && !task.isArchived && (!workspaceId || task.workspaceId === workspaceId)) {
           results.push({
             type: "task",
             id: task.id,
@@ -90,12 +96,14 @@ export class SearchService {
         if (ftsQuery) {
           const rows = this.db
             .prepare(`SELECT id FROM decisions_fts WHERE decisions_fts MATCH ? ORDER BY rank LIMIT ?`)
-            .all(ftsQuery, limit) as { id: string }[];
+            .all(ftsQuery, ftsLimit) as { id: string }[];
           decisionIds = rows.map((r) => r.id);
         }
       } catch {
         // Fallback
-        const allDecisions = this.decisionRepo.list(process.cwd());
+        const allDecisions = workspaceId
+          ? this.decisionRepo.list(undefined, undefined, undefined, workspaceId)
+          : this.decisionRepo.list();
         decisionIds = allDecisions
           .filter(
             (d) =>
@@ -110,7 +118,7 @@ export class SearchService {
 
       for (const id of decisionIds) {
         const dec = this.decisionRepo.findById(id);
-        if (dec) {
+        if (dec && (!workspaceId || dec.workspaceId === workspaceId)) {
           results.push({
             type: "decision",
             id: dec.id,

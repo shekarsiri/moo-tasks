@@ -4,113 +4,142 @@ import picocolors from 'picocolors';
 import { createServiceContainer } from '../../services/index.js';
 import { DatabaseManager } from '../../infrastructure/db/database.js';
 
-export const AGENTS_MD_CONTENT = `# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)
+export const MOO_BLOCK_START = '<!-- moo-tasks:start (managed by `moo init`; edits inside this block are overwritten) -->';
+export const MOO_BLOCK_END = '<!-- moo-tasks:end -->';
 
-> ⚠️ **CRITICAL DIRECTIVE**: You are connected to the **Moo Tasks** MCP server.
-> For **EVERY** user instruction, bug fix, or feature request, you **MUST** record and track your work in Moo Tasks with **FULL TECHNICAL DETAILS** **BEFORE** modifying code or running terminal commands. Never edit code without an active claimed task ID.
+export const AGENTS_MD_CONTENT = `# 🐮 Moo Tasks protocol
 
----
+You are connected to the **Moo Tasks** MCP server. Every code change you make is tracked as a Moo task.
 
-## ⚡ 1-Call Fast-Path for Rapid Coding (Recommended)
+## Before editing code
+- Reading, searching and read-only commands (git status, running tests, builds) never need a task.
+- Before your **first edit**, hold a claimed task:
+  - New work: \`moo_quick_start(title, acceptanceCriteria, description, declaredFiles)\` creates and claims it in one call. \`goalId\` is optional; without it the task goes under this workspace's "Ad-hoc work" goal.
+  - Planned work: \`moo_get_next_task(claim: true)\`.
+- A small change is already finished? \`moo_log_work(title, evidence)\` records it in one call.
 
-When the user asks you to implement a feature or fix an issue, use **\`moo_quick_start\`** to atomically create and claim the task in a single step with complete specifications:
+## Larger requests (multi-step or multi-file)
+1. \`moo_create_goal(title, verbatimPrompt, description)\`: the user's exact words plus a Markdown PRD.
+2. \`moo_create_task(goalId, tasks: [...])\`: atomic tasks, each with a description (overview and numbered plan), \`- [ ]\` acceptance criteria, \`declaredFiles\` and \`dependsOnTaskIds\`. Titles are plain text; use \`priority\`, \`type\` and \`tags\` instead of prefixes like "C1:".
+3. Work through them with \`moo_get_next_task(claim: true)\`.
 
-\`\`\`json
-{
-  "title": "Implement feature X",
-  "type": "feature",
-  "tags": ["backend", "api"],
-  "description": "### Technical Overview\\nDetailed design, architectural breakdown, and step-by-step implementation plan.\\n\\n### Implementation Plan\\n1. Step 1...\\n2. Step 2...",
-  "acceptanceCriteria": "- [ ] Clear, testable markdown definition of done\\n- [ ] Unit tests pass",
-  "priority": "high",
-  "declaredFiles": ["src/feature.ts"]
-}
-\`\`\`
+## While working
+- Long task: \`moo_checkpoint(taskId, note)\` logs progress and renews your 30-minute lease.
+- Found other work: \`moo_capture_discovered_work\`. Need the user: \`moo_ask_human\`. An attempt failed: \`moo_log_attempt_failure\`.
+- Chose a library, pattern or trade-off: \`moo_record_decision(title, context, choice, rationale)\`.
 
----
+## Finishing
+- \`moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun })\`. Files changed since the claim are captured from git automatically.
+- Parallel sub-agents each pass their own \`agentId\`.
 
-## 🎯 Full Mandatory 6-Step Workflow Protocol
-
-### 1. Goal Anchoring (Prevent Scope Drift)
-- Always anchor the human user's overarching request with \`moo_create_goal(title, verbatimPrompt, description)\`.
-- Always include:
-  - **verbatimPrompt**: Store the user's EXACT verbatim prompt to maintain fidelity.
-  - **description**: Full rich Markdown PRD, architectural breakdown, component boundaries, and milestones.
-
-### 2. Task Planning & Full Specifications
-- Break down the goal into small, atomic tasks before touching code:
-  - Call \`moo_create_task\` or \`moo_create_tasks_batch\`.
-  - **Task titles must be clean, descriptive text** — do NOT embed priority codes, category prefixes, or sequence numbers in titles (e.g. avoid \`"C1: …"\`, \`"H2: …"\`, \`"UX-3: …"\`, \`"M1 — …"\`). Use the \`priority\`, \`type\`, and \`tags\` fields for classification.
-  - ALWAYS write a comprehensive **\`description\`** containing:
-    1. **Technical Overview & Architecture**: Why and how this is built.
-    2. **Step-by-Step Implementation Plan**: Numbered actionable steps.
-    3. **Design Decisions / Code Snippets**: Key types, schemas, or endpoints.
-  - ALWAYS write testable **\`acceptanceCriteria\`** in Markdown with checkboxes (\`- [ ]\`) BEFORE touching code.
-  - Declare **\`declaredFiles\`** and prerequisite **\`dependsOnTaskIds\`** (DAG cycle prevention is enforced).
-  - Open tasks cap (max 10 open items per goal) is strictly enforced to prevent over-planning.
-
-### 3. Exclusive Claim & Ownership
-- Claim a task exclusively before starting implementation:
-  - Call \`moo_claim_task(taskId, agentId, sessionId, declaredFiles)\` or use \`moo_quick_start\`.
-  - This acquires a lease and protects against file collisions with concurrent agents.
-
-### 4. Mid-Task Progress Checkpoints
-- During implementation loops or long refactors, log progress:
-  - Call \`moo_checkpoint(taskId, note: "Added fixtures, mock APIs ready", heartbeat: true)\`.
-  - This automatically renews your lease so other agents don't reclaim your task.
-
-### 5. Verified Completion (Mandatory Proof)
-- When implementation is complete and tests pass, close the task:
-  - Call \`moo_complete_task(taskId, agentId, evidence: { commandsRun, outputSnippet, filesModified, testProof })\`.
-  - Tasks without verifiable proof cannot be marked done.
-
-### 6. Architectural Decisions (ADR)
-- Whenever choosing a library, database, pattern, or system design trade-off:
-  - Call \`moo_record_decision(title, context, choice, rationale, tags)\` so subsequent agents never re-debate established decisions.
+At session start call \`moo_session_resume\`. The board runs at http://localhost:4242.
 `;
+
+const CLAUDE_MD_BLOCK = `Moo Tasks orchestration rules live in AGENTS.md:
+
+@AGENTS.md
+`;
+
+const CURSOR_MDC = `---
+description: Moo Tasks task-tracking protocol
+alwaysApply: true
+---
+`;
+
+// Heading used by rule files written before managed blocks existed.
+const LEGACY_HEADING = '# 🐮 AGENT GUIDELINES & PROTOCOL (Moo Tasks)';
+const LEGACY_TAIL = 'never re-debate established decisions.';
+
+function wrapBlock(body: string): string {
+  return `${MOO_BLOCK_START}\n${body.trim()}\n${MOO_BLOCK_END}\n`;
+}
+
+/**
+ * Inserts or refreshes the managed Moo block in a file, leaving everything outside it intact.
+ * Returns what happened so init can report it.
+ */
+export function upsertManagedBlock(
+  filePath: string,
+  body: string,
+  header = ''
+): 'created' | 'updated' | 'unchanged' | 'appended' {
+  const block = wrapBlock(body);
+  if (!fs.existsSync(filePath)) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, header + block);
+    return 'created';
+  }
+
+  const current = fs.readFileSync(filePath, 'utf-8');
+  const startIdx = current.indexOf(MOO_BLOCK_START.split(' (')[0]);
+  const endIdx = current.indexOf(MOO_BLOCK_END);
+  let next: string;
+  let result: 'updated' | 'appended';
+
+  if (startIdx !== -1 && endIdx > startIdx) {
+    next = current.slice(0, startIdx) + block + current.slice(endIdx + MOO_BLOCK_END.length).replace(/^\n/, '');
+    result = 'updated';
+  } else if (current.includes(LEGACY_HEADING)) {
+    // Replace the unmarked protocol an older `moo init` wrote, keeping any surrounding text.
+    const legacyStart = current.indexOf(LEGACY_HEADING);
+    const tailIdx = current.lastIndexOf(LEGACY_TAIL);
+    const legacyEnd = tailIdx > legacyStart ? current.indexOf('\n', tailIdx) : -1;
+    const after = legacyEnd === -1 ? '' : current.slice(legacyEnd + 1);
+    next = current.slice(0, legacyStart) + block + after;
+    result = 'updated';
+  } else {
+    next = current.replace(/\s*$/, '\n\n') + block;
+    result = 'appended';
+  }
+
+  if (next === current) return 'unchanged';
+  fs.writeFileSync(filePath, next);
+  return result;
+}
 
 export async function initCommand(options: { projectPath?: string; rules?: boolean; force?: boolean }) {
   const root = options.projectPath ? path.resolve(options.projectPath) : process.cwd();
-  const overwrite = Boolean(options.force || options.rules);
 
   // Initialize service container and register global workspace
   const container = createServiceContainer({ projectPath: root });
   const ws = container.activeWorkspace;
   const globalDbPath = DatabaseManager.resolveGlobalDbPath();
 
-  // 1. Generate AGENTS.md
+  const report = (label: string, filePath: string, result: string) => {
+    if (result === 'unchanged') return;
+    console.log(`${picocolors.green('✔')} ${result[0].toUpperCase()}${result.slice(1)} ${label}: ${picocolors.cyan(filePath)}`);
+  };
+
+  // AGENTS.md carries the protocol; every other agent file points at it or mirrors it.
   const agentsMdPath = path.join(root, 'AGENTS.md');
-  if (!fs.existsSync(agentsMdPath) || overwrite) {
-    fs.writeFileSync(agentsMdPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} agent instructions: ${picocolors.cyan(agentsMdPath)}`);
-  }
+  report('agent instructions', agentsMdPath, upsertManagedBlock(agentsMdPath, AGENTS_MD_CONTENT));
 
-  // 2. Generate CLAUDE.md for Claude Code
   const claudeMdPath = path.join(root, 'CLAUDE.md');
-  if (!fs.existsSync(claudeMdPath) || overwrite) {
-    fs.writeFileSync(claudeMdPath, `# Project Instructions for Claude Code\n\nSee [AGENTS.md](./AGENTS.md) for mandatory task orchestration rules with Moo Tasks.\n\n${AGENTS_MD_CONTENT}`);
-    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Claude Code instructions: ${picocolors.cyan(claudeMdPath)}`);
-  }
+  report(
+    'Claude Code instructions',
+    claudeMdPath,
+    upsertManagedBlock(claudeMdPath, CLAUDE_MD_BLOCK, '# Project Instructions for Claude Code\n\n')
+  );
 
-  // 3. Generate .cursorrules for Cursor
-  const cursorRulesPath = path.join(root, '.cursorrules');
-  if (!fs.existsSync(cursorRulesPath) || overwrite) {
-    fs.writeFileSync(cursorRulesPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Cursor instructions: ${picocolors.cyan(cursorRulesPath)}`);
-  }
+  const cursorRulePath = path.join(root, '.cursor', 'rules', 'moo-tasks.mdc');
+  report('Cursor rule', cursorRulePath, upsertManagedBlock(cursorRulePath, AGENTS_MD_CONTENT, CURSOR_MDC));
 
-  // 4. Generate .windsurfrules for Windsurf
-  const windsurfRulesPath = path.join(root, '.windsurfrules');
-  if (!fs.existsSync(windsurfRulesPath) || overwrite) {
-    fs.writeFileSync(windsurfRulesPath, AGENTS_MD_CONTENT);
-    console.log(`${picocolors.green('✔')} ${overwrite ? 'Updated' : 'Created'} Windsurf instructions: ${picocolors.cyan(windsurfRulesPath)}`);
+  const windsurfRulePath = path.join(root, '.windsurf', 'rules', 'moo-tasks.md');
+  report('Windsurf rule', windsurfRulePath, upsertManagedBlock(windsurfRulePath, AGENTS_MD_CONTENT));
+
+  // Deprecated single-file rule formats: refresh them only if a project still has them.
+  for (const legacyFile of ['.cursorrules', '.windsurfrules']) {
+    const legacyPath = path.join(root, legacyFile);
+    if (fs.existsSync(legacyPath)) {
+      report('legacy rules', legacyPath, upsertManagedBlock(legacyPath, AGENTS_MD_CONTENT));
+    }
   }
 
   console.log(`\n${picocolors.bold(picocolors.green('✔ Initialized Moo Tasks workspace!'))}`);
   console.log(`  ${picocolors.gray('Workspace:')}      ${picocolors.bold(picocolors.cyan(ws.name))} (${picocolors.dim(ws.id)})`);
   console.log(`  ${picocolors.gray('Root Path:')}      ${picocolors.cyan(ws.rootPath)}`);
   console.log(`  ${picocolors.gray('Global Database:')} ${picocolors.yellow(globalDbPath)}`);
-  console.log(`  ${picocolors.gray('Agent Rules:')}    ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursorrules, .windsurfrules')}`);
+  console.log(`  ${picocolors.gray('Agent Rules:')}    ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursor/rules, .windsurf/rules')}`);
   console.log(`  ${picocolors.gray('Web UI:')}         ${picocolors.yellow('moo start')} ${picocolors.dim('(or npx moo-tasks start)')}`);
   console.log(`  ${picocolors.gray('MCP Mode:')}       ${picocolors.yellow('moo mcp')} ${picocolors.dim('(or npx moo-tasks mcp)')}\n`);
 }

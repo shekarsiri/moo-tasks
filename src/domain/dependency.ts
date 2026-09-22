@@ -66,7 +66,8 @@ export class DependencyGraph {
   }
 
   /**
-   * Determine if a task is unblocked (all direct blockers are in 'done' state).
+   * Determine if a task is unblocked (all direct blockers are 'done' or 'dropped').
+   * A dropped blocker will never complete, so it must not strand its dependents.
    */
   static isTaskUnblocked(
     taskId: string,
@@ -79,7 +80,7 @@ export class DependencyGraph {
 
     for (const blockerId of directBlockerIds) {
       const blocker = taskMap.get(blockerId);
-      if (!blocker || blocker.status !== 'done') {
+      if (!blocker || (blocker.status !== 'done' && blocker.status !== 'dropped')) {
         return false;
       }
     }

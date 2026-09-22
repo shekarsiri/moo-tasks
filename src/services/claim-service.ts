@@ -1,14 +1,18 @@
 import crypto from 'crypto';
-import { Decision, Task, TaskNote } from '../domain/types.js';
+import { Decision, Task, TaskNote, TaskStatus } from '../domain/types.js';
 import {
   AgentConcurrencyLimitError,
+  InvalidTaskStateError,
+  NotTaskHolderError,
   TaskAlreadyClaimedError,
   TaskBlockedOnDependencyError,
+  TaskNotClaimableError,
   TaskNotFoundError,
   TaskWaitingOnHumanError,
 } from '../domain/errors.js';
 import { ConflictWarning, FileConflictDetector } from '../domain/conflict.js';
 import { DependencyGraph } from '../domain/dependency.js';
+import { DEFAULT_LEASE_SECONDS, hasLiveLease, isHolderProcessDead } from '../domain/lease.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
 import {
   ITaskRepository,
@@ -32,12 +36,18 @@ export interface ClaimTaskResult {
   previousFailureHistory?: TaskNote[];
 }
 
+/** Resolves the repository root a task's git evidence should be read from. */
+export type RepoRootResolver = (task: Task) => string | undefined;
+
+const STOP_WORDS = ['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'];
+
 export class ClaimService {
   constructor(
     private taskRepo: ITaskRepository,
     private noteRepo: INoteRepository,
     private statusHistoryRepo: IStatusHistoryRepository,
-    private decisionRepo?: IDecisionRepository
+    private decisionRepo?: IDecisionRepository,
+    private resolveRepoRoot: RepoRootResolver = () => undefined
   ) {}
 
   claimTask(
@@ -46,156 +56,137 @@ export class ClaimService {
     sessionId: string,
     options: ClaimTaskOptions = {}
   ): ClaimTaskResult {
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
+    const preview = this.taskRepo.findById(taskId);
+    if (!preview) {
       throw new TaskNotFoundError(taskId);
     }
+    // Git runs outside the write lock: it is slow and only describes the working tree.
+    const gitCwd = this.resolveRepoRoot(preview);
+    const gitContext = GitContextService.getContext(gitCwd);
+    const gitBaseline = GitContextService.captureBaseline(gitCwd);
 
-    // 0. Guardrail: Verify task is not blocked on human without an answer
-    if (task.status === 'waiting-on-human' && !task.humanAnswer) {
-      throw new TaskWaitingOnHumanError(taskId, task.humanQuestion);
-    }
-
-    // 0b. Guardrail: Verify task is not blocked on dependencies
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-    const isUnblocked = DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap);
-
-    if (!isUnblocked || task.status === 'blocked-on-dependency') {
-      if (!isUnblocked) {
-        throw new TaskBlockedOnDependencyError(taskId, task.blockedReason);
-      }
-    }
-
-    const now = new Date();
-    const leaseSeconds = options.leaseDurationSeconds || 300; // default 5 minutes
+    const leaseSeconds = options.leaseDurationSeconds || DEFAULT_LEASE_SECONDS;
     const maxConcurrent = options.maxConcurrentTasksPerAgent || 1;
 
-    // 1. Check if task is already held by someone else with an active lease
-    if (task.claimedByAgent && task.claimedByAgent !== agentId) {
-      if (task.leaseExpiresAt && new Date(task.leaseExpiresAt) > now) {
-        throw new TaskAlreadyClaimedError(taskId, task.claimedByAgent, task.leaseExpiresAt);
+    const { task, autoEscalatedToHuman, conflictWarnings } = this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
       }
-    }
+      const now = new Date();
+      const fromStatus: TaskStatus = task.status;
+      const heldByOther = Boolean(task.claimedByAgent && task.claimedByAgent !== agentId);
 
-    // 2. Check agent concurrency limit (only count active tasks with unexpired leases)
-    const activeAgentTasks = this.taskRepo.list({
-      status: 'doing',
-      claimedByAgent: agentId,
-      isArchived: false,
-    }).filter((t) => t.id !== taskId && (!t.leaseExpiresAt || new Date(t.leaseExpiresAt) > now));
+      // 1. Status guardrails
+      if (task.status === 'waiting-on-human' && !task.humanAnswer) {
+        throw new TaskWaitingOnHumanError(taskId, task.humanQuestion);
+      }
+      if (task.status === 'done' || task.status === 'dropped') {
+        throw new TaskNotClaimableError(taskId, task.status);
+      }
 
-    if (activeAgentTasks.length >= maxConcurrent) {
-      throw new AgentConcurrencyLimitError(agentId, maxConcurrent);
-    }
+      // 2. Dependency guardrail (dropped blockers count as satisfied)
+      const blockerIds = this.taskRepo.getDependencies(taskId);
+      if (blockerIds.length > 0) {
+        const blockers = blockerIds.map((id) => this.taskRepo.findById(id)).filter((t): t is Task => Boolean(t));
+        const taskMap = new Map(blockers.map((t) => [t.id, t]));
+        const deps = blockerIds.map((id) => ({ taskId, dependsOnTaskId: id, createdAt: '' }));
+        if (!DependencyGraph.isTaskUnblocked(taskId, deps, taskMap)) {
+          throw new TaskBlockedOnDependencyError(taskId, task.blockedReason);
+        }
+      }
 
-    // 3. Increment attempt counter
-    task.attemptCount += 1;
-    let autoEscalatedToHuman = false;
+      // 3. Exclusive ownership: someone else's live lease wins
+      if (heldByOther && hasLiveLease(task, now)) {
+        throw new TaskAlreadyClaimedError(taskId, task.claimedByAgent!, task.leaseExpiresAt);
+      }
 
-    // 4. Stall / Loop Detection: If attempt count exceeds maxAttemptsAllowed, escalate to human
-    if (task.attemptCount > task.maxAttemptsAllowed) {
-      task.status = 'waiting-on-human';
-      task.humanQuestion = `Task has reached ${task.attemptCount} failed attempts. Automated looping halted for human guidance.`;
-      task.humanQuestionType = 'decision';
-      autoEscalatedToHuman = true;
-    } else {
-      task.status = 'doing';
-    }
+      // 4. Agent concurrency limit (only live leases count)
+      const activeAgentTasks = this.taskRepo
+        .list({ status: 'doing', claimedByAgent: agentId, isArchived: false })
+        .filter((t) => t.id !== taskId && hasLiveLease(t, now));
+      if (activeAgentTasks.length >= maxConcurrent) {
+        throw new AgentConcurrencyLimitError(agentId, maxConcurrent);
+      }
 
-    // 5. Set ownership & lease
-    const leaseExpires = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
-    task.claimedByAgent = agentId;
-    task.claimedSessionId = sessionId;
-    task.claimedAt = now.toISOString();
-    task.leaseExpiresAt = leaseExpires;
-    task.lastStateChangeAt = now.toISOString();
-    task.updatedAt = now.toISOString();
+      // 5. Attempts count fresh claims only; renewing your own claim is not a new attempt
+      const isRenewal = task.status === 'doing' && task.claimedByAgent === agentId;
+      let autoEscalatedToHuman = false;
+      if (!isRenewal) {
+        task.attemptCount += 1;
+      }
+      if (task.attemptCount > task.maxAttemptsAllowed) {
+        task.status = 'waiting-on-human';
+        task.humanQuestion = `Task has reached ${task.attemptCount} attempts. Automated looping halted for human guidance.`;
+        task.humanQuestionType = 'decision';
+        task.humanAnswer = undefined;
+        task.claimedByAgent = undefined;
+        task.claimedSessionId = undefined;
+        task.leaseExpiresAt = undefined;
+        autoEscalatedToHuman = true;
+      } else {
+        task.status = 'doing';
+        task.claimedByAgent = agentId;
+        task.claimedSessionId = sessionId;
+        task.claimedAt = now.toISOString();
+        task.leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
+        if (!isRenewal || !task.claimGitBaseline) {
+          task.claimGitBaseline = gitBaseline;
+        }
+      }
+      task.lastStateChangeAt = now.toISOString();
+      task.updatedAt = now.toISOString();
 
-    if (options.declaredFiles && options.declaredFiles.length > 0) {
-      task.declaredFiles = options.declaredFiles;
-    }
+      if (options.declaredFiles && options.declaredFiles.length > 0) {
+        task.declaredFiles = options.declaredFiles;
+      }
 
-    // 6. File touch conflict check
-    const activeTasks = this.taskRepo.list({ status: 'doing', isArchived: false });
-    const conflictWarnings = FileConflictDetector.detectConflicts(
-      task.id,
-      task.declaredFiles,
-      activeTasks
-    );
+      // 6. File touch conflict check against other live claims in the same workspace
+      const activeTasks = this.taskRepo
+        .list({ status: 'doing', isArchived: false, workspaceId: task.workspaceId })
+        .filter((t) => hasLiveLease(t, now));
+      const conflictWarnings = FileConflictDetector.detectConflicts(task.id, task.declaredFiles, activeTasks);
 
-    // 7. Auto capture git context and save note
-    const gitContext = GitContextService.getContext();
-    this.taskRepo.update(task);
+      this.taskRepo.update(task);
 
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType: 'agent',
-      authorId: agentId,
-      noteType: 'general',
-      content: `Claimed task (Attempt #${task.attemptCount}, Lease: ${leaseSeconds}s). Session: ${sessionId}`,
-      gitContext,
-      createdAt: now.toISOString(),
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType: 'agent',
+        authorId: agentId,
+        noteType: 'general',
+        content: autoEscalatedToHuman
+          ? `Claim refused: attempt #${task.attemptCount} exceeds ${task.maxAttemptsAllowed}; escalated to human.`
+          : `Claimed task (Attempt #${task.attemptCount}, Lease: ${leaseSeconds}s). Session: ${sessionId}`,
+        gitContext,
+        createdAt: now.toISOString(),
+      });
+
+      if (fromStatus !== task.status) {
+        this.statusHistoryRepo.create({
+          id: `hist-${crypto.randomUUID().slice(0, 8)}`,
+          taskId,
+          fromStatus,
+          toStatus: task.status,
+          changedBy: agentId,
+          authorType: 'agent',
+          reason: autoEscalatedToHuman ? 'Auto-escalated: max attempts exceeded' : `Claimed by agent ${agentId}`,
+          timestamp: now.toISOString(),
+        });
+      }
+
+      return { task, autoEscalatedToHuman, conflictWarnings };
     });
 
-    this.statusHistoryRepo.create({
-      id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      fromStatus: task.status === 'doing' ? 'todo' : 'doing',
-      toStatus: task.status,
-      changedBy: agentId,
-      authorType: 'agent',
-      reason: `Claimed by agent ${agentId}`,
-      timestamp: now.toISOString(),
-    });
+    // 7. Related accepted ADR decisions from the task's own workspace
+    const relatedDecisions = this.findRelatedDecisions(task);
 
-    // 8. Auto-match relevant accepted ADR decisions
-    let relatedDecisions: Decision[] = [];
-    if (this.decisionRepo) {
-      const allAccepted = this.decisionRepo.list('', 'accepted');
-      if (allAccepted.length > 0) {
-        const textToMatch = [
-          task.title,
-          task.type,
-          ...(task.tags || []),
-          ...(task.declaredFiles || []),
-          task.description || '',
-        ].join(' ').toLowerCase();
-
-        const words = textToMatch
-          .replace(/[^a-z0-9_\-\/]/g, ' ')
-          .split(/\s+/)
-          .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'].includes(w));
-
-        const wordSet = new Set(words);
-        const taskTagSet = new Set((task.tags || []).map((t) => t.toLowerCase()));
-
-        relatedDecisions = allAccepted.filter((dec) => {
-          // Check tags intersection
-          if (dec.tags && dec.tags.some((tag) => taskTagSet.has(tag.toLowerCase()) || wordSet.has(tag.toLowerCase()) || textToMatch.includes(tag.toLowerCase()))) {
-            return true;
-          }
-          // Check title / choice tokens
-          const decWords = (dec.title + ' ' + dec.choice)
-            .toLowerCase()
-            .replace(/[^a-z0-9_\-\/]/g, ' ')
-            .split(/\s+/)
-            .filter((w) => w.length > 2 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into'].includes(w));
-
-          return decWords.some((w) => wordSet.has(w));
-        }).slice(0, 5);
-      }
-    }
-
-    // 9. Fetch previous failure logs and hypotheses if task was retried
+    // 8. Previous failure logs when the task is being retried
     let previousFailureHistory: TaskNote[] = [];
     if (task.attemptCount > 1) {
-      const allNotes = this.noteRepo.listByTaskId(taskId);
-      previousFailureHistory = allNotes.filter(
-        (n) => n.noteType === 'attempt_failure' || n.noteType === 'attempt_log' || n.noteType === 'rejection_reason'
-      );
+      previousFailureHistory = this.noteRepo
+        .listByTaskId(taskId)
+        .filter((n) => n.noteType === 'attempt_failure' || n.noteType === 'attempt_log' || n.noteType === 'rejection_reason');
     }
 
     return {
@@ -208,84 +199,108 @@ export class ClaimService {
     };
   }
 
-  heartbeatTask(taskId: string, agentId: string, extensionSeconds: number = 300): Task {
+  private findRelatedDecisions(task: Task): Decision[] {
+    if (!this.decisionRepo || !task.workspaceId) return [];
+    const accepted = this.decisionRepo.list(undefined, 'accepted', undefined, task.workspaceId);
+    if (accepted.length === 0) return [];
+
+    const tokenize = (text: string) =>
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9_\-\/]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !STOP_WORDS.includes(w));
+
+    const textToMatch = [task.title, task.type, ...(task.tags || []), ...(task.declaredFiles || []), task.description || '']
+      .join(' ')
+      .toLowerCase();
+    const wordSet = new Set(tokenize(textToMatch));
+    const taskTagSet = new Set((task.tags || []).map((t) => t.toLowerCase()));
+
+    return accepted
+      .filter((dec) => {
+        if (dec.tags?.some((tag) => taskTagSet.has(tag.toLowerCase()) || wordSet.has(tag.toLowerCase()))) {
+          return true;
+        }
+        return tokenize(dec.title + ' ' + dec.choice).some((w) => wordSet.has(w));
+      })
+      .slice(0, 5);
+  }
+
+  heartbeatTask(taskId: string, agentId: string, extensionSeconds: number = DEFAULT_LEASE_SECONDS): Task {
+    return this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
+      }
+      if (task.status !== 'doing') {
+        throw new InvalidTaskStateError(taskId, 'heartbeat', task.status, ['doing']);
+      }
+      if (task.claimedByAgent !== agentId) {
+        throw new NotTaskHolderError(taskId, 'heartbeat', agentId, task.claimedByAgent);
+      }
+
+      const now = new Date();
+      task.leaseExpiresAt = new Date(now.getTime() + extensionSeconds * 1000).toISOString();
+      task.updatedAt = now.toISOString();
+      this.taskRepo.updateLease(taskId, task.leaseExpiresAt, task.updatedAt);
+      return task;
+    });
+  }
+
+  /** Extend the lease if agentId currently holds taskId; silently ignore otherwise. */
+  renewIfHolder(taskId: string, agentId: string, extensionSeconds: number = DEFAULT_LEASE_SECONDS): boolean {
     const task = this.taskRepo.findById(taskId);
-    if (!task) {
-      throw new TaskNotFoundError(taskId);
-    }
-
-    if (task.claimedByAgent !== agentId) {
-      throw new Error(`Cannot heartbeat task ${taskId} held by agent '${task.claimedByAgent}'`);
-    }
-
+    if (!task || task.status !== 'doing' || task.claimedByAgent !== agentId) return false;
     const now = new Date();
-    task.leaseExpiresAt = new Date(now.getTime() + extensionSeconds * 1000).toISOString();
-    task.updatedAt = now.toISOString();
-
-    return this.taskRepo.update(task);
+    this.taskRepo.updateLease(taskId, new Date(now.getTime() + extensionSeconds * 1000).toISOString(), now.toISOString());
+    return true;
   }
 
   releaseTask(taskId: string, agentId: string, notes?: string): Task {
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
-      throw new TaskNotFoundError(taskId);
-    }
+    return this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
+      }
+      if (task.status !== 'doing') {
+        throw new InvalidTaskStateError(taskId, 'release', task.status, ['doing']);
+      }
+      if (task.claimedByAgent !== agentId && hasLiveLease(task)) {
+        throw new NotTaskHolderError(taskId, 'release', agentId, task.claimedByAgent);
+      }
 
-    if (task.claimedByAgent && task.claimedByAgent !== agentId) {
-      throw new Error(`Cannot release task ${taskId} claimed by agent '${task.claimedByAgent}'`);
-    }
+      const now = new Date().toISOString();
+      const nextStatus = this.returnToQueue(task);
+      task.updatedAt = now;
+      task.lastStateChangeAt = now;
+      const updated = this.taskRepo.update(task);
 
-    const now = new Date().toISOString();
-    const prevStatus = task.status;
+      if (notes) {
+        this.noteRepo.create({
+          id: `note-${crypto.randomUUID().slice(0, 8)}`,
+          taskId,
+          authorType: 'agent',
+          authorId: agentId,
+          noteType: 'general',
+          content: `Voluntary release notes: ${notes.trim()}`,
+          createdAt: now,
+        });
+      }
 
-    // Check if task dependencies are currently satisfied
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
-    const isUnblocked = DependencyGraph.isTaskUnblocked(taskId, allDeps, taskMap);
-
-    const nextStatus = isUnblocked ? 'todo' : 'blocked-on-dependency';
-    task.status = nextStatus;
-    if (!isUnblocked) {
-      const blockers = allDeps.filter((d) => d.taskId === taskId).map((d) => d.dependsOnTaskId);
-      task.blockedReason = `Waiting on blocker tasks: ${blockers.join(', ')}`;
-    } else {
-      task.blockedReason = undefined;
-    }
-
-    task.claimedByAgent = undefined;
-    task.claimedSessionId = undefined;
-    task.claimedAt = undefined;
-    task.leaseExpiresAt = undefined;
-    task.updatedAt = now;
-    task.lastStateChangeAt = now;
-
-    const updated = this.taskRepo.update(task);
-
-    if (notes) {
-      this.noteRepo.create({
-        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+      this.statusHistoryRepo.create({
+        id: `hist-${crypto.randomUUID().slice(0, 8)}`,
         taskId,
+        fromStatus: 'doing',
+        toStatus: nextStatus,
+        changedBy: agentId,
         authorType: 'agent',
-        authorId: agentId,
-        noteType: 'general',
-        content: `Voluntary release notes: ${notes.trim()}`,
-        createdAt: now,
+        reason: `Released voluntarily by agent ${agentId}`,
+        timestamp: now,
       });
-    }
 
-    this.statusHistoryRepo.create({
-      id: `hist-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      fromStatus: prevStatus,
-      toStatus: nextStatus,
-      changedBy: agentId,
-      authorType: 'agent',
-      reason: `Released voluntarily by agent ${agentId}`,
-      timestamp: now,
+      return updated;
     });
-
-    return updated;
   }
 
   handoffTask(
@@ -295,61 +310,62 @@ export class ClaimService {
     handoffSummary: string,
     sessionId: string
   ): Task {
-    const task = this.taskRepo.findById(taskId);
-    if (!task) {
-      throw new TaskNotFoundError(taskId);
-    }
+    return this.taskRepo.runExclusive(() => {
+      const task = this.taskRepo.findById(taskId);
+      if (!task) {
+        throw new TaskNotFoundError(taskId);
+      }
+      if (task.status !== 'doing') {
+        throw new InvalidTaskStateError(taskId, 'hand off', task.status, ['doing']);
+      }
+      if (task.claimedByAgent !== fromAgentId) {
+        throw new NotTaskHolderError(taskId, 'hand off', fromAgentId, task.claimedByAgent);
+      }
 
-    const now = new Date();
-    task.claimedByAgent = toAgentId;
-    task.claimedSessionId = sessionId;
-    task.claimedAt = now.toISOString();
-    task.leaseExpiresAt = new Date(now.getTime() + 300 * 1000).toISOString();
-    task.updatedAt = now.toISOString();
+      const now = new Date();
+      task.claimedByAgent = toAgentId;
+      task.claimedSessionId = sessionId;
+      task.claimedAt = now.toISOString();
+      task.leaseExpiresAt = new Date(now.getTime() + DEFAULT_LEASE_SECONDS * 1000).toISOString();
+      task.updatedAt = now.toISOString();
 
-    const updated = this.taskRepo.update(task);
+      const updated = this.taskRepo.update(task);
 
-    this.noteRepo.create({
-      id: `note-${crypto.randomUUID().slice(0, 8)}`,
-      taskId,
-      authorType: 'agent',
-      authorId: fromAgentId,
-      noteType: 'handoff_note',
-      content: `Handoff from '${fromAgentId}' to '${toAgentId}': ${handoffSummary.trim()}`,
-      createdAt: now.toISOString(),
+      this.noteRepo.create({
+        id: `note-${crypto.randomUUID().slice(0, 8)}`,
+        taskId,
+        authorType: 'agent',
+        authorId: fromAgentId,
+        noteType: 'handoff_note',
+        content: `Handoff from '${fromAgentId}' to '${toAgentId}': ${handoffSummary.trim()}`,
+        createdAt: now.toISOString(),
+      });
+
+      return updated;
     });
-
-    return updated;
   }
 
-  cleanupExpiredLeases(): number {
-    const now = new Date();
-    const activeTasks = this.taskRepo.list({ status: 'doing', isArchived: false });
+  /**
+   * Returns expired or dead-holder claims to the queue. Each task is re-checked inside its
+   * own exclusive transaction so a heartbeat that lands concurrently is never overwritten.
+   */
+  cleanupExpiredLeases(workspaceId?: string): number {
+    const candidates = this.taskRepo
+      .list({ status: 'doing', isArchived: false, workspaceId })
+      .filter((t) => !hasLiveLease(t));
     let releasedCount = 0;
 
-    const allTasks = this.taskRepo.list();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const allDeps = this.taskRepo.getAllDependencies();
+    for (const candidate of candidates) {
+      const released = this.taskRepo.runExclusive(() => {
+        const task = this.taskRepo.findById(candidate.id);
+        if (!task || task.status !== 'doing' || hasLiveLease(task)) return false;
 
-    for (const task of activeTasks) {
-      if (task.leaseExpiresAt && new Date(task.leaseExpiresAt) < now) {
         const expiredAgent = task.claimedByAgent;
-        const isUnblocked = DependencyGraph.isTaskUnblocked(task.id, allDeps, taskMap);
-        const nextStatus = isUnblocked ? 'todo' : 'blocked-on-dependency';
-
-        task.status = nextStatus;
-        if (!isUnblocked) {
-          const blockers = allDeps.filter((d) => d.taskId === task.id).map((d) => d.dependsOnTaskId);
-          task.blockedReason = `Waiting on blocker tasks: ${blockers.join(', ')}`;
-        } else {
-          task.blockedReason = undefined;
-        }
-
-        task.claimedByAgent = undefined;
-        task.claimedSessionId = undefined;
-        task.leaseExpiresAt = undefined;
-        task.updatedAt = now.toISOString();
-        task.lastStateChangeAt = now.toISOString();
+        const reason = isHolderProcessDead(expiredAgent) ? 'holder process exited' : 'lease expired';
+        const now = new Date().toISOString();
+        const nextStatus = this.returnToQueue(task);
+        task.updatedAt = now;
+        task.lastStateChangeAt = now;
         this.taskRepo.update(task);
 
         this.noteRepo.create({
@@ -358,8 +374,8 @@ export class ClaimService {
           authorType: 'system',
           authorId: 'lease-monitor',
           noteType: 'general',
-          content: `Lease expired for silent agent '${expiredAgent}'. Task returned to queue (${nextStatus}).`,
-          createdAt: now.toISOString(),
+          content: `Claim by '${expiredAgent}' released (${reason}). Task returned to queue (${nextStatus}).`,
+          createdAt: now,
         });
 
         this.statusHistoryRepo.create({
@@ -369,14 +385,30 @@ export class ClaimService {
           toStatus: nextStatus,
           changedBy: 'lease-monitor',
           authorType: 'system',
-          reason: `Auto-released: agent ${expiredAgent} lease expired`,
-          timestamp: now.toISOString(),
+          reason: `Auto-released: agent ${expiredAgent} ${reason}`,
+          timestamp: now,
         });
-
-        releasedCount++;
-      }
+        return true;
+      });
+      if (released) releasedCount++;
     }
 
     return releasedCount;
+  }
+
+  /** Clears ownership and sets todo or blocked-on-dependency. Caller persists the task. */
+  private returnToQueue(task: Task): TaskStatus {
+    const blockerIds = this.taskRepo.getDependencies(task.id);
+    const blockers = blockerIds.map((id) => this.taskRepo.findById(id)).filter((t): t is Task => Boolean(t));
+    const deps = blockerIds.map((id) => ({ taskId: task.id, dependsOnTaskId: id, createdAt: '' }));
+    const isUnblocked = DependencyGraph.isTaskUnblocked(task.id, deps, new Map(blockers.map((t) => [t.id, t])));
+
+    task.status = isUnblocked ? 'todo' : 'blocked-on-dependency';
+    task.blockedReason = isUnblocked ? undefined : `Waiting on blocker tasks: ${blockerIds.join(', ')}`;
+    task.claimedByAgent = undefined;
+    task.claimedSessionId = undefined;
+    task.claimedAt = undefined;
+    task.leaseExpiresAt = undefined;
+    return task.status;
   }
 }

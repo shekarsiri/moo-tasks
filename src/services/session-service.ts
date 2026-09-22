@@ -45,8 +45,8 @@ export class SessionService {
     private noteRepo?: INoteRepository
   ) {}
 
-  detectAgentStallsAndThrashing(projectPath?: string): StallWarning[] {
-    const activeTasks = this.taskRepo.list({ isArchived: false });
+  detectAgentStallsAndThrashing(projectPath?: string, workspaceId?: string): StallWarning[] {
+    const activeTasks = this.taskRepo.list({ isArchived: false, workspaceId });
     const warnings: StallWarning[] = [];
     const now = Date.now();
 
@@ -93,33 +93,39 @@ export class SessionService {
     return warnings;
   }
 
-  whereDidILeaveOff(projectPath: string, agentId?: string): SessionResumeSummary {
-    // 1. Abandoned or in-flight doing tasks
-    const doingFilter: any = { status: 'doing', isArchived: false };
+  whereDidILeaveOff(projectPath: string, agentId?: string, workspaceId?: string): SessionResumeSummary {
+    // 1. In-flight doing tasks in this workspace (all agents; callers pick their own)
+    const doingFilter: any = { status: 'doing', isArchived: false, workspaceId };
     if (agentId) doingFilter.claimedByAgent = agentId;
-    const abandonedDoingTasks = this.taskRepo.list(doingFilter);
+    let abandonedDoingTasks = this.taskRepo.list(doingFilter);
+    if (agentId && abandonedDoingTasks.length === 0) {
+      abandonedDoingTasks = this.taskRepo.list({ status: 'doing', isArchived: false, workspaceId });
+    }
 
     // 2. Tasks waiting on human input
     const waitingOnHumanTasks = this.taskRepo.list({
       status: 'waiting-on-human',
       isArchived: false,
+      workspaceId,
     });
 
     // 3. Ready unblocked tasks
-    const activeGoals = this.goalRepo.list(projectPath, 'active');
+    const activeGoals = workspaceId
+      ? this.goalRepo.list(undefined, 'active', workspaceId)
+      : this.goalRepo.list(projectPath, 'active');
     const unblockedReadyTasks = [];
-
-    // Check top ready tasks across goals or project
-    const nextUnblocked = this.taskLifecycleService.getNextUnblockedTask();
+    const nextUnblocked = this.taskLifecycleService.getNextUnblockedTask(undefined, agentId, false, workspaceId);
     if (nextUnblocked) {
       unblockedReadyTasks.push(nextUnblocked);
     }
 
     // 4. Settled decisions
-    const settledDecisions = this.decisionRepo.list(projectPath, 'accepted');
+    const settledDecisions = workspaceId
+      ? this.decisionRepo.list(undefined, 'accepted', undefined, workspaceId)
+      : this.decisionRepo.list(projectPath, 'accepted');
 
     // 5. Orphan tasks (scope drift)
-    const orphanTasks = this.taskRepo.listOrphanTasks();
+    const orphanTasks = this.taskRepo.listOrphanTasks(workspaceId);
 
     return {
       abandonedDoingTasks,
@@ -134,9 +140,11 @@ export class SessionService {
   getCompactContext(
     projectPath: string,
     agentId?: string,
-    verbosity: 'ultra-dense' | 'standard' | 'full' = 'standard'
+    verbosity: 'ultra-dense' | 'standard' | 'full' = 'standard',
+    workspaceId?: string,
+    webUiUrl?: string
   ): string {
-    const summary = this.whereDidILeaveOff(projectPath, agentId);
+    const summary = this.whereDidILeaveOff(projectPath, agentId, workspaceId);
 
     if (verbosity === 'ultra-dense') {
       const parts: string[] = ['[MOO CONTEXT]'];
@@ -158,6 +166,7 @@ export class SessionService {
     }
 
     const lines: string[] = ['# 🐮 MOO TASKS CONTEXT'];
+    if (webUiUrl) lines.push(`Board: ${webUiUrl}`);
 
     // 1. Active Goal
     if (summary.activeGoals && summary.activeGoals.length > 0) {
@@ -231,7 +240,7 @@ export class SessionService {
     }
 
     // 6. Stall & Thrash Early Warnings
-    const stallWarnings = this.detectAgentStallsAndThrashing(projectPath);
+    const stallWarnings = this.detectAgentStallsAndThrashing(projectPath, workspaceId);
     if (stallWarnings.length > 0) {
       lines.push('\n## ⚠️ AGENT STALL & THRASH WARNINGS');
       stallWarnings.slice(0, 3).forEach((w) => {
@@ -242,7 +251,7 @@ export class SessionService {
     return lines.join('\n');
   }
 
-  getFileContext(filePaths: string[], projectPath?: string): FileContextSummary {
+  getFileContext(filePaths: string[], projectPath?: string, workspaceId?: string): FileContextSummary {
     const normalize = (p: string) =>
       p.trim().toLowerCase().replace(/\\/g, '/').replace(/^\.\//, '');
 
@@ -263,7 +272,7 @@ export class SessionService {
     };
 
     // 1. Active Locks (tasks in 'doing' whose declaredFiles match)
-    const activeDoingTasks = this.taskRepo.list({ status: 'doing', isArchived: false });
+    const activeDoingTasks = this.taskRepo.list({ status: 'doing', isArchived: false, workspaceId });
     const activeLocks = activeDoingTasks
       .filter((t) => (t.declaredFiles || []).some(matchesFile))
       .map((t) => ({
@@ -275,7 +284,7 @@ export class SessionService {
       }));
 
     // 2. Past completed tasks that touched these files
-    const allCompletedTasks = this.taskRepo.list({ status: 'done', isArchived: false });
+    const allCompletedTasks = this.taskRepo.list({ status: 'done', isArchived: false, workspaceId });
     const pastTasks = allCompletedTasks
       .filter((t) => {
         const allFiles = [
@@ -287,7 +296,9 @@ export class SessionService {
       .slice(0, 10);
 
     // 3. Relevant Decisions
-    const allDecisions = this.decisionRepo.list(projectPath || '', 'accepted');
+    const allDecisions = workspaceId
+      ? this.decisionRepo.list(undefined, 'accepted', undefined, workspaceId)
+      : this.decisionRepo.list(projectPath || '', 'accepted');
     const relevantDecisions = allDecisions.filter((dec) => {
       const textToSearch = [
         dec.title,

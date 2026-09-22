@@ -1,5 +1,6 @@
 import { Database as DatabaseType } from 'better-sqlite3';
 import {
+  GitBaseline,
   Task,
   TaskDependency,
   TaskPriority,
@@ -36,6 +37,15 @@ export class SqliteTaskRepository implements ITaskRepository {
       evidence = undefined;
     }
 
+    let claimGitBaseline: GitBaseline | undefined = undefined;
+    try {
+      if (row.claim_git_baseline) {
+        claimGitBaseline = JSON.parse(row.claim_git_baseline);
+      }
+    } catch {
+      claimGitBaseline = undefined;
+    }
+
     let humanOptions: string[] | undefined = undefined;
     try {
       if (row.human_options) {
@@ -64,6 +74,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       claimedAt: row.claimed_at || undefined,
       leaseExpiresAt: row.lease_expires_at || undefined,
       declaredFiles,
+      claimGitBaseline,
 
       verificationState: row.verification_state as VerificationState,
       evidence,
@@ -107,7 +118,8 @@ export class SqliteTaskRepository implements ITaskRepository {
         reopen_count, max_attempts_allowed, blocked_reason, human_question,
         human_question_type, human_options, human_answer, human_answered_at, human_answered_by,
         discovered_from_task_id, is_deferred, idempotency_key, is_archived,
-        dropped_reason, created_at, updated_at, completed_at, last_state_change_at
+        dropped_reason, created_at, updated_at, completed_at, last_state_change_at,
+        claim_git_baseline
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
@@ -116,7 +128,8 @@ export class SqliteTaskRepository implements ITaskRepository {
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?,
+        ?
       )
     `);
 
@@ -162,7 +175,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       task.createdAt,
       task.updatedAt,
       task.completedAt || null,
-      task.lastStateChangeAt
+      task.lastStateChangeAt,
+      task.claimGitBaseline ? JSON.stringify(task.claimGitBaseline) : null
     );
 
     return task;
@@ -184,8 +198,9 @@ export class SqliteTaskRepository implements ITaskRepository {
     if (row) return this.mapRow(row);
 
     // Support short code sequence lookup (e.g. MO-123, SH-123, or numeric 123)
+    // Real task ids are `task-<hex>`; a missing one must not resolve to an unrelated task.
     const match = String(id).match(/^(?:[A-Za-z]{2,}-)?(\d+)$/);
-    if (match) {
+    if (match && !/^task-/i.test(String(id))) {
       const orderIdx = parseInt(match[1], 10);
       stmt = this.db.prepare(`SELECT * FROM tasks WHERE order_index = ?`);
       row = stmt.get(orderIdx);
@@ -193,6 +208,26 @@ export class SqliteTaskRepository implements ITaskRepository {
     }
 
     return null;
+  }
+
+  /**
+   * Runs fn inside a BEGIN IMMEDIATE transaction so read-check-write sequences are
+   * serialized across every process sharing the database file.
+   */
+  runExclusive<T>(fn: () => T): T {
+    if (this.db.inTransaction) return fn();
+    return this.db.transaction(fn).immediate();
+  }
+
+  nextOrderIndex(): number {
+    const row = this.db.prepare(`SELECT COALESCE(MAX(order_index), 0) + 1 AS next FROM tasks`).get() as { next: number };
+    return row.next;
+  }
+
+  updateLease(taskId: string, leaseExpiresAt: string, updatedAt: string): void {
+    this.db
+      .prepare(`UPDATE tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ?`)
+      .run(leaseExpiresAt, updatedAt, taskId);
   }
 
   findByIdempotencyKey(key: string): Task | null {
@@ -306,9 +341,12 @@ export class SqliteTaskRepository implements ITaskRepository {
     return this.list({ parentId });
   }
 
-  listOrphanTasks(): Task[] {
-    const stmt = this.db.prepare(`SELECT * FROM tasks WHERE goal_id IS NULL AND is_archived = 0 ORDER BY created_at DESC`);
-    const rows = stmt.all();
+  listOrphanTasks(workspaceId?: string): Task[] {
+    const rows = workspaceId
+      ? this.db
+          .prepare(`SELECT * FROM tasks WHERE goal_id IS NULL AND is_archived = 0 AND workspace_id = ? ORDER BY created_at DESC`)
+          .all(workspaceId)
+      : this.db.prepare(`SELECT * FROM tasks WHERE goal_id IS NULL AND is_archived = 0 ORDER BY created_at DESC`).all();
     return rows.map((r) => this.mapRow(r));
   }
 
@@ -354,7 +392,8 @@ export class SqliteTaskRepository implements ITaskRepository {
         dropped_reason = ?,
         updated_at = ?,
         completed_at = ?,
-        last_state_change_at = ?
+        last_state_change_at = ?,
+        claim_git_baseline = ?
       WHERE id = ?
     `);
 
@@ -399,6 +438,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       task.updatedAt,
       task.completedAt || null,
       task.lastStateChangeAt,
+      task.claimGitBaseline ? JSON.stringify(task.claimGitBaseline) : null,
       task.id
     );
 
