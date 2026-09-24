@@ -63,6 +63,8 @@ const state = {
   filterType: '',
   filterTag: '',
   filterAgent: '',
+  filterHealth: '',
+  staleReasons: {},
   filterSort: localStorage.getItem('moo_view_ordering') || 'default',
   filterSearch: '',
   filterPreset: 'all', // 'active' | 'backlog' | 'all'
@@ -674,6 +676,10 @@ window.editWorkspace = (e, workspaceId) => {
   if (inputName) inputName.value = ws.name || '';
   if (inputPath) inputPath.value = ws.rootPath || '';
   if (inputRemote) inputRemote.value = ws.gitRemote || '';
+  const inputVerify = document.getElementById('inputEditWorkspaceVerify');
+  const inputVerifyTimeout = document.getElementById('inputEditWorkspaceVerifyTimeout');
+  if (inputVerify) inputVerify.value = ws.verifyCommand || '';
+  if (inputVerifyTimeout) inputVerifyTimeout.value = ws.verifyTimeoutSeconds || '';
 
   const wsDropdown = document.getElementById('workspaceDropdownMenu');
   if (wsDropdown) wsDropdown.classList.add('hidden');
@@ -774,9 +780,15 @@ async function fetchGoals() {
 
 async function fetchTasks() {
   try {
-    const res = await fetch('/api/tasks');
+    const [res, staleRes] = await Promise.all([fetch('/api/tasks'), fetch('/api/tasks/stale').catch(() => null)]);
     const data = await res.json();
     state.tasks = data.tasks || [];
+    try {
+      const staleData = staleRes ? await staleRes.json() : { stale: [] };
+      state.staleReasons = Object.fromEntries((staleData.stale || []).map((s) => [s.id, s.reason]));
+    } catch {
+      state.staleReasons = {};
+    }
 
     // Check for new waiting-on-human tasks to chime
     const waitingTasks = state.tasks.filter((t) => t.status === 'waiting-on-human' && !t.isArchived);
@@ -974,6 +986,75 @@ function setViewMode(mode) {
 }
 
 // Filters & Sorting
+// ---- Quality signals: acceptance-criteria answers, verify runs, commits, stale backlog ----
+function taskDeviations(task) {
+  const ev = task.evidence || {};
+  const unmet = (ev.criteria || []).filter((c) => !c.met).map((c) => ({ item: c.item, note: c.note }));
+  if (ev.verification && !ev.verification.passed) {
+    unmet.push({ item: `verify: ${ev.verification.command}`, note: ev.verification.overrideReason });
+  }
+  return unmet;
+}
+
+function matchesHealth(task, health) {
+  if (health === 'stale') return Boolean(state.staleReasons[task.id]);
+  if (health === 'deviations') return task.status === 'done' && taskDeviations(task).length > 0;
+  if (health === 'uncommitted') return task.status === 'done' && !(task.commits && task.commits.length);
+  if (health === 'verify-failed') return Boolean(task.evidence?.verification && !task.evidence.verification.passed);
+  return true;
+}
+
+function renderHealthPills(task) {
+  const pills = [];
+  const deviations = task.status === 'done' ? taskDeviations(task) : [];
+  if (deviations.length) {
+    pills.push(`<span class="thrash-warning-pill" title="${escapeHtml(deviations.map((d) => `${d.item}: ${d.note || ''}`).join('\n'))}">◐ ${deviations.length} deviation${deviations.length > 1 ? 's' : ''}</span>`);
+  }
+  if (state.staleReasons[task.id]) {
+    pills.push(`<span class="thrash-warning-pill" title="${escapeHtml(state.staleReasons[task.id])}">🧹 stale</span>`);
+  }
+  return pills.join('');
+}
+
+/** Structured completion record: criteria answers, the verify run and linked commits. */
+function renderQualityBlock(task) {
+  const ev = task.evidence || {};
+  const criteria = ev.criteria || [];
+  const run = ev.verification;
+  const commits = task.commits || [];
+  if (!criteria.length && !run && !commits.length) return '';
+  return `
+    <div class="bg-card p-3 rounded-lg border border-subtle text-xs space-y-2.5">
+      ${criteria.length ? `
+        <div>
+          <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Acceptance criteria (${criteria.filter((c) => c.met).length}/${criteria.length} met)</div>
+          <ul class="space-y-1">
+            ${criteria.map((c) => `
+              <li class="flex items-start gap-1.5">
+                <span class="${c.met ? 'text-emerald-400' : 'text-amber-400'} font-bold">${c.met ? '✓' : '✗'}</span>
+                <span class="${c.met ? 'text-slate-300' : 'text-amber-200'}">${escapeHtml(c.item)}${c.note ? `<span class="text-slate-500"> — ${escapeHtml(c.note)}</span>` : ''}</span>
+              </li>`).join('')}
+          </ul>
+        </div>` : ''}
+      ${run ? `
+        <div>
+          <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Verify run</div>
+          <div class="flex items-center gap-2 font-mono text-[11px]">
+            <span class="${run.passed ? 'text-emerald-400' : 'text-rose-400'} font-bold">${run.passed ? 'PASSED' : run.timedOut ? 'TIMED OUT' : `FAILED (exit ${escapeHtml(run.exitCode)})`}</span>
+            <span class="text-slate-300">$ ${escapeHtml(run.command)}</span>
+            <span class="text-slate-500">${(run.durationMs / 1000).toFixed(1)}s · ${escapeHtml(formatRelativeTime(run.ranAt))}</span>
+          </div>
+          ${run.overrideReason ? `<div class="mt-1 text-amber-300">Overridden: ${escapeHtml(run.overrideReason)}</div>` : ''}
+          ${run.outputTail ? `<details class="mt-1"><summary class="cursor-pointer text-slate-500 text-[11px]">Output tail</summary><pre class="bg-black/40 p-2 mt-1 rounded border border-borderSubtle text-slate-300 font-mono text-[11px] max-h-48 overflow-y-auto select-text leading-tight">${escapeHtml(run.outputTail)}</pre></details>` : ''}
+        </div>` : ''}
+      ${commits.length ? `
+        <div>
+          <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Commits</div>
+          <div class="flex flex-wrap gap-1">${commits.map((c) => `<span class="inline-code font-mono text-[11px] text-slate-300 bg-surface border border-borderDefault px-1.5 py-0.5 rounded" title="${escapeHtml(c)}">${escapeHtml(c.slice(0, 9))}</span>`).join('')}</div>
+        </div>` : ''}
+    </div>`;
+}
+
 function getFilteredTasks() {
   let list = state.tasks.filter((t) => !t.isArchived);
 
@@ -1025,6 +1106,9 @@ function getFilteredTasks() {
   }
   if (state.filterAgent) {
     list = list.filter((t) => t.claimedByAgent === state.filterAgent);
+  }
+  if (state.filterHealth) {
+    list = list.filter((t) => matchesHealth(t, state.filterHealth));
   }
   if (state.filterSearch) {
     const q = state.filterSearch.toLowerCase();
@@ -1079,6 +1163,7 @@ function getActiveFilterCount() {
   if (state.filterPriority) count++;
   if (state.filterTag) count++;
   if (state.filterAgent) count++;
+  if (state.filterHealth) count++;
   return count;
 }
 
@@ -1194,6 +1279,22 @@ function renderActiveFilterChips() {
     );
   }
 
+  // 6. Health Chip
+  if (state.filterHealth) {
+    const healthNames = { stale: 'Stale backlog', deviations: 'Done with deviations', 'verify-failed': 'Verify overridden', uncommitted: 'No commit linked' };
+    createFilterChip(
+      'Health',
+      `<i data-lucide="heart-pulse" class="w-3 h-3 text-amber-400"></i>`,
+      healthNames[state.filterHealth] || state.filterHealth,
+      '',
+      () => {
+        state.filterHealth = '';
+        renderActiveFilterChips();
+        renderTasks();
+      }
+    );
+  }
+
   refreshLucideIcons();
 }
 
@@ -1222,6 +1323,7 @@ if (btnClearAllFilters) {
     state.filterPriority = '';
     state.filterTag = '';
     state.filterAgent = '';
+    state.filterHealth = '';
     renderActiveFilterChips();
     renderTasks();
   };
@@ -1280,6 +1382,7 @@ function showFilterDimensionSubmenu(dimension) {
     priority: 'Priority',
     tag: 'Tag',
     agent: 'Assignee',
+    health: 'Health',
   };
   if (filterSubTitle) filterSubTitle.textContent = titles[dimension] || 'Back';
   if (filterSubSearch) {
@@ -1326,6 +1429,13 @@ function renderSubmenuOptions(dimension, searchQuery) {
     Array.from(allTags).sort().forEach((tag) => {
       options.push({ value: tag, label: `#${tag}` });
     });
+  } else if (dimension === 'health') {
+    options = [
+      { value: 'stale', label: 'Stale backlog', icon: 'archive', color: 'text-amber-400' },
+      { value: 'deviations', label: 'Done with deviations', icon: 'circle-alert', color: 'text-amber-400' },
+      { value: 'verify-failed', label: 'Verify overridden', icon: 'shield-alert', color: 'text-rose-400' },
+      { value: 'uncommitted', label: 'Done, no commit linked', icon: 'git-commit-horizontal', color: 'text-slate-400' },
+    ];
   } else if (dimension === 'agent') {
     const assignees = Array.from(new Set(state.tasks.map((t) => t.claimedByAgent).filter(Boolean)));
     assignees.forEach((a) => {
@@ -1346,7 +1456,8 @@ function renderSubmenuOptions(dimension, searchQuery) {
       (dimension === 'type' && state.filterType === opt.value) ||
       (dimension === 'priority' && state.filterPriority === opt.value) ||
       (dimension === 'tag' && state.filterTag === opt.value) ||
-      (dimension === 'agent' && state.filterAgent === opt.value);
+      (dimension === 'agent' && state.filterAgent === opt.value) ||
+      (dimension === 'health' && state.filterHealth === opt.value);
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -1372,12 +1483,14 @@ function renderSubmenuOptions(dimension, searchQuery) {
         if (dimension === 'priority') state.filterPriority = '';
         if (dimension === 'tag') state.filterTag = '';
         if (dimension === 'agent') state.filterAgent = '';
+        if (dimension === 'health') state.filterHealth = '';
       } else {
         if (dimension === 'goal') state.filterGoal = opt.value;
         if (dimension === 'type') state.filterType = opt.value;
         if (dimension === 'priority') state.filterPriority = opt.value;
         if (dimension === 'tag') state.filterTag = opt.value;
         if (dimension === 'agent') state.filterAgent = opt.value;
+        if (dimension === 'health') state.filterHealth = opt.value;
       }
       closeFilterPopover();
       renderActiveFilterChips();
@@ -2315,6 +2428,7 @@ function renderListView(tasks) {
             </div>
             ${hasThrashWarning ? `<span class="thrash-warning-pill ${task.attemptCount >= 3 ? 'danger' : ''}" title="${escapeHtml(task.attemptCount)} attempts logged">⚠️ ${escapeHtml(task.attemptCount)} att</span>` : ''}
             ${getSubissueProgressPill(task)}
+            ${renderHealthPills(task)}
           </div>
           <div class="issue-row-right">
             ${showLabels ? renderTagBadges(task.tags) : ''}
@@ -2982,9 +3096,13 @@ async function openInspector(taskIdOrShortCode, showDrawer = true, updateHash = 
           <div class="text-[10px] font-bold tracking-wider uppercase text-indigo-400 mb-1.5 font-mono flex items-center gap-1">
             <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> VERIFIED EVIDENCE PROOF
           </div>
-          <pre class="text-[11px] font-mono text-slate-300 bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">${escapeHtml(JSON.stringify(task.evidence, null, 2))}</pre>
+          ${renderQualityBlock(task)}
+          <details class="mt-2">
+            <summary class="cursor-pointer text-[11px] text-slate-500">Raw evidence</summary>
+            <pre class="mt-1 text-[11px] font-mono text-slate-300 bg-slate-950 p-2 rounded border border-slate-800 overflow-x-auto">${escapeHtml(JSON.stringify(task.evidence, null, 2))}</pre>
+          </details>
         </div>
-      ` : ''}
+      ` : task.commits && task.commits.length ? renderQualityBlock(task) : ''}
 
       ${task.humanQuestion ? `
         <!-- Human Question -->
@@ -3507,6 +3625,39 @@ window.toggleGoalSpecTab = (mode) => {
   refreshLucideIcons();
 };
 
+/** How the goal's work went (from completed tasks) and, once completed, its written summary. */
+function renderGoalQuality(q, goal) {
+  if (!q) return '';
+  const pct = (r) => (r === null || r === undefined ? '—' : `${Math.round(r * 100)}%`);
+  const tile = (label, value, tone = 'text-slate-200', title = '') => `
+    <div class="bg-card p-2 rounded border border-subtle" title="${escapeHtml(title)}">
+      <div class="text-slate-500 text-[10px]">${escapeHtml(label)}</div>
+      <div class="font-bold ${tone}">${escapeHtml(value)}</div>
+    </div>`;
+  return `
+    <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
+      <div class="flex items-center gap-2 border-b border-subtle pb-2">
+        <i data-lucide="gauge" class="w-4 h-4 text-emerald-400"></i>
+        <span class="text-xs font-bold uppercase tracking-wider text-slate-200">Quality</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-center text-xs font-mono">
+        ${tile('Criteria met', pct(q.criteriaMetRate), q.criteriaMetRate !== null && q.criteriaMetRate < 1 ? 'text-amber-400' : 'text-emerald-400', 'Acceptance items answered as met, across completed tasks')}
+        ${tile('With deviations', String(q.tasksWithDeviations), q.tasksWithDeviations ? 'text-amber-400' : 'text-slate-200', 'Completed tasks with unmet criteria or an overridden verify run')}
+        ${tile('Verify passed', pct(q.verifyPassRate), q.verifyPassRate !== null && q.verifyPassRate < 1 ? 'text-rose-400' : 'text-slate-200')}
+        ${tile('Committed', pct(q.committedRate), 'text-slate-200', 'Completed tasks linked to a commit')}
+        ${tile('Avg cycle', q.avgCycleMinutes === null ? '—' : `${q.avgCycleMinutes} min`, 'text-slate-200', 'Claim to completion')}
+        ${tile('Attempts', String(q.totalAttempts))}
+        ${tile('Reopens', String(q.reopens), q.reopens ? 'text-amber-400' : 'text-slate-200')}
+        ${tile('Discovered', String(q.discoveredWork), 'text-slate-200', 'Tasks found while working on this goal')}
+      </div>
+      ${goal.summary ? `
+        <div class="pt-2 border-t border-subtle">
+          <div class="text-[11px] font-mono uppercase font-bold text-slate-500 mb-1">Completion summary</div>
+          <div class="markdown-body text-xs text-slate-300">${renderMarkdown(goal.summary)}</div>
+        </div>` : ''}
+    </div>`;
+}
+
 async function renderGoalDetails(goalId) {
   const container = document.getElementById('goalDetailsContent');
   if (!container) return;
@@ -3615,6 +3766,8 @@ async function renderGoalDetails(goalId) {
           </div>
         </div>
       </div>
+
+      ${renderGoalQuality(summary.quality, g)}
 
       <!-- Specification & PRD Section (Direct In-Place Visual Markdown Editing) -->
       <div class="bg-surface border border-subtle rounded-lg p-4 space-y-3">
@@ -3861,6 +4014,7 @@ function renderReviewFeed() {
               <pre class="bg-black/40 p-2.5 rounded border border-borderSubtle text-slate-300 font-mono text-[11px] max-h-40 overflow-y-auto select-text leading-tight">${escapeHtml(ev.testProof || ev.outputSnippet)}</pre>
             </div>
           ` : ''}
+          ${renderQualityBlock(task)}
           ${git ? `
             <div class="flex items-center gap-3 pt-1 text-[11px] text-slate-400 font-mono border-t border-borderSubtle">
               <span>Commit: <strong class="text-slate-200">${escapeHtml(git.commitHash || 'N/A')}</strong></span>
@@ -4026,6 +4180,39 @@ function renderActivityFeed() {
 }
 
 // Session Resume
+function resumeList(title, icon, tone, tasks, detail) {
+  if (!tasks.length) return '';
+  return `
+    <div class="bg-surface border border-subtle p-4 rounded-lg mt-3">
+      <h3 class="text-sm font-bold text-slate-200 mb-2 flex items-center gap-1.5"><i data-lucide="${icon}" class="w-4 h-4 ${tone}"></i> ${escapeHtml(title)} <span class="text-slate-500 font-mono text-xs">${tasks.length}</span></h3>
+      <div class="space-y-1.5">
+        ${tasks.slice(0, 10).map((t) => `
+          <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between gap-2 cursor-pointer hover:border-borderDefault" onclick="openInspector(${jsArg(t.id)})">
+            <div class="min-w-0">
+              <div class="text-xs text-slate-100 truncate">${escapeHtml(t.title)}</div>
+              <div class="text-[11px] text-slate-500 truncate">${escapeHtml(detail(t))}</div>
+            </div>
+            <span class="text-[11px] font-mono text-slate-500 shrink-0">${escapeHtml(formatIssueKey(t.id, t))}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function resumeGoalList(goals) {
+  if (!goals.length) return '';
+  return `
+    <div class="bg-surface border border-subtle p-4 rounded-lg mt-3">
+      <h3 class="text-sm font-bold text-slate-200 mb-2 flex items-center gap-1.5"><i data-lucide="flag" class="w-4 h-4 text-emerald-400"></i> Goals ready to close <span class="text-slate-500 font-mono text-xs">${goals.length}</span></h3>
+      <div class="space-y-1.5">
+        ${goals.map((g) => `
+          <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between gap-2">
+            <span class="text-xs text-slate-100 truncate">${escapeHtml(g.title)}</span>
+            <button class="btn-success text-xs shrink-0" onclick="handleSaveGoalField(${jsArg(g.id)}, 'status', 'completed')">Mark completed</button>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
 async function renderResumeView() {
   const container = document.getElementById('sessionResumeDashboard');
   if (!container) return;
@@ -4064,6 +4251,9 @@ async function renderResumeView() {
           </div>
         ` : `<div class="text-xs text-slate-500">No ready unblocked tasks found. Check goals or add tasks.</div>`}
       </div>
+      ${resumeList('Interrupted work', 'pause-circle', 'text-amber-400', sum.interruptedTasks || [], (t) => `was held by ${t.claimedByAgent || t.interruptedFrom || 'unknown'}; the next claim resumes it with its git baseline`)}
+      ${resumeGoalList(sum.goalsReadyToClose || [])}
+      ${resumeList('Stale backlog', 'archive', 'text-slate-400', (sum.staleTasks || []).map((st) => ({ ...st.task, _reason: st.reason })), (t) => t._reason)}
     `;
     refreshLucideIcons();
   } catch (err) {
@@ -4423,13 +4613,15 @@ if (formEditWorkspace) {
     const id = document.getElementById('inputEditWorkspaceId')?.value;
     const name = document.getElementById('inputEditWorkspaceName')?.value?.trim();
     const gitRemote = document.getElementById('inputEditWorkspaceRemote')?.value?.trim();
+    const verifyCommand = document.getElementById('inputEditWorkspaceVerify')?.value?.trim() ?? '';
+    const verifyTimeoutSeconds = document.getElementById('inputEditWorkspaceVerifyTimeout')?.value?.trim() || 0;
     if (!id || !name) return;
 
     try {
       const res = await fetch(`/api/workspaces/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, gitRemote }),
+        body: JSON.stringify({ name, gitRemote, verifyCommand, verifyTimeoutSeconds }),
       });
       const data = await res.json();
       if (data.success && data.workspace) {

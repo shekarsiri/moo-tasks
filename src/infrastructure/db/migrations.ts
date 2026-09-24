@@ -64,6 +64,21 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    name: 'workspace verify command, task commits, goal summary',
+    up: (db) => {
+      addColumn(db, 'workspaces', 'verify_command TEXT');
+      addColumn(db, 'workspaces', 'verify_timeout_seconds INTEGER');
+      addColumn(db, 'tasks', "commits TEXT NOT NULL DEFAULT '[]'");
+      addColumn(db, 'goals', 'summary TEXT');
+    },
+  },
+  {
+    version: 7,
+    name: 'remember who was interrupted when a lease is auto-released',
+    up: (db) => addColumn(db, 'tasks', 'interrupted_from TEXT'),
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

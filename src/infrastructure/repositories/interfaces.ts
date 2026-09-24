@@ -73,6 +73,7 @@ export interface ITaskRepository {
   addDependency(taskId: string, dependsOnTaskId: string): void;
   removeDependency(taskId: string, dependsOnTaskId: string): void;
   getDependencies(taskId: string): string[];
+  addCommit(taskId: string, commitHash: string): boolean;
   getDependents(taskId: string): string[];
   getAllDependencies(): TaskDependency[];
   

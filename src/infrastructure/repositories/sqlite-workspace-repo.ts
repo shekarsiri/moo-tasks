@@ -11,6 +11,8 @@ export class SqliteWorkspaceRepository implements IWorkspaceRepository {
       name: row.name,
       rootPath: row.root_path,
       gitRemote: row.git_remote || undefined,
+      verifyCommand: row.verify_command || undefined,
+      verifyTimeoutSeconds: row.verify_timeout_seconds || undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -65,6 +67,8 @@ export class SqliteWorkspaceRepository implements IWorkspaceRepository {
         name = ?,
         root_path = ?,
         git_remote = ?,
+        verify_command = ?,
+        verify_timeout_seconds = ?,
         updated_at = ?
       WHERE id = ?
     `);
@@ -73,6 +77,8 @@ export class SqliteWorkspaceRepository implements IWorkspaceRepository {
       workspace.name,
       workspace.rootPath,
       workspace.gitRemote || null,
+      workspace.verifyCommand || null,
+      workspace.verifyTimeoutSeconds || null,
       workspace.updatedAt,
       workspace.id
     );

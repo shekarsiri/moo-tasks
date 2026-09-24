@@ -18,7 +18,8 @@ export interface RecordDecisionDTO {
 }
 
 export class DecisionService {
-  constructor(private decisionRepo: IDecisionRepository) {}
+  /** adrSync: mirror decisions to docs/adr/ in the project (off for throwaway in-memory databases). */
+  constructor(private decisionRepo: IDecisionRepository, private adrSync: boolean = true) {}
 
   recordDecision(dto: RecordDecisionDTO, autoSyncAdr: boolean = true): Decision {
     const now = new Date().toISOString();
@@ -40,7 +41,7 @@ export class DecisionService {
 
     const created = this.decisionRepo.create(decision);
 
-    if (autoSyncAdr && dto.projectPath) {
+    if (autoSyncAdr && this.adrSync && dto.projectPath) {
       try {
         this.syncAdrFiles(dto.projectPath);
       } catch {
@@ -80,7 +81,7 @@ export class DecisionService {
     oldDecision.updatedAt = new Date().toISOString();
     this.decisionRepo.update(oldDecision);
 
-    if (newDecisionDto.projectPath) {
+    if (this.adrSync && newDecisionDto.projectPath) {
       try {
         this.syncAdrFiles(newDecisionDto.projectPath);
       } catch {

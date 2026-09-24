@@ -224,6 +224,23 @@ describe('Claim, lease and completion invariants', () => {
 });
 
 describe('Schema migrations', () => {
+  it('round-trips verify command, task commits and goal summary', () => {
+    const c = createServiceContainer({ inMemory: true, projectPath: '/test/schema-v6' });
+    const ws = c.workspaceService.updateWorkspace(c.activeWorkspace.id, { verifyCommand: ' npm test ', verifyTimeoutSeconds: 120 });
+    expect(c.workspaceService.getWorkspace(ws.id)).toMatchObject({ verifyCommand: 'npm test', verifyTimeoutSeconds: 120 });
+
+    const t = c.taskLifecycleService.createTask({ title: 'T', acceptanceCriteria: 'x', workspaceId: ws.id }).task;
+    expect(c.taskRepo.findById(t.id)?.commits).toEqual([]);
+    expect(c.taskRepo.addCommit(t.id, 'abc1234')).toBe(true);
+    expect(c.taskRepo.addCommit(t.id, 'abc1234')).toBe(false);
+    c.taskLifecycleService.updateTask(t.id, { title: 'T2' });
+    expect(c.taskRepo.findById(t.id)?.commits).toEqual(['abc1234']);
+
+    const g = c.goalService.createGoal('G', 'p', '/test/schema-v6', 5, undefined, ws.id);
+    c.goalRepo.update({ ...g, summary: 'Shipped it' });
+    expect(c.goalService.getGoal(g.id).summary).toBe('Shipped it');
+  });
+
   it('upgrades a pre-workspace database in versioned steps and dedupes idempotency keys', () => {
     const db = new Database(':memory:');
     // Shape of an early install: no workspace, type, tags, human options or git baseline columns.
@@ -262,6 +279,9 @@ describe('Schema migrations', () => {
     expect(versions).toEqual(Array.from({ length: LATEST_SCHEMA_VERSION }, (_, i) => i + 1));
     const cols = (db.prepare('PRAGMA table_info(tasks)').all() as any[]).map((c) => c.name);
     expect(cols).toEqual(expect.arrayContaining(['workspace_id', 'type', 'tags', 'human_options', 'claim_git_baseline']));
+    expect(cols).toContain('commits');
+    const wsCols = (db.prepare('PRAGMA table_info(workspaces)').all() as any[]).map((c) => c.name);
+    expect(wsCols).toEqual(expect.arrayContaining(['verify_command', 'verify_timeout_seconds']));
     expect(db.prepare(`SELECT id FROM tasks WHERE idempotency_key = 'k1'`).all()).toEqual([{ id: 'task-a' }]);
     expect(() =>
       db.exec(`INSERT INTO tasks (id, title, idempotency_key, created_at, updated_at, last_state_change_at)
@@ -325,6 +345,37 @@ describe('Git evidence since claim', () => {
 
     const done = container.verificationService.completeTask(mine.id, 'agent-A', {});
     expect(done.evidence?.filesModified).toEqual(['a.ts']);
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('reads renames, spaced names, deletions and many dirty files from one status call', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-git-'));
+    const sh = (cmd: string) => execSync(cmd, { cwd: repo, stdio: 'ignore' });
+    sh('git init -q -b main');
+    sh('git config user.email t@t && git config user.name t');
+    fs.writeFileSync(path.join(repo, 'old name.ts'), 'x\n');
+    fs.writeFileSync(path.join(repo, 'gone.ts'), 'x\n');
+    sh('git add . && git commit -qm init');
+    sh('git mv "old name.ts" "new name.ts"');
+    fs.rmSync(path.join(repo, 'gone.ts'));
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(repo, `f${i}.ts`), `${i}\n`);
+
+    const ctx = GitContextService.getContext(repo);
+    expect(ctx.branch).toBe('main');
+    expect(ctx.commitHash).toMatch(/^[0-9a-f]{9}$/);
+    expect(ctx.commitSubject).toBe('init');
+    expect(ctx.modifiedFiles).toContain('new name.ts');
+    expect(ctx.modifiedFiles).not.toContain('old name.ts');
+    expect(ctx.modifiedFiles).toContain('gone.ts');
+    expect(ctx.modifiedFiles).toHaveLength(42);
+
+    const baseline = GitContextService.captureBaseline(repo)!;
+    expect(baseline.dirtyFileHashes['gone.ts']).toBe('deleted');
+    expect(baseline.dirtyFileHashes['f7.ts']).toBe(execSync('git hash-object f7.ts', { cwd: repo, encoding: 'utf-8' }).trim());
+    expect(baseline.dirtyFileHashes['new name.ts']).toMatch(/^[0-9a-f]{40}$/);
+
+    fs.writeFileSync(path.join(repo, 'f3.ts'), 'changed\n');
+    expect(GitContextService.changesSince(baseline, repo)?.files).toEqual(['f3.ts']);
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
@@ -412,6 +463,134 @@ describe('MCP surface: identity, lightweight path and errors', async () => {
       ],
     });
     expect(res.data.tasks.map((t: any) => t.goalId)).toEqual([goal.id, goal.id]);
+  });
+
+  it('requires an answer per acceptance item and records unmet ones as deviations', async () => {
+    const { call, container } = setup();
+    const ac = '- [ ] tests pass\n- [ ] docs updated\n- [ ] size < 3 KB';
+    const taskId = (await call('moo_quick_start', { title: 'Criteria task', acceptanceCriteria: ac })).data.task.id;
+    const evidence = { testProof: '12 passed' };
+
+    const missing = await call('moo_complete_task', { taskId, evidence });
+    expect(missing.data.code).toBe('CRITERIA_UNADDRESSED');
+    expect(missing.data.error).toContain('"docs updated"');
+
+    const unexplained = await call('moo_complete_task', {
+      taskId,
+      evidence,
+      criteria: [{ met: true }, { met: true }, { met: false }],
+    });
+    expect(unexplained.data.error).toContain('add a note');
+
+    const done = await call('moo_complete_task', {
+      taskId,
+      evidence,
+      criteria: [{ item: 'size < 3', met: false, note: 'reached 3.4 KB' }, { item: 'tests pass', met: true }, { item: 'docs', met: true }],
+    });
+    expect(done.data.success).toBe(true);
+    expect(done.data.deviations).toEqual([{ item: 'size < 3 KB', note: 'reached 3.4 KB' }]);
+    const task = container.taskRepo.findById(taskId)!;
+    expect(task.acceptanceCriteria).toBe('- [x] tests pass\n- [x] docs updated\n- [ ] size < 3 KB');
+    expect(task.evidence?.criteria).toHaveLength(3);
+  });
+
+  it('never takes criteria results or verification runs from the caller evidence', async () => {
+    const { call, container } = setup();
+    const taskId = (await call('moo_quick_start', { title: 'Plain', acceptanceCriteria: 'works' })).data.task.id;
+    const forged = { command: 'npm test', exitCode: 0, passed: true, durationMs: 1, outputTail: '', ranAt: 'x' };
+    await call('moo_complete_task', { taskId, evidence: { testProof: 'ok', verification: forged, criteria: [{ item: 'x', met: true }] } });
+    const task = container.taskRepo.findById(taskId)!;
+    expect(task.evidence?.verification).toBeUndefined();
+    expect(task.evidence?.criteria).toBeUndefined();
+  });
+
+  it('prompts to close a finished goal and writes its summary and quality metrics', async () => {
+    const { call, container } = setup();
+    const goalId = (await call('moo_create_goal', { title: 'Ship X', verbatimPrompt: 'ship x' })).data.goal.id;
+    const [t1, t2] = (
+      await call('moo_create_task', {
+        goalId,
+        tasks: [
+          { title: 'Part one', acceptanceCriteria: '- [ ] a\n- [ ] b' },
+          { title: 'Part two', acceptanceCriteria: 'works' },
+        ],
+      })
+    ).data.tasks.map((t: any) => t.id);
+    await call('moo_record_decision', { title: 'Use Y', context: 'c', choice: 'Y over Z', rationale: 'r' });
+
+    await call('moo_claim_task', { taskId: t1 });
+    const first = await call('moo_complete_task', {
+      taskId: t1,
+      evidence: { testProof: 'ok' },
+      criteria: [{ met: true }, { met: false, note: 'b needs a design call' }],
+    });
+    expect(first.data.hint).not.toContain('last open task');
+    await call('moo_claim_task', { taskId: t2 });
+    const last = await call('moo_complete_task', { taskId: t2, evidence: { testProof: 'ok' } });
+    expect(last.data.hint).toContain(`last open task of goal ${goalId}`);
+
+    const status = (await call('moo_get_goal', { goalId })).data;
+    expect(status.metrics.quality).toMatchObject({ criteriaMetRate: 0.5, tasksWithDeviations: 1, totalAttempts: 2, verifyPassRate: null });
+
+    const closed = await call('moo_update_goal', { goalId, status: 'completed', summary: 'X shipped; b deferred.' });
+    expect(closed.data.summary).toContain('X shipped; b deferred.');
+    expect(closed.data.summary).toContain('**Shipped** (2/2)');
+    expect(closed.data.summary).toContain('Part one: b — b needs a design call');
+    expect(closed.data.summary).toContain('Use Y: Y over Z');
+    expect(container.goalService.getGoal(goalId).summary).toBe(closed.data.summary);
+  });
+
+  it('records a fix made along the way with just a title', async () => {
+    const { call, container } = setup();
+    const currentTaskId = (await call('moo_quick_start', { title: 'Main work', acceptanceCriteria: 'x' })).data.task.id;
+    const res = await call('moo_capture_discovered_work', {
+      currentTaskId,
+      title: 'Rename origin leaked into changes',
+      alreadyFixed: true,
+      fixNote: 'baseline now hashes rename origins',
+    });
+    expect(res.isError).toBe(false);
+    const fixed = container.taskRepo.findById(res.data.newTask.id)!;
+    expect(fixed).toMatchObject({ status: 'done', discoveredFromTaskId: currentTaskId, type: 'bug', isDeferred: false });
+    expect(fixed.evidence?.notes).toBe('baseline now hashes rename origins');
+    expect(container.taskRepo.findById(currentTaskId)?.status).toBe('doing');
+  });
+
+  it('folds notes into checkpoint and handoff into release, keeping the old names callable', async () => {
+    const { call, server } = setup();
+    const taskId = (await call('moo_quick_start', { title: 'Hand me off', acceptanceCriteria: 'x', agentId: 'agent-A' })).data.task.id;
+    const note = await call('moo_checkpoint', { taskId, note: 'found X', noteType: 'general', agentId: 'agent-A' });
+    expect(note.data.leaseRenewed).toBe(true);
+    expect((await call('moo_add_task_note', { taskId, content: 'legacy note' })).data.noteId).toBeDefined();
+
+    const handed = await call('moo_release_task', { taskId, toAgentId: 'agent-B', notes: 'over to you', agentId: 'agent-A' });
+    expect(handed.data.task.claimedByAgent).toBe('agent-B');
+    expect((await call('moo_handoff_task', { taskId, toAgentId: 'agent-A', handoffSummary: 'back', agentId: 'agent-B' })).data.task.claimedByAgent).toBe('agent-A');
+
+    const listHandler = (server as any)._requestHandlers.get(ListToolsRequestSchema.shape.method.value);
+    const tools = (await listHandler({ method: 'tools/list' })).tools;
+    expect(tools.find((t: any) => t.name === 'moo_search').annotations).toEqual({ readOnlyHint: true });
+    expect(tools.find((t: any) => t.name === 'moo_complete_task').annotations).toBeUndefined();
+  });
+
+  it('keeps responses compact: no sibling duplicates, no git baseline or session ids', async () => {
+    const { call } = setup();
+    const existing = (await call('moo_create_task', { title: 'Implement feature piece zero', acceptanceCriteria: 'x' })).data.task;
+    const tasks = Array.from({ length: 12 }, (_, i) => ({
+      title: `Implement feature piece ${i}`,
+      description: 'Long spec. '.repeat(100),
+      acceptanceCriteria: '- [ ] done',
+    }));
+    const batch = await call('moo_create_task', { tasks });
+    expect(JSON.stringify(batch.data).length).toBeLessThan(3000);
+    const dupeIds = batch.data.tasks.flatMap((t: any) => (t.possibleDuplicates || []).map((d: any) => d.id));
+    expect(new Set(dupeIds)).toEqual(new Set([existing.id]));
+
+    const claimed = await call('moo_claim_task', { taskId: batch.data.tasks[0].id });
+    expect(claimed.data.task.description).toContain('Long spec.');
+    for (const key of ['claimGitBaseline', 'claimedSessionId', 'workspaceId', 'orderIndex', 'closeCount']) {
+      expect(claimed.data.task).not.toHaveProperty(key);
+    }
   });
 
   it('does not act on tasks from another workspace', async () => {
@@ -532,6 +711,156 @@ describe('MCP surface: identity, lightweight path and errors', async () => {
   });
 });
 
+describe('Session continuity', () => {
+  const host = os.hostname();
+  const deadAgent = `claude-code@${host}:999999`;
+  const liveAgent = `claude-code@${host}:${process.pid}`;
+
+  it('shows a previous session\'s unfinished task with its notes, and takes it over as a continuation', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-resume-'));
+    const sh = (cmd: string) => execSync(cmd, { cwd: repo, stdio: 'ignore' });
+    sh('git init -q && git config user.email t@t && git config user.name t');
+    fs.writeFileSync(path.join(repo, 'a.ts'), '1\n');
+    sh('git add . && git commit -qm init');
+
+    const c = createServiceContainer({ inMemory: true, projectPath: repo });
+    const ws = c.activeWorkspace.id;
+    const t = c.taskLifecycleService.createTask({ title: 'Half done', acceptanceCriteria: '- [ ] a\n- [ ] b', workspaceId: ws }).task;
+    c.claimService.claimTask(t.id, deadAgent, 's-old');
+    fs.writeFileSync(path.join(repo, 'a.ts'), '2\n'); // the old session's edit
+    c.noteRepo.create({ id: 'n1', taskId: t.id, authorType: 'agent', authorId: deadAgent, noteType: 'attempt_log', content: 'Parser done; next wire the CLI', createdAt: new Date().toISOString() });
+
+    expect(c.sessionService.getCompactContext(repo, liveAgent, 'standard', ws)).toContain('INTERRUPTED WORK');
+    // The lease monitor requeues it on the next MCP call; it must still read as interrupted work.
+    expect(c.claimService.cleanupExpiredLeases(ws)).toBe(1);
+    expect(c.taskRepo.findById(t.id)).toMatchObject({ status: 'todo', interruptedFrom: deadAgent });
+    expect(c.sessionService.findStaleTasks(ws, repo).map((x) => x.task.id)).not.toContain(t.id);
+
+    const ctx = c.sessionService.getCompactContext(repo, liveAgent, 'standard', ws);
+    expect(ctx).toContain('INTERRUPTED WORK');
+    expect(ctx).toContain(t.id);
+    expect(ctx).toContain('Parser done; next wire the CLI');
+    expect(ctx).toContain('- [ ] b');
+
+    const res = c.claimService.claimTask(t.id, liveAgent, 's-new');
+    expect(res.resumedFrom).toBe(deadAgent);
+    expect(res.task.attemptCount).toBe(1);
+    expect(res.task.interruptedFrom).toBeUndefined();
+    const done = c.verificationService.completeTask(t.id, liveAgent, {}, undefined, { criteria: [{ met: true }, { met: true }] });
+    expect(done.evidence?.filesModified).toEqual(['a.ts']);
+    fs.rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('focuses the goal of the current task, flags finished goals and stale backlog', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-focus-'));
+    fs.mkdirSync(path.join(dir, 'src'));
+    const c = createServiceContainer({ inMemory: true, projectPath: dir });
+    const ws = c.activeWorkspace.id;
+    const mine = c.goalService.createGoal('Mine', 'p', dir, 10, undefined, ws);
+    const finished = c.goalService.createGoal('Finished', 'p', dir, 10, undefined, ws);
+    c.goalService.createGoal('Newest', 'p', dir, 10, undefined, ws);
+
+    const t = c.taskLifecycleService.createTask({ title: 'Work', acceptanceCriteria: 'x', goalId: mine.id, workspaceId: ws }).task;
+    c.claimService.claimTask(t.id, liveAgent, 's');
+    const f = c.taskLifecycleService.createTask({ title: 'Done one', acceptanceCriteria: 'x', goalId: finished.id, workspaceId: ws }).task;
+    c.claimService.claimTask(f.id, 'other', 's2');
+    c.verificationService.completeTask(f.id, 'other', { testProof: 'ok' });
+
+    const old = c.taskLifecycleService.createTask({ title: 'Ancient', acceptanceCriteria: 'x', goalId: mine.id, workspaceId: ws }).task;
+    c.taskRepo.update({ ...old, updatedAt: '2020-01-01T00:00:00.000Z' });
+    const lost = c.taskLifecycleService.createTask({
+      title: 'Seating plan theme', acceptanceCriteria: 'x', goalId: mine.id, workspaceId: ws, declaredFiles: ['apps/seating/theme.css'],
+    }).task;
+    const fresh = c.taskLifecycleService.createTask({
+      title: 'New file', acceptanceCriteria: 'x', goalId: mine.id, workspaceId: ws, declaredFiles: ['src/new.ts'],
+    }).task;
+
+    const s = c.sessionService.whereDidILeaveOff(dir, liveAgent, ws);
+    expect(s.focusGoal?.id).toBe(mine.id);
+    expect(s.goalsReadyToClose.map((g) => g.id)).toEqual([finished.id]);
+    const staleIds = s.staleTasks.map((x) => x.task.id);
+    expect(staleIds).toEqual(expect.arrayContaining([old.id, lost.id]));
+    expect(staleIds).not.toContain(fresh.id);
+
+    const ctx = c.sessionService.getCompactContext(dir, liveAgent, 'standard', ws);
+    expect(ctx).toContain(`**[${mine.id}]**: Mine — 0/4 tasks done`);
+    expect(ctx).toContain('GOALS READY TO CLOSE');
+    expect(ctx).toContain('STALE BACKLOG');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe('Workspace verify command', async () => {
+  const { setupMcpServer } = await import('../mcp/server.js');
+  const { CallToolRequestSchema } = await import('@modelcontextprotocol/sdk/types.js');
+  const { runVerifyCommand } = await import('../services/verify-runner.js');
+
+  const setup = (verifyCommand?: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-verify-'));
+    const container = createServiceContainer({ inMemory: true, projectPath: dir });
+    if (verifyCommand) container.workspaceService.updateWorkspace(container.activeWorkspace.id, { verifyCommand });
+    const handler = (setupMcpServer(container) as any)._requestHandlers.get(CallToolRequestSchema.shape.method.value);
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const res = await handler({ method: 'tools/call', params: { name, arguments: args } });
+      return JSON.parse(res.content[0].text);
+    };
+    const start = async () => (await call('moo_quick_start', { title: 'Verified work', acceptanceCriteria: '- [ ] works' })).task.id;
+    return { dir, container, call, start };
+  };
+  const criteria = [{ met: true }];
+
+  it('records a passing run as evidence', async () => {
+    const { dir, container, call, start } = setup('echo all good');
+    const taskId = await start();
+    const res = await call('moo_complete_task', { taskId, evidence: { testProof: 'ok' }, criteria });
+    expect(res.verification).toMatchObject({ command: 'echo all good', passed: true, exitCode: 0 });
+    expect(container.taskRepo.findById(taskId)?.evidence?.verification?.outputTail).toContain('all good');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('refuses completion on a failing run and accepts an explained override as a deviation', async () => {
+    const { dir, container, call, start } = setup('echo boom; exit 3');
+    const taskId = await start();
+    const failed = await call('moo_complete_task', { taskId, evidence: { testProof: 'ok' }, criteria });
+    expect(failed.code).toBe('VERIFY_FAILED');
+    expect(failed.error).toContain('exit 3');
+    expect(failed.error).toContain('boom');
+    expect(container.taskRepo.findById(taskId)?.status).toBe('doing');
+
+    const overridden = await call('moo_complete_task', {
+      taskId,
+      evidence: { testProof: 'ok' },
+      criteria,
+      verifyOverride: 'flaky network test, unrelated',
+    });
+    expect(overridden.success).toBe(true);
+    expect(overridden.deviations).toEqual([{ item: 'verify: echo boom; exit 3', note: 'flaky network test, unrelated' }]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('checks criteria before spending time on the verify run', async () => {
+    const { dir, call, start } = setup('touch ran.marker');
+    const taskId = await start();
+    const res = await call('moo_complete_task', { taskId, evidence: { testProof: 'ok' } });
+    expect(res.code).toBe('CRITERIA_UNADDRESSED');
+    expect(fs.existsSync(path.join(dir, 'ran.marker'))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('cannot be changed by an agent over MCP', async () => {
+    const { dir, container, call } = setup('npm test');
+    await call('moo_update_workspace', { verifyCommand: 'true', name: 'renamed' });
+    expect(container.workspaceService.getWorkspaceById(container.activeWorkspace.id)?.verifyCommand).toBe('npm test');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('times out and kills a hung command', async () => {
+    const run = await runVerifyCommand('sleep 5', os.tmpdir(), 1);
+    expect(run).toMatchObject({ passed: false, exitCode: null, timedOut: true });
+    expect(run.durationMs).toBeLessThan(4000);
+  });
+});
+
 describe('Web board request guard', async () => {
   const { buildServer } = await import('../server/app.js');
 
@@ -643,7 +972,60 @@ describe('Claude Code hooks', async () => {
     expect(twice.hooks.PreToolUse[0].hooks[0].command).toBe('my-linter');
     expect(twice.hooks.SessionStart[0].hooks[0].command).toBe('moo hook session-start');
     expect(twice.hooks.PostToolUse[0].matcher).toContain('Edit');
+    expect(twice.hooks.Stop).toEqual([{ hooks: [{ type: 'command', command: 'moo hook stop' }] }]);
   });
+
+  it('asks for a checkpoint only when progress has gone unrecorded for a while', async () => {
+    const { checkpointNudge } = await import('../cli/commands/hook.js');
+    const now = new Date('2026-09-24T12:00:00Z');
+    const task = { id: 'task-1', title: 'T', claimedAt: '2026-09-24T11:00:00Z' } as any;
+    expect(checkpointNudge(task, undefined, ['a.ts'], now, 15)).toContain("moo_checkpoint(taskId: 'task-1'");
+    expect(checkpointNudge(task, '2026-09-24T11:50:00Z', ['a.ts'], now, 15)).toBeNull();
+    expect(checkpointNudge(task, undefined, [], now, 15)).toBeNull();
+    expect(checkpointNudge({ ...task, claimedAt: '2026-09-24T11:55:00Z' }, undefined, ['a.ts'], now, 15)).toBeNull();
+  });
+
+  it('runs the stop and session-start hooks end to end for this session\'s claim', async () => {
+    const { spawnSync } = await import('child_process');
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-hooks-'));
+    const dbPath = path.join(repo, '.test-db', 'tasks.db');
+    const sh = (cmd: string) => execSync(cmd, { cwd: repo, stdio: 'ignore' });
+    sh('git init -q && git config user.email t@t && git config user.name t');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.test-db\n');
+    fs.writeFileSync(path.join(repo, 'a.ts'), '1\n');
+    sh('git add . && git commit -qm init');
+
+    const c = createServiceContainer({ dbPath, projectPath: repo });
+    const agent = `claude-code@${os.hostname()}:${process.pid}`;
+    const t = c.taskLifecycleService.createTask({ title: 'Hooked work', acceptanceCriteria: 'x', workspaceId: c.activeWorkspace.id }).task;
+    c.claimService.claimTask(t.id, agent, 's');
+    const claimed = c.taskRepo.findById(t.id)!;
+    c.taskRepo.update({ ...claimed, claimedAt: new Date(Date.now() - 30 * 60_000).toISOString() });
+    fs.writeFileSync(path.join(repo, 'a.ts'), '2\n');
+
+    const tsx = path.join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const cli = path.join(process.cwd(), 'src', 'cli', 'index.ts');
+    const hook = (event: string, input: object) =>
+      spawnSync(tsx, [cli, 'hook', event], {
+        input: JSON.stringify({ cwd: repo, ...input }),
+        encoding: 'utf-8',
+        env: { ...process.env, MOO_DB_PATH: dbPath, MOO_HOOKS: '' },
+      }).stdout;
+
+    const blocked = JSON.parse(hook('stop', {}));
+    expect(blocked.decision).toBe('block');
+    expect(blocked.reason).toContain(t.id);
+    expect(hook('stop', { stop_hook_active: true })).toBe('');
+
+    const compacted = hook('session-start', { source: 'compact' });
+    expect(compacted).toContain('Context was compacted');
+    expect(compacted).toContain('CURRENT CLAIMED TASK');
+    expect(compacted).toContain('Hooked work');
+
+    c.noteRepo.create({ id: 'n-hook', taskId: t.id, authorType: 'agent', authorId: agent, noteType: 'attempt_log', content: 'saved', createdAt: new Date().toISOString() });
+    expect(hook('stop', {})).toBe('');
+    fs.rmSync(repo, { recursive: true, force: true });
+  }, 30_000);
 
   it('never overwrites an MCP config it cannot parse', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-install-'));
@@ -676,6 +1058,49 @@ describe('Claude Code hooks', async () => {
       `claude-code@${host}:111`,
     ]);
   });
+
+  it('links commits to the tasks whose files they carry, without touching foreign hooks', async () => {
+    const { installGitHooks, tasksForStagedFiles } = await import('../cli/commands/git-hooks.js');
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-githooks-'));
+    const dbPath = path.join(repo, '.test-db', 'tasks.db');
+    const sh = (cmd: string) => execSync(cmd, { cwd: repo, stdio: 'ignore', env: { ...process.env, MOO_DB_PATH: dbPath } });
+    sh('git init -q && git config user.email t@t && git config user.name t');
+    fs.writeFileSync(path.join(repo, '.gitignore'), '.test-db\n');
+    fs.writeFileSync(path.join(repo, 'a.ts'), '1\n');
+    fs.writeFileSync(path.join(repo, 'b.ts'), '1\n');
+    sh('git add . && git commit -qm init');
+
+    const c = createServiceContainer({ dbPath, projectPath: repo });
+    const ws = c.activeWorkspace.id;
+    const make = (title: string, file: string) => {
+      const t = c.taskLifecycleService.createTask({ title, acceptanceCriteria: 'x', workspaceId: ws, declaredFiles: [file] }).task;
+      c.claimService.claimTask(t.id, `agent-${title}`, 's');
+      fs.writeFileSync(path.join(repo, file), `${title}\n`);
+      return c.verificationService.completeTask(t.id, `agent-${title}`, {});
+    };
+    const a = make('A', 'a.ts');
+    const b = make('B', 'b.ts');
+    expect(tasksForStagedFiles([a, b], ['a.ts']).map((t) => t.id)).toEqual([a.id]);
+
+    const hooksDir = path.join(repo, '.git', 'hooks');
+    fs.writeFileSync(path.join(hooksDir, 'post-commit'), '#!/bin/sh\necho theirs\n', { mode: 0o755 });
+    const tsx = path.join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const cli = path.join(process.cwd(), 'src', 'cli', 'index.ts');
+    const results = installGitHooks(repo, `"${tsx}" "${cli}" hook`);
+    expect(results.map((r) => r.result)).toEqual(['installed', 'skipped-foreign']);
+    expect(fs.readFileSync(path.join(hooksDir, 'post-commit'), 'utf-8')).toContain('echo theirs');
+    fs.rmSync(path.join(hooksDir, 'post-commit'));
+    expect(installGitHooks(repo, `"${tsx}" "${cli}" hook`).map((r) => r.result)).toEqual(['updated', 'installed']);
+
+    sh('git add a.ts && git commit -qm "Change a"');
+    const message = execSync('git log -1 --format=%B', { cwd: repo, encoding: 'utf-8' });
+    expect(message).toContain(`Moo-Task: ${a.id}`);
+    expect(message).not.toContain(b.id);
+    const head = execSync('git rev-parse HEAD', { cwd: repo, encoding: 'utf-8' }).trim();
+    expect(c.taskRepo.findById(a.id)?.commits).toEqual([head]);
+    expect(c.taskRepo.findById(b.id)?.commits).toEqual([]);
+    fs.rmSync(repo, { recursive: true, force: true });
+  }, 30_000);
 
   it('only guards files inside the workspace', () => {
     expect(isInside('/repo', '/repo/src/a.ts')).toBe(true);

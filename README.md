@@ -39,6 +39,8 @@ Standard AI coding agents often suffer from:
 ### 🎯 1. Goals & Scope Control
 - **Verbatim Human Prompts**: Sits above tasks, preserving the exact original user request.
 - **Goal Coverage & Loose Ends**: Live metrics on task completion percentage and lingering open tasks.
+- **Quality Metrics**: Per goal: share of acceptance criteria met, tasks with deviations, verify pass rate, share of work linked to commits, cycle time, attempts and reopens.
+- **Completion Summary**: Completing a goal writes a record of what shipped, deviations, what was left open or dropped, and the decisions made along the way, plus the closer's own retrospective. Agents are prompted to close a goal after its last task.
 - **Scope Drift Detection**: Automatically identifies and flags orphan tasks with no linked goal.
 - **Goal Open Caps**: Hard cap on maximum open tasks per goal (default: 10), preventing agents from over-planning.
 - **Cascade Operations**: Atomically drop, kill, or reopen all tasks under a goal with mandatory reasons.
@@ -52,6 +54,8 @@ Standard AI coding agents often suffer from:
 
 ### 🛡️ 3. Completion, Verification & Proof of Work
 - **Acceptance Criteria**: Mandatory criteria written in Markdown *before* work starts.
+- **Per-Criterion Completion**: When the criteria are a `- [ ]` checklist, `moo_complete_task` needs one answer per item (`criteria: [{ met, note }]`). Unmet items are allowed with a note and kept as **deviations**, visible on the board and in the goal summary; met items are ticked.
+- **Verify Command**: A human sets one per workspace (`moo verify:set "npm test"` or the board's Workspace Settings). Moo runs it itself when an agent completes a task and stores the result; a failing run refuses completion unless the agent gives a `verifyOverride` reason, which is recorded as a deviation. Agents cannot change the command over MCP.
 - **Evidence Requirement**: Closing a task requires verifiable proof (commands run, stdout output, test proofs).
 - **Two-Phase Verification**: Distinguishes `agent_completed` from human `verified_done`.
 - **Rejection with Reason**: Humans can reject completed work from the web board with feedback; the task returns to the queue unclaimed (`todo`, or `blocked-on-dependency` while its blockers are open) and increments the reopen counter.
@@ -64,10 +68,14 @@ Standard AI coding agents often suffer from:
 ### 🔍 5. Discovered Work
 - **Mid-Task Work Capture**: Capture new work found mid-flight without relinquishing current task claim.
 - **Must-Fix vs Deferred**: Mark as `must-fix-now` (inserted as blocker) or `deferred` (backlog pile).
+- **Already Fixed**: `alreadyFixed: true` records a fix made along the way as done work linked to the current task, with just a title.
+- **Stale Backlog**: Todo work untouched for 14 days, deferred work for 30 days, and tasks whose declared files and folders don't exist in the project are flagged on resume, in `moo_list_tasks(stale: true)` and by the board's Health filter.
 
 ### 🤖 6. Ownership, Concurrency & Leases
 - **Exclusive Task Claims**: 30-minute leases, renewed whenever the agent calls a tool with the task's `taskId`; claims held by a dead agent process are released.
 - **Checkpoints**: `moo_checkpoint` logs progress and renews the lease during long-running tasks.
+- **Interrupted Work**: When a session ends mid-task, `moo_session_resume` lists the task under *Interrupted work* with its last notes (even after the lease monitor requeues it). Claiming it continues the work: the original git baseline is kept, so the earlier session's edits count, and it is not a new attempt.
+- **Commit Links**: `moo install git` adds git hooks that append `Moo-Task: <id>` trailers to commits carrying a task's files and record each commit on its tasks.
 - **Agent Concurrency Limits**: Cap simultaneous tasks held per agent (default: 1).
 - **File Touch Conflict Warnings**: Declared files are checked for overlaps against other active claims.
 
@@ -162,12 +170,25 @@ npx moo-tasks install codex        # Prints a generic MCP config snippet
 npx moo-tasks install claude --hooks                # project: .claude/settings.json
 npx moo-tasks install claude --hooks --scope user   # user: ~/.claude/settings.json
 ```
-This adds `SessionStart`, `PreToolUse` and `PostToolUse` hooks that run `moo hook <session-start|pre-edit|post-edit>`:
-- **session-start** injects the Where-Did-I-Leave-Off context.
+This adds `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop` hooks that run `moo hook <session-start|pre-edit|post-edit|stop>`:
+- **session-start** injects the Where-Did-I-Leave-Off context; after a compaction or resume it re-injects this session's task in full, with its recent notes.
 - **pre-edit** blocks `Edit` / `Write` / `MultiEdit` / `NotebookEdit` on files inside the workspace when this session holds no claimed task in the workspace.
 - **post-edit** renews the claim's lease.
+- **stop** asks once for a `moo_checkpoint` when this session's task has changes git can see and no note for 15 minutes (`MOO_CHECKPOINT_MINUTES`), so the next session can pick up where this one stopped.
 
 Re-running the installer replaces earlier Moo hooks and leaves other hooks alone. Projects that never ran `moo init` are ignored; set `MOO_HOOKS=off` to disable the hooks temporarily.
+
+### Git Hooks (optional)
+```bash
+moo install git                     # or add --git-hooks to any install
+```
+Installs `prepare-commit-msg` and `post-commit` hooks (honouring `core.hooksPath`). Commits get a `Moo-Task: <id>` trailer for each in-progress or recently completed task whose files are staged, and the commit hash is recorded on those tasks. Existing hooks from other tools are never overwritten; the installer prints the line to add instead. A Moo failure never blocks a commit.
+
+### Verify Command (recommended)
+```bash
+moo verify:set "npm test" --timeout 600   # show with `moo verify:set`, clear with --clear
+moo verify                                # run it now, as completion does
+```
 
 ### Manual Configuration
 ```json
@@ -195,9 +216,12 @@ Re-running the installer replaces earlier Moo hooks and leaves other hooks alone
                     Small change already done? moo_log_work(title, evidence).
 3. LARGER WORK    → moo_create_goal(title, verbatimPrompt, description), then
                     moo_create_task(goalId, tasks: [...]) with criteria, declaredFiles, dependsOnTaskIds
-4. WHILE WORKING  → moo_checkpoint (renews the 30-min lease), moo_capture_discovered_work,
+4. WHILE WORKING  → moo_checkpoint (what is done / next; renews the 30-min lease),
+                    moo_capture_discovered_work (alreadyFixed for fixes made along the way),
                     moo_ask_human, moo_log_attempt_failure, moo_record_decision
-5. FINISH         → moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun })
+5. FINISH         → moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun },
+                    criteria: [{ met, note }])  — one answer per "- [ ]" item; the verify command runs
+6. CLOSE GOAL     → after its last task: moo_update_goal(goalId, status: 'completed', summary)
 ```
 
 Reading, searching and read-only commands never need a task. Parallel sub-agents each pass their own `agentId`.
@@ -209,36 +233,36 @@ Reading, searching and read-only commands never need a task. Parallel sub-agents
 | Tool Name | Purpose |
 |---|---|
 | `moo_create_goal` | Anchor a request as a goal: verbatim prompt plus Markdown PRD (caps open tasks, default 10) |
-| `moo_get_goal` | Goal spec, progress metrics and loose ends; optionally lists its tasks |
-| `moo_update_goal` | Edit a goal; `dropped` (with reason) drops its open tasks, `active` reopens it |
+| `moo_get_goal` | Goal spec, progress metrics and open tasks; `includeTasks=true` lists every task |
+| `moo_update_goal` | Edit a goal; `completed` writes its summary, `dropped` (with reason) drops its open tasks, `active` reopens it |
 | `moo_list_goals` | List this workspace's goals |
 | `moo_create_task` | Create one task, or many via `tasks[]` (all-or-nothing); `claim=true` also claims it |
 | `moo_quick_start` | ⚡ Create and claim a task in one call; `goalId` optional |
 | `moo_log_work` | Record small, already-finished work as a completed task in one call |
 | `moo_update_task` | Edit task fields and dependencies (`addDependsOn` / `removeDependsOn`) |
 | `moo_get_task` | Full task with dependencies, subtasks and notes |
-| `moo_list_tasks` | Filterable task summaries in this workspace |
+| `moo_list_tasks` | Filterable task summaries in this workspace; `stale: true` lists stale backlog with reasons |
 | `moo_get_next_task` | Highest-priority unblocked todo task; `claim=true` claims it |
 | `moo_claim_task` | Claim a task exclusively (30-min lease, renewed on any tool call with its `taskId`) |
-| `moo_checkpoint` | ⚡ Log a progress note on your claimed task and renew its lease |
-| `moo_release_task` | Give up your claim; the task returns to the queue |
-| `moo_handoff_task` | Transfer your claim to another agent with a summary |
-| `moo_complete_task` | Complete your claimed task with evidence; `autoClaimNext` claims the next ready task |
+| `moo_checkpoint` | ⚡ Add a note to a task (progress, finding); renews your lease if you hold it |
+| `moo_release_task` | Give up your claim: back to the queue, or to `toAgentId` as a handoff |
+| `moo_complete_task` | Complete your claimed task with evidence and one `criteria` answer per acceptance item; runs the verify command; `autoClaimNext` claims the next ready task |
 | `moo_log_attempt_failure` | Record a failed attempt; repeated failures escalate to a human |
 | `moo_drop_task` | Drop one or several tasks with a reason |
 | `moo_reopen_task` | Reopen one or several tasks |
 | `moo_ask_human` | Pause a task on a question for the user (clarification, approval, credential, decision) |
-| `moo_add_task_note` | Attach a note to a task |
-| `moo_capture_discovered_work` | Record work found mid-task (must-fix-now blocks the current task, otherwise deferred) |
+| `moo_capture_discovered_work` | Record work found mid-task: `alreadyFixed` logs a fix made along the way, must-fix-now blocks the current task, otherwise deferred |
 | `moo_record_decision` | Record an architectural decision; `supersedesDecisionId` replaces an older one |
-| `moo_list_decisions` | This workspace's decisions |
-| `moo_session_resume` | Where you left off: claimed task, ready work, waiting-on-human, decisions, stall warnings |
+| `moo_list_decisions` | This workspace's decisions (`verbose` for full context and rationale) |
+| `moo_session_resume` | Where you left off: your task with its recent notes, interrupted work, the goal in focus, goals ready to close, stale backlog, decisions, stall warnings |
 | `moo_get_file_context` | Before editing: who holds the files now, plus past tasks, decisions and notes about them |
 | `moo_search` | Full-text search over tasks and decisions in this workspace |
 
 **Board-only actions**: verifying completed work, answering human questions, rejecting a completed task, undoing a status change, and deleting a workspace are done by humans in the web board, not by agents.
 
-> Older tool names from earlier releases (e.g. `moo_create_tasks_batch`, `moo_heartbeat_task`) are still accepted as hidden aliases for compatibility, but are no longer listed.
+Read-only tools carry the MCP `readOnlyHint` annotation, so clients can approve and run them in parallel. Responses are compact by design: task views omit git baselines, session ids and bookkeeping timestamps.
+
+> Older tool names from earlier releases (e.g. `moo_create_tasks_batch`, `moo_heartbeat_task`, `moo_handoff_task`, `moo_add_task_note`) are still accepted as hidden aliases for compatibility, but are no longer listed.
 
 ---
 

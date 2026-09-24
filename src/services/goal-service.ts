@@ -1,12 +1,14 @@
 import crypto from 'crypto';
 import {
   Goal,
+  GoalQualityMetrics,
   GoalStatus,
   GoalStatusSummary,
   Task,
 } from '../domain/types.js';
+import { deviationsOf } from '../domain/criteria.js';
 import { GoalCapExceededError, GoalNotFoundError, MandatoryReasonMissingError } from '../domain/errors.js';
-import { IGoalRepository, ITaskRepository, IWorkspaceRepository } from '../infrastructure/repositories/interfaces.js';
+import { IDecisionRepository, IGoalRepository, ITaskRepository, IWorkspaceRepository } from '../infrastructure/repositories/interfaces.js';
 import { clearClaim, returnToQueue } from './task-state.js';
 
 export const ADHOC_GOAL_TITLE = 'Ad-hoc work';
@@ -16,7 +18,8 @@ export class GoalService {
   constructor(
     private goalRepo: IGoalRepository,
     private taskRepo: ITaskRepository,
-    private workspaceRepo?: IWorkspaceRepository
+    private workspaceRepo?: IWorkspaceRepository,
+    private decisionRepo?: IDecisionRepository
   ) {}
 
   /**
@@ -73,6 +76,8 @@ export class GoalService {
       maxOpenTasksCap?: number;
       status?: GoalStatus;
       workspaceId?: string;
+      /** Retrospective in the closer's words; completing a goal adds the generated record below it. */
+      summary?: string;
     }
   ): Goal {
     const goal = this.getGoal(goalId);
@@ -87,6 +92,7 @@ export class GoalService {
       goal.status = updates.status;
       if (updates.status === 'completed') {
         goal.completedAt = new Date().toISOString();
+        goal.summary = this.buildSummary(goal, updates.summary);
       }
     }
     goal.updatedAt = new Date().toISOString();
@@ -123,6 +129,7 @@ export class GoalService {
     const hasReachedCap = openTasks >= goal.maxOpenTasksCap;
 
     return {
+      quality: this.qualityMetrics(tasks),
       goal,
       totalTasks,
       openTasks,
@@ -134,6 +141,61 @@ export class GoalService {
       looseEnds,
       hasReachedCap,
     };
+  }
+
+  qualityMetrics(tasks: Task[]): GoalQualityMetrics {
+    const done = tasks.filter((t) => t.status === 'done');
+    const rate = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) / 100 : null);
+    const cycles = done
+      .map((t) => (new Date(t.completedAt || t.updatedAt).getTime() - new Date(t.claimedAt || t.createdAt).getTime()) / 60_000)
+      .filter((m) => Number.isFinite(m) && m >= 0);
+    const criteria = done.flatMap((t) => t.evidence?.criteria || []);
+    const runs = done.map((t) => t.evidence?.verification).filter(Boolean);
+    return {
+      avgCycleMinutes: cycles.length ? Math.round(cycles.reduce((a, b) => a + b, 0) / cycles.length) : null,
+      totalAttempts: done.reduce((n, t) => n + (t.attemptCount || 0), 0),
+      reopens: tasks.reduce((n, t) => n + (t.reopenCount || 0), 0),
+      criteriaMetRate: rate(criteria.filter((c) => c.met).length, criteria.length),
+      tasksWithDeviations: done.filter((t) => deviationsOf(t.evidence?.criteria).length > 0 || (t.evidence?.verification && !t.evidence.verification.passed)).length,
+      verifyPassRate: rate(runs.filter((r) => r!.passed).length, runs.length),
+      committedRate: rate(done.filter((t) => t.commits?.length).length, done.length),
+      discoveredWork: tasks.filter((t) => t.discoveredFromTaskId).length,
+    };
+  }
+
+  /** Markdown record written when a goal is completed: what shipped, what deviated, what was decided. */
+  buildSummary(goal: Goal, closingNote?: string): string {
+    const tasks = this.taskRepo.listByGoalId(goal.id).filter((t) => !t.isArchived);
+    const done = tasks.filter((t) => t.status === 'done');
+    const open = tasks.filter((t) => t.status !== 'done' && t.status !== 'dropped');
+    const dropped = tasks.filter((t) => t.status === 'dropped');
+    const q = this.qualityMetrics(tasks);
+    const pct = (r: number | null) => (r === null ? 'n/a' : `${Math.round(r * 100)}%`);
+    const lines: string[] = [];
+    if (closingNote?.trim()) lines.push(closingNote.trim(), '');
+    lines.push(`**Shipped** (${done.length}/${tasks.length - dropped.length}):`);
+    for (const t of done) {
+      const commits = t.commits?.length ? ` — ${t.commits.map((c) => c.slice(0, 9)).join(', ')}` : '';
+      lines.push(`- ${t.title} (${t.id})${t.discoveredFromTaskId ? ' [discovered]' : ''}${commits}`);
+    }
+    const deviations = done.flatMap((t) => [
+      ...deviationsOf(t.evidence?.criteria).map((d) => `- ${t.title}: ${d.item} — ${d.note || 'no note'}`),
+      ...(t.evidence?.verification && !t.evidence.verification.passed
+        ? [`- ${t.title}: verify \`${t.evidence.verification.command}\` failed — ${t.evidence.verification.overrideReason || 'no reason'}`]
+        : []),
+    ]);
+    if (deviations.length) lines.push('', `**Deviations** (${deviations.length}):`, ...deviations);
+    if (open.length) lines.push('', `**Left open** (${open.length}):`, ...open.map((t) => `- ${t.title} (${t.id}, ${t.status})`));
+    if (dropped.length) lines.push('', `**Dropped** (${dropped.length}):`, ...dropped.map((t) => `- ${t.title}${t.droppedReason ? ` — ${t.droppedReason}` : ''}`));
+    const decisions = (this.decisionRepo?.list(undefined, undefined, undefined, goal.workspaceId) || []).filter(
+      (d) => d.createdAt >= goal.createdAt && d.status !== 'rejected'
+    );
+    if (decisions.length) lines.push('', `**Decisions** (${decisions.length}):`, ...decisions.map((d) => `- ${d.title}: ${d.choice.slice(0, 160)}`));
+    lines.push(
+      '',
+      `**Metrics**: avg cycle ${q.avgCycleMinutes ?? 'n/a'} min · attempts ${q.totalAttempts} · reopens ${q.reopens} · criteria met ${pct(q.criteriaMetRate)} · verify passed ${pct(q.verifyPassRate)} · committed ${pct(q.committedRate)} · discovered ${q.discoveredWork}`
+    );
+    return lines.join('\n');
   }
 
   checkGoalCap(goalId?: string): void {

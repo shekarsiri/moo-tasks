@@ -54,6 +54,27 @@ export class MissingEvidenceError extends DomainError {
   }
 }
 
+export class CriteriaUnaddressedError extends DomainError {
+  constructor(taskId: string, unanswered: string[], unexplained: string[]) {
+    const parts: string[] = [];
+    if (unanswered.length) parts.push(`answer every acceptance criterion; missing: ${unanswered.map((i) => `"${i}"`).join(', ')}`);
+    if (unexplained.length) parts.push(`add a note to each unmet criterion: ${unexplained.map((i) => `"${i}"`).join(', ')}`);
+    super(`Cannot close task ${taskId}: ${parts.join('; ')}. Pass criteria: [{ item, met, note }].`, 'CRITERIA_UNADDRESSED');
+    this.name = 'CriteriaUnaddressedError';
+  }
+}
+
+export class VerificationFailedError extends DomainError {
+  constructor(command: string, exitCode: number | null, outputTail: string) {
+    const tail = outputTail.length > 1500 ? `…${outputTail.slice(-1500)}` : outputTail;
+    super(
+      `Verify command \`${command}\` ${exitCode === null ? 'timed out or could not run' : `failed with exit ${exitCode}`}. Output tail:\n${tail}`,
+      'VERIFY_FAILED'
+    );
+    this.name = 'VerificationFailedError';
+  }
+}
+
 export class MandatoryReasonMissingError extends DomainError {
   constructor(action: string) {
     super(`A mandatory reason must be provided for ${action}.`, 'MANDATORY_REASON_MISSING');

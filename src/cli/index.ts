@@ -13,6 +13,7 @@ import { nextCommand } from './commands/next.js';
 import { exportCommand } from './commands/export.js';
 import { importCommand } from './commands/import.js';
 import { searchCommand } from './commands/search.js';
+import { runVerify, setVerifyCommand } from './commands/verify.js';
 import {
   workspacesCommand,
   addWorkspaceCommand,
@@ -157,14 +158,30 @@ program
 
 program
   .command('install [target]')
-  .description('Install & configure MCP plugin for claude, cursor, windsurf, antigravity, codex, or all')
-  .option('--hooks', 'Claude Code: also install SessionStart/PreToolUse/PostToolUse hooks that enforce claiming')
+  .description('Install & configure MCP plugin for claude, cursor, windsurf, antigravity, codex, or all; "git" installs only the commit-linking git hooks')
+  .option('--hooks', 'Claude Code: also install SessionStart/PreToolUse/PostToolUse/Stop hooks (resume context, enforce claiming, ask for checkpoints)')
+  .option('--git-hooks', 'Also install git prepare-commit-msg/post-commit hooks that link commits to tasks (Moo-Task: trailers)')
   .option('--scope <scope>', 'Where to install hooks: project (.claude/settings.json) or user (~/.claude/settings.json)', 'project')
   .action(installCommand);
 
 program
-  .command('hook <event>')
-  .description('Claude Code hook runner (session-start | pre-edit | post-edit); reads hook JSON on stdin')
+  .command('verify')
+  .description("Run this workspace's verify command, as task completion does")
+  .option('--json', 'Output raw JSON')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(runVerify);
+
+program
+  .command('verify:set [command]')
+  .description('Show or set the command that must pass before an agent task counts as done (e.g. "npm test")')
+  .option('-t, --timeout <seconds>', 'Kill the command after this many seconds (default 600)')
+  .option('--clear', 'Remove the verify command')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(setVerifyCommand);
+
+program
+  .command('hook <event> [args...]')
+  .description('Hook runner: Claude Code (session-start | pre-edit | post-edit | stop, JSON on stdin) and git (prepare-commit-msg | post-commit)')
   .action(hookCommand);
 
 // Default to start command if no subcommand provided

@@ -96,6 +96,9 @@ export class WorkspaceService {
       name: updates.name ? updates.name.trim() : existing.name,
       rootPath: updates.rootPath ? path.resolve(updates.rootPath) : existing.rootPath,
       gitRemote: updates.gitRemote !== undefined ? updates.gitRemote.trim() || undefined : existing.gitRemote,
+      verifyCommand: updates.verifyCommand !== undefined ? updates.verifyCommand.trim() || undefined : existing.verifyCommand,
+      verifyTimeoutSeconds:
+        updates.verifyTimeoutSeconds !== undefined ? updates.verifyTimeoutSeconds || undefined : existing.verifyTimeoutSeconds,
       updatedAt: new Date().toISOString(),
     };
 

@@ -4,8 +4,9 @@ import os from 'os';
 import picocolors from 'picocolors';
 import { fileURLToPath } from 'url';
 import { EDIT_TOOL_MATCHER } from './hook.js';
+import { installGitHooks } from './git-hooks.js';
 
-const HOOK_COMMAND_PATTERN = /\bhook (session-start|pre-edit|post-edit)\b/;
+const HOOK_COMMAND_PATTERN = /\bhook (session-start|pre-edit|post-edit|stop)\b/;
 
 /** Shell command that runs this installation's CLI directly (no npx startup cost per edit). */
 export function hookCommandPrefix(): string {
@@ -39,6 +40,7 @@ export function mergeClaudeHooks(settings: any, commandPrefix: string): any {
   add('SessionStart', `${commandPrefix} session-start`);
   add('PreToolUse', `${commandPrefix} pre-edit`, EDIT_TOOL_MATCHER);
   add('PostToolUse', `${commandPrefix} post-edit`, EDIT_TOOL_MATCHER);
+  add('Stop', `${commandPrefix} stop`);
 
   next.hooks = hooks;
   return next;
@@ -100,12 +102,33 @@ function installClaudeHooks(scope: string) {
   writeJsonAtomic(settingsPath, mergeClaudeHooks(settings, hookCommandPrefix()));
   console.log(`${picocolors.green('✔')} Installed Claude Code hooks (${scope}): ${picocolors.cyan(settingsPath)}`);
   console.log(
-    `  ${picocolors.dim('SessionStart resumes context; edits without a claimed task are blocked; edits renew the lease. Disable with MOO_HOOKS=off.')}`
+    `  ${picocolors.dim('SessionStart resumes context (full after compaction); edits without a claimed task are blocked; edits renew the lease; Stop asks for a checkpoint on unsaved progress. Disable with MOO_HOOKS=off.')}`
   );
 }
 
-export async function installCommand(target: string, options: { hooks?: boolean; scope?: string } = {}) {
+function installGitHooksHere() {
+  try {
+    for (const r of installGitHooks(process.cwd(), hookCommandPrefix())) {
+      if (r.result === 'skipped-foreign') {
+        console.log(
+          `${picocolors.yellow('!')} ${r.path} belongs to another tool; add this line to it to link commits to tasks:\n    ${hookCommandPrefix()} ${r.hook} "$@" || true`
+        );
+      } else {
+        console.log(`${picocolors.green('✔')} ${r.result === 'installed' ? 'Installed' : 'Updated'} git ${r.hook} hook: ${picocolors.cyan(r.path)}`);
+      }
+    }
+  } catch (err: any) {
+    console.log(`${picocolors.yellow('!')} Git hooks not installed (not a git repository?): ${err.message}`);
+  }
+}
+
+export async function installCommand(target: string, options: { hooks?: boolean; gitHooks?: boolean; scope?: string } = {}) {
   const normalized = (target || 'all').toLowerCase();
+
+  if (normalized === 'git' || options.gitHooks) {
+    installGitHooksHere();
+    if (normalized === 'git') return;
+  }
 
   const mcpConfigEntry = {
     command: 'npx',

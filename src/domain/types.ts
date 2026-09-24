@@ -1,3 +1,5 @@
+import type { CriterionResult } from './criteria.js';
+
 export type TaskStatus =
   | 'todo'
   | 'doing'
@@ -46,6 +48,22 @@ export interface TaskEvidence {
   testProof?: string;
   notes?: string;
   gitContext?: GitContext;
+  /** One answer per acceptance-criteria checklist item; unmet ones are deviations. */
+  criteria?: CriterionResult[];
+  /** Result of the workspace verify command, run by Moo itself (never supplied by agents). */
+  verification?: VerificationRun;
+}
+
+export interface VerificationRun {
+  command: string;
+  exitCode: number | null;
+  passed: boolean;
+  durationMs: number;
+  outputTail: string;
+  ranAt: string;
+  timedOut?: boolean;
+  /** Set when an agent completed despite a failing run. */
+  overrideReason?: string;
 }
 
 export interface GitContext {
@@ -69,6 +87,9 @@ export interface Workspace {
   name: string;
   rootPath: string;
   gitRemote?: string;
+  /** Shell command Moo runs when a task completes (e.g. `npm test`); set by humans only. */
+  verifyCommand?: string;
+  verifyTimeoutSeconds?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +107,8 @@ export interface Goal {
   updatedAt: string;
   completedAt?: string;
   droppedReason?: string;
+  /** Retrospective written when the goal is completed. */
+  summary?: string;
 }
 
 export interface Task {
@@ -122,6 +145,11 @@ export interface Task {
   closeCount: number;
   reopenCount: number;
   maxAttemptsAllowed: number;
+
+  /** Agent whose claim the lease monitor released mid-task; the next claim resumes that work. */
+  interruptedFrom?: string;
+  /** Commits that carry this task's work (from `Moo-Task:` trailers). */
+  commits?: string[];
 
   // Dependencies (predecessors this task blocks on)
   dependsOnTaskIds?: string[];
@@ -207,6 +235,19 @@ export interface GoalStatusSummary {
   isFullyCovered: boolean;
   looseEnds: Task[];
   hasReachedCap: boolean;
+  quality: GoalQualityMetrics;
+}
+
+/** How the goal's work went, from completed tasks. Rates are 0..1, or null with nothing to measure. */
+export interface GoalQualityMetrics {
+  avgCycleMinutes: number | null;
+  totalAttempts: number;
+  reopens: number;
+  criteriaMetRate: number | null;
+  tasksWithDeviations: number;
+  verifyPassRate: number | null;
+  committedRate: number | null;
+  discoveredWork: number;
 }
 
 export interface SessionResumeSummary {
@@ -216,4 +257,17 @@ export interface SessionResumeSummary {
   settledDecisions: Decision[];
   activeGoals: Goal[];
   orphanTasks: Task[];
+  /** This agent's own in-progress task. */
+  currentTask?: Task;
+  /** In-progress tasks whose holder is gone (expired lease or dead process): a previous session's work. */
+  interruptedTasks: Task[];
+  /** The goal this session is most likely working on, with task progress. */
+  focusGoal?: Goal & { progress: { done: number; total: number } };
+  goalsReadyToClose: Goal[];
+  staleTasks: StaleTask[];
+}
+
+export interface StaleTask {
+  task: Task;
+  reason: string;
 }

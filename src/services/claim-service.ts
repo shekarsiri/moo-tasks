@@ -35,6 +35,8 @@ export interface ClaimTaskResult {
   autoEscalatedToHuman: boolean;
   relatedDecisions?: Decision[];
   previousFailureHistory?: TaskNote[];
+  /** Set when this claim took over a task whose previous holder had gone. */
+  resumedFrom?: string;
 }
 
 /** Resolves the repository root a task's git evidence should be read from. */
@@ -63,13 +65,12 @@ export class ClaimService {
     }
     // Git runs outside the write lock: it is slow and only describes the working tree.
     const gitCwd = this.resolveRepoRoot(preview);
-    const gitContext = GitContextService.getContext(gitCwd);
-    const gitBaseline = GitContextService.captureBaseline(gitCwd);
+    const { context: gitContext, baseline: gitBaseline } = GitContextService.snapshotForClaim(gitCwd);
 
     const leaseSeconds = options.leaseDurationSeconds || DEFAULT_LEASE_SECONDS;
     const maxConcurrent = options.maxConcurrentTasksPerAgent || 1;
 
-    const { task, autoEscalatedToHuman, conflictWarnings } = this.taskRepo.runExclusive(() => {
+    const { task, autoEscalatedToHuman, conflictWarnings, resumedFrom } = this.taskRepo.runExclusive(() => {
       const task = this.taskRepo.findById(taskId);
       if (!task) {
         throw new TaskNotFoundError(taskId);
@@ -110,10 +111,13 @@ export class ClaimService {
         throw new AgentConcurrencyLimitError(agentId, maxConcurrent);
       }
 
-      // 5. Attempts count fresh claims only; renewing your own claim is not a new attempt
+      // 5. Attempts count fresh claims only. Renewing your own claim is not a new attempt, and neither
+      //    is taking over work whose holder vanished mid-task (a restarted or compacted session).
       const isRenewal = task.status === 'doing' && task.claimedByAgent === agentId;
+      const isTakeover = (task.status === 'doing' && heldByOther) || Boolean(task.interruptedFrom);
+      const previousHolder = task.interruptedFrom || task.claimedByAgent;
       let autoEscalatedToHuman = false;
-      if (!isRenewal) {
+      if (!isRenewal && !isTakeover) {
         task.attemptCount += 1;
       }
       if (task.attemptCount > task.maxAttemptsAllowed) {
@@ -129,9 +133,11 @@ export class ClaimService {
         task.claimedSessionId = sessionId;
         task.claimedAt = now.toISOString();
         task.leaseExpiresAt = new Date(now.getTime() + leaseSeconds * 1000).toISOString();
-        if (!isRenewal || !task.claimGitBaseline) {
+        // A takeover keeps the original baseline so the earlier session's edits stay attributed to the task.
+        if ((!isRenewal && !isTakeover) || !task.claimGitBaseline) {
           task.claimGitBaseline = gitBaseline;
         }
+        task.interruptedFrom = undefined;
       }
       task.lastStateChangeAt = now.toISOString();
       task.updatedAt = now.toISOString();
@@ -156,7 +162,9 @@ export class ClaimService {
         noteType: 'general',
         content: autoEscalatedToHuman
           ? `Claim refused: attempt #${task.attemptCount} exceeds ${task.maxAttemptsAllowed}; escalated to human.`
-          : `Claimed task (Attempt #${task.attemptCount}, Lease: ${leaseSeconds}s). Session: ${sessionId}`,
+          : isTakeover
+            ? `Resumed interrupted task from ${previousHolder} (Attempt #${task.attemptCount} continues, Lease: ${leaseSeconds}s). Session: ${sessionId}`
+            : `Claimed task (Attempt #${task.attemptCount}, Lease: ${leaseSeconds}s). Session: ${sessionId}`,
         gitContext,
         createdAt: now.toISOString(),
       });
@@ -174,7 +182,7 @@ export class ClaimService {
         });
       }
 
-      return { task, autoEscalatedToHuman, conflictWarnings };
+      return { task, autoEscalatedToHuman, conflictWarnings, resumedFrom: isTakeover ? previousHolder : undefined };
     });
 
     // 7. Related accepted ADR decisions from the task's own workspace
@@ -193,6 +201,7 @@ export class ClaimService {
       conflictWarnings,
       attemptCount: task.attemptCount,
       autoEscalatedToHuman,
+      resumedFrom,
       relatedDecisions,
       previousFailureHistory: previousFailureHistory.length > 0 ? previousFailureHistory : undefined,
     };
@@ -366,6 +375,8 @@ export class ClaimService {
         const reason = isHolderProcessDead(expiredAgent) ? 'holder process exited' : 'lease expired';
         const now = new Date().toISOString();
         const nextStatus = returnToQueue(this.taskRepo, task);
+        // Kept with the git baseline, so whoever claims it next continues the work instead of restarting.
+        task.interruptedFrom = expiredAgent;
         task.updatedAt = now;
         task.lastStateChangeAt = now;
         this.taskRepo.update(task);

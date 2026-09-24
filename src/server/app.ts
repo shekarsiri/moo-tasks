@@ -300,8 +300,17 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
 
   app.put('/api/workspaces/:id', async (req, reply) => {
     const { id } = req.params as any;
-    const { name, rootPath, gitRemote } = req.body as any;
-    const ws = container.workspaceService.updateWorkspace(id, { name, rootPath, gitRemote });
+    const { name, rootPath, gitRemote, verifyCommand, verifyTimeoutSeconds } = req.body as any;
+    const ws = container.workspaceService.updateWorkspace(id, {
+      name,
+      rootPath,
+      gitRemote,
+      verifyCommand: typeof verifyCommand === 'string' ? verifyCommand : undefined,
+      verifyTimeoutSeconds:
+        verifyTimeoutSeconds === undefined || verifyTimeoutSeconds === null || verifyTimeoutSeconds === ''
+          ? undefined
+          : Math.max(0, Math.floor(Number(verifyTimeoutSeconds)) || 0),
+    });
     if (ws.id === container.activeWorkspace.id) {
       container.activeWorkspace = ws;
       container.projectPath = ws.rootPath;
@@ -313,8 +322,17 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
 
   app.patch('/api/workspaces/:id', async (req, reply) => {
     const { id } = req.params as any;
-    const { name, rootPath, gitRemote } = req.body as any;
-    const ws = container.workspaceService.updateWorkspace(id, { name, rootPath, gitRemote });
+    const { name, rootPath, gitRemote, verifyCommand, verifyTimeoutSeconds } = req.body as any;
+    const ws = container.workspaceService.updateWorkspace(id, {
+      name,
+      rootPath,
+      gitRemote,
+      verifyCommand: typeof verifyCommand === 'string' ? verifyCommand : undefined,
+      verifyTimeoutSeconds:
+        verifyTimeoutSeconds === undefined || verifyTimeoutSeconds === null || verifyTimeoutSeconds === ''
+          ? undefined
+          : Math.max(0, Math.floor(Number(verifyTimeoutSeconds)) || 0),
+    });
     if (ws.id === container.activeWorkspace.id) {
       container.activeWorkspace = ws;
       container.projectPath = ws.rootPath;
@@ -376,13 +394,14 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
 
   app.put('/api/goals/:id', async (req, reply) => {
     const { id } = req.params as any;
-    const { title, description, verbatimPrompt, maxOpenTasksCap, status } = req.body as any;
+    const { title, description, verbatimPrompt, maxOpenTasksCap, status, summary } = req.body as any;
     const goal = container.goalService.updateGoal(id, {
       title,
       description,
       verbatimPrompt,
       maxOpenTasksCap,
       status,
+      summary,
     });
     broadcast('goals_updated', { goal, action: 'updated' });
     return { success: true, goal };
@@ -733,6 +752,11 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   });
 
   // Resume & Export
+  app.get('/api/tasks/stale', async (req) => {
+    const stale = container.sessionService.findStaleTasks(wsOf(req).id, wsOf(req).rootPath);
+    return { success: true, stale: stale.map(({ task, reason }) => ({ id: task.id, reason })) };
+  });
+
   app.get('/api/resume', async (req, reply) => {
     const summary = container.sessionService.whereDidILeaveOff(wsOf(req).rootPath, undefined, wsOf(req).id);
     return { success: true, summary };

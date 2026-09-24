@@ -223,7 +223,13 @@ export class TaskLifecycleService {
 
   createBatch(dtos: CreateTaskDTO[], authorId: string = 'system', authorType: AuthorType = 'system'): CreateTaskResult[] {
     // All-or-nothing: hitting a goal cap halfway must not leave a partial batch behind.
-    return this.taskRepo.runExclusive(() => dtos.map((dto) => this.createTask(dto, authorId, authorType)));
+    const results = this.taskRepo.runExclusive(() => dtos.map((dto) => this.createTask(dto, authorId, authorType)));
+    // Tasks planned together are deliberately related; only flag overlap with pre-existing work.
+    const batchIds = new Set(results.map((r) => r.task.id));
+    for (const r of results) {
+      r.duplicateWarnings = r.duplicateWarnings.filter((d) => !batchIds.has(d.existingTask.id));
+    }
+    return results;
   }
 
   getTask(taskId: string): Task {

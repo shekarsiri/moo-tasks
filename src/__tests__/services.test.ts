@@ -970,6 +970,20 @@ Plan description details.
       expect(searchDecisions.results[0].type).toBe('decision');
     });
 
+    it('does not write ADR files for an in-memory database unless asked', () => {
+      const fs = require('fs');
+      const path = require('path');
+      const tempDir = path.join(process.cwd(), '.temp-test-adr-off-' + Date.now());
+      fs.mkdirSync(tempDir, { recursive: true });
+      try {
+        const c = createServiceContainer({ projectPath: tempDir, inMemory: true });
+        c.decisionService.recordDecision({ title: 'T', context: 'c', choice: 'x', rationale: 'r', projectPath: tempDir, authorId: 'a' });
+        expect(fs.existsSync(path.join(tempDir, 'docs', 'adr'))).toBe(false);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it('syncs architectural decisions to numbered markdown files in docs/adr/', () => {
       const fs = require('fs');
       const path = require('path');
@@ -977,7 +991,7 @@ Plan description details.
       fs.mkdirSync(tempDir, { recursive: true });
 
       try {
-        const syncContainer = createServiceContainer({ projectPath: tempDir, inMemory: true });
+        const syncContainer = createServiceContainer({ projectPath: tempDir, inMemory: true, adrSync: true });
         syncContainer.decisionService.recordDecision({
           title: 'Adopt Fastify for HTTP API Server',
           context: 'Need lightweight high-throughput HTTP server for local Web UI',

@@ -11,12 +11,16 @@ import { ServiceContainer } from '../services/index.js';
 import { CreateTaskDTO } from '../services/task-lifecycle-service.js';
 import { ClaimTaskResult } from '../services/claim-service.js';
 import { DependencyGraph } from '../domain/dependency.js';
-import { HumanOnlyActionError, InvalidArgumentsError, TaskNotFoundError } from '../domain/errors.js';
+import { HumanOnlyActionError, InvalidArgumentsError, TaskNotFoundError, VerificationFailedError } from '../domain/errors.js';
 import { formatAgentIdentity } from '../domain/lease.js';
-import { Decision, Task, TaskEvidence } from '../domain/types.js';
+import { Decision, Task, TaskEvidence, TaskNote, VerificationRun } from '../domain/types.js';
+import { runVerifyCommand } from '../services/verify-runner.js';
+import { DuplicateMatch } from '../domain/similarity.js';
+import { deviationsOf } from '../domain/criteria.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
 import { withoutOthersClaimedFiles } from '../services/task-state.js';
 import { VERSION } from '../version.js';
+import { ADHOC_GOAL_TITLE } from '../services/goal-service.js';
 import { TOOL_DEFS, ToolDef } from './tool-defs.js';
 import { LEGACY_TOOL_DEFS } from './tool-defs-legacy.js';
 
@@ -67,6 +71,14 @@ const RECOVERY: Record<string, { action: string; nextTool?: string }> = {
     action: 'Complete or release your current task first. Parallel sub-agents must each pass their own agentId.',
     nextTool: 'moo_complete_task',
   },
+  CRITERIA_UNADDRESSED: {
+    action: 'Resend with criteria: one {met, note} per acceptance item. Unmet items are allowed with a note and recorded as deviations.',
+    nextTool: 'moo_complete_task',
+  },
+  VERIFY_FAILED: {
+    action: 'Fix the failures and complete again. If they are unrelated to this task, pass verifyOverride with the reason (recorded as a deviation).',
+    nextTool: 'moo_complete_task',
+  },
   MISSING_EVIDENCE: { action: 'Pass evidence.testProof or evidence.outputSnippet with real command output.', nextTool: 'moo_complete_task' },
   SUBTASK_NESTING_LIMIT: { action: 'Only one level of subtasks is allowed; create it under the goal instead.', nextTool: 'moo_create_task' },
   DEPENDENCY_CYCLE: { action: 'Remove one of the dependency links forming the cycle.', nextTool: 'moo_update_task' },
@@ -85,10 +97,19 @@ const RECOVERY: Record<string, { action: string; nextTool?: string }> = {
   INVALID_ARGUMENTS: { action: 'Retry with the missing or corrected arguments.' },
 };
 
+const nonEmpty = <T>(items: T[]): T[] | undefined => (items.length ? items : undefined);
+
 const arr = (value: unknown): string[] | undefined => {
   if (value === undefined || value === null || value === '') return undefined;
   return (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
 };
+
+/*
+ * Response shapes. Every byte returned lands in the agent's context, so tools return compact
+ * views: no git baselines, session ids, zero counters or bookkeeping timestamps.
+ */
+const clip = (text: string | undefined, max: number) =>
+  text && text.length > max ? `${text.slice(0, max)}… (${text.length - max} more chars)` : text;
 
 const taskSummary = (t: Task) => ({
   id: t.id,
@@ -98,7 +119,7 @@ const taskSummary = (t: Task) => ({
   type: t.type,
   goalId: t.goalId,
   parentId: t.parentId,
-  tags: t.tags,
+  tags: t.tags?.length ? t.tags : undefined,
   claimedByAgent: t.claimedByAgent,
   leaseExpiresAt: t.leaseExpiresAt,
   declaredFiles: t.declaredFiles?.length ? t.declaredFiles : undefined,
@@ -106,7 +127,51 @@ const taskSummary = (t: Task) => ({
   isDeferred: t.isDeferred || undefined,
 });
 
-const decisionSummary = (d: Decision) => ({ id: d.id, title: d.title, choice: d.choice, tags: d.tags });
+/** Everything an agent needs to work on a task. */
+const taskView = (t: Task) => {
+  const { gitContext, ...evidence } = t.evidence || {};
+  return {
+    ...taskSummary(t),
+    description: t.description,
+    acceptanceCriteria: t.acceptanceCriteria,
+    attemptCount: t.attemptCount > 1 ? t.attemptCount : undefined,
+    verificationState: t.verificationState !== 'unverified' ? t.verificationState : undefined,
+    evidence: t.evidence
+      ? {
+          ...evidence,
+          diffSummary: gitContext?.diffSummary,
+          verification: evidence.verification && { ...evidence.verification, outputTail: clip(evidence.verification.outputTail, 600) },
+        }
+      : undefined,
+    rejectionReason: t.rejectionReason,
+    blockedReason: t.blockedReason,
+    humanQuestion: t.humanQuestion,
+    humanOptions: t.humanOptions?.length ? t.humanOptions : undefined,
+    humanAnswer: t.humanAnswer,
+    discoveredFromTaskId: t.discoveredFromTaskId,
+    droppedReason: t.droppedReason,
+    commits: t.commits?.length ? t.commits.map((c) => c.slice(0, 9)) : undefined,
+  };
+};
+
+const noteView = (n: TaskNote) => ({ createdAt: n.createdAt, by: n.authorId, type: n.noteType, content: clip(n.content, 1000) });
+
+const duplicateView = (matches: DuplicateMatch[]) =>
+  matches.length
+    ? matches.slice(0, 3).map((d) => ({ id: d.existingTask.id, title: d.existingTask.title, status: d.existingTask.status, score: d.similarityScore }))
+    : undefined;
+
+const deviationView = (t: Task) => {
+  const unmet = deviationsOf(t.evidence?.criteria).map((d) => ({ item: d.item, note: d.note }));
+  const run = t.evidence?.verification;
+  if (run && !run.passed) unmet.push({ item: `verify: ${run.command}`, note: run.overrideReason });
+  return unmet.length ? unmet : undefined;
+};
+
+const verificationView = (run: VerificationRun | undefined) =>
+  run && { command: run.command, passed: run.passed, exitCode: run.exitCode, seconds: Math.round(run.durationMs / 100) / 10 };
+
+const decisionSummary = (d: Decision) => ({ id: d.id, title: d.title, choice: d.choice, tags: d.tags?.length ? d.tags : undefined });
 
 export function setupMcpServer(container: ServiceContainer, options: McpServerOptions = {}): Server {
   const server = new Server(
@@ -153,7 +218,8 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     workspaceId: t.workspaceId || wsId,
   });
 
-  const claimResponse = (res: ClaimTaskResult) => {
+  /** brief: the caller just wrote the spec (quick_start / create+claim), so do not echo it back. */
+  const claimResponse = (res: ClaimTaskResult, brief = false) => {
     if (res.autoEscalatedToHuman) {
       return {
         success: false,
@@ -164,11 +230,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     }
     return {
       success: true,
-      task: res.task,
+      task: brief ? taskSummary(res.task) : taskView(res.task),
       conflictWarnings: res.conflictWarnings.length ? res.conflictWarnings : undefined,
       relatedDecisions: res.relatedDecisions?.length ? res.relatedDecisions.map(decisionSummary) : undefined,
       previousFailureHistory: res.previousFailureHistory?.map((n) => ({ createdAt: n.createdAt, content: n.content })),
-      hint: `Claimed until ${res.task.leaseExpiresAt} (renewed on each call with this taskId). Finish with moo_complete_task.`,
+      resumedFrom: res.resumedFrom,
+      resumeNotes: res.resumedFrom ? nonEmpty(container.sessionService.recentNotesFor(res.task.id, 5).map(noteView)) : undefined,
+      hint: `${res.resumedFrom ? `Resumed interrupted work from ${res.resumedFrom}; its git baseline is kept. ` : ''}Claimed until ${res.task.leaseExpiresAt} (renewed on each call with this taskId). Finish with moo_complete_task.`,
     };
   };
 
@@ -180,10 +248,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       return {
         success: true,
         createdCount: results.length,
-        tasks: results.map((r) => ({
-          ...taskSummary(r.task),
-          possibleDuplicates: r.duplicateWarnings.length ? r.duplicateWarnings : undefined,
-        })),
+        tasks: results.map((r) => ({ id: r.task.id, title: r.task.title, status: r.task.status, goalId: r.task.goalId, possibleDuplicates: duplicateView(r.duplicateWarnings) })),
         hint: 'Call moo_get_next_task(claim: true) to start on the highest-priority ready task.',
       };
     }
@@ -197,20 +262,20 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         leaseDurationSeconds: leaseSeconds(a),
       });
       return {
-        ...claimResponse(claimed),
-        possibleDuplicates: created.duplicateWarnings.length ? created.duplicateWarnings : undefined,
+        ...claimResponse(claimed, true),
+        possibleDuplicates: duplicateView(created.duplicateWarnings),
       };
     }
     return {
       success: true,
       task: taskSummary(created.task),
-      possibleDuplicates: created.duplicateWarnings.length ? created.duplicateWarnings : undefined,
+      possibleDuplicates: duplicateView(created.duplicateWarnings),
       hint: `Created ${created.task.id}. Claim it with moo_claim_task before editing code.`,
     };
   };
 
   const updateGoal = (a: Args, agent: string) => {
-    const { goalId, status, reason, reopenTasks, title, description, verbatimPrompt, maxOpenTasksCap } = a;
+    const { goalId, status, reason, reopenTasks, title, description, verbatimPrompt, maxOpenTasksCap, summary } = a;
     const current = container.goalService.getGoal(goalId);
     let droppedTaskCount: number | undefined;
     if (status === 'dropped' && current.status !== 'dropped') {
@@ -224,45 +289,84 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       verbatimPrompt,
       maxOpenTasksCap,
       status: status === 'completed' ? status : undefined,
+      summary,
     });
-    return { success: true, goal, droppedTaskCount };
+    return {
+      success: true,
+      goal: { id: goal.id, title: goal.title, status: goal.status, maxOpenTasksCap: goal.maxOpenTasksCap },
+      droppedTaskCount,
+      summary: status === 'completed' ? goal.summary : undefined,
+    };
   };
 
-  const completeTask = (a: Args, agent: string) => {
+  /**
+   * Runs the workspace verify command, when a human configured one. A failing run refuses the
+   * completion unless the agent explains why the failure is unrelated (verifyOverride).
+   */
+  const verify = async (a: Args): Promise<VerificationRun | undefined> => {
+    const ws = wsId ? container.workspaceService.getWorkspaceById(wsId) : undefined;
+    if (!ws?.verifyCommand) return undefined;
+    const run = await runVerifyCommand(ws.verifyCommand, ws.rootPath || container.projectPath, ws.verifyTimeoutSeconds);
+    if (!run.passed) {
+      const reason = typeof a.verifyOverride === 'string' ? a.verifyOverride.trim() : '';
+      if (!reason) throw new VerificationFailedError(run.command, run.exitCode, run.outputTail);
+      run.overrideReason = reason;
+    }
+    return run;
+  };
+
+  /** After the last open task of a real goal: prompt the agent to close it with a retrospective. */
+  const goalDoneHint = (task: Task): string | undefined => {
+    if (!task.goalId) return undefined;
+    const goal = container.goalService.getGoal(task.goalId);
+    if (goal.status !== 'active' || goal.title === ADHOC_GOAL_TITLE) return undefined;
+    if (container.goalService.getGoalStatus(goal.id).openTasks > 0) return undefined;
+    return `Done. That was the last open task of goal ${goal.id} ("${goal.title}"): confirm with the user, then moo_update_goal(goalId: '${goal.id}', status: 'completed', summary: '<what shipped and what did not>').`;
+  };
+
+  const completeTask = async (a: Args, agent: string) => {
     const evidence: TaskEvidence = { ...(a.evidence || {}) };
-    delete (evidence as any).gitContext;
+    const criteria = Array.isArray(a.criteria) ? a.criteria : Array.isArray(a.evidence?.criteria) ? a.evidence.criteria : undefined;
+    container.verificationService.precheckCompletion(a.taskId, agent, criteria);
+    const verification = await verify(a);
     if (a.autoClaimNext) {
       const res = container.verificationService.completeAndClaimNext(a.taskId, agent, sessionId, evidence, {
+        criteria,
+        verification,
         notes: a.notes,
         nextClaimOptions: { declaredFiles: arr(a.nextDeclaredFiles), leaseDurationSeconds: a.nextLeaseSeconds },
       });
       return {
         success: true,
         completedTask: taskSummary(res.completedTask),
+        deviations: deviationView(res.completedTask),
+        verification: verificationView(verification),
         filesModified: res.completedTask.evidence?.filesModified,
-        nextTask: res.claimResult && !res.claimResult.autoEscalatedToHuman ? res.claimResult.task : null,
+        nextTask: res.claimResult && !res.claimResult.autoEscalatedToHuman ? taskView(res.claimResult.task) : null,
         relatedDecisions: res.claimResult?.relatedDecisions?.length
           ? res.claimResult.relatedDecisions.map(decisionSummary)
           : undefined,
-        hint: res.hint,
+        hint: goalDoneHint(res.completedTask) || res.hint,
       };
     }
-    const task = container.verificationService.completeTask(a.taskId, agent, evidence, a.notes);
+    const task = container.verificationService.completeTask(a.taskId, agent, evidence, a.notes, { criteria, verification });
     return {
       success: true,
       task: { ...taskSummary(task), verificationState: task.verificationState },
+      deviations: deviationView(task),
+      verification: verificationView(verification),
       filesModified: task.evidence?.filesModified,
       diffSummary: task.evidence?.gitContext?.diffSummary,
-      hint: 'Done. moo_get_next_task(claim: true) picks up the next ready task.',
+      hint: goalDoneHint(task) || 'Done. moo_get_next_task(claim: true) picks up the next ready task.',
     };
   };
 
-  const logWork = (a: Args, agent: string) => {
+  const logWork = async (a: Args, agent: string) => {
     const evidence: TaskEvidence = { ...(a.evidence || {}) };
     delete (evidence as any).gitContext;
     // The work is already done, so there is no claim-time baseline: accept uncommitted changes as proof.
     if (!evidence.testProof?.trim() && !evidence.outputSnippet?.trim()) {
-      const ctx = GitContextService.getContext(container.projectPath);
+      const ctx = GitContextService.getContext(container.projectPath, { details: false });
       const dirty = withoutOthersClaimedFiles(container.taskRepo, ctx.modifiedFiles || [], { id: '', workspaceId: wsId, declaredFiles: [] });
       const claimed = arr(evidence.filesModified);
       const touched = claimed ? dirty.filter((f) => claimed.some((c) => f === c || f.endsWith('/' + c))) : dirty;
@@ -271,6 +375,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         evidence.outputSnippet = `Uncommitted changes: ${touched.join(', ')}`;
       }
     }
+    const verification = await verify(a);
     const created = container.taskLifecycleService.createTask(
       {
         title: a.title,
@@ -286,8 +391,17 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     );
     try {
       container.claimService.claimTask(created.task.id, agent, sessionId, { maxConcurrentTasksPerAgent: 2 });
-      const task = container.verificationService.completeTask(created.task.id, agent, evidence);
-      return { success: true, task: taskSummary(task), filesModified: task.evidence?.filesModified };
+      const task = container.verificationService.completeTask(created.task.id, agent, evidence, undefined, {
+        criteria: a.criteria,
+        verification,
+      });
+      return {
+        success: true,
+        task: taskSummary(task),
+        filesModified: task.evidence?.filesModified,
+        deviations: deviationView(task),
+        verification: verificationView(verification),
+      };
     } catch (err) {
       // Do not leave an empty task behind when the claim or the evidence is rejected.
       container.taskLifecycleService.dropTask(created.task.id, `moo_log_work rejected: ${(err as Error)?.message || 'error'}`, agent, 'agent');
@@ -322,6 +436,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         success: true,
         agentId: agent,
         webUi: options.webUiUrl,
+        currentTask: s.currentTask && { ...taskView(s.currentTask), recentNotes: nonEmpty(container.sessionService.recentNotesFor(s.currentTask.id).map(noteView)) },
+        interrupted: nonEmpty(
+          s.interruptedTasks.map((t) => ({ ...taskSummary(t), recentNotes: nonEmpty(container.sessionService.recentNotesFor(t.id).map(noteView)) }))
+        ),
+        focusGoal: s.focusGoal && { id: s.focusGoal.id, title: s.focusGoal.title, progress: s.focusGoal.progress },
+        goalsReadyToClose: nonEmpty(s.goalsReadyToClose.map((g) => ({ id: g.id, title: g.title }))),
+        stale: nonEmpty(s.staleTasks.map(({ task, reason }) => ({ id: task.id, title: task.title, reason }))),
         inProgress: s.abandonedDoingTasks.map(taskSummary),
         waitingOnHuman: s.waitingOnHumanTasks.map(taskSummary),
         ready: s.unblockedReadyTasks.map(taskSummary),
@@ -358,12 +479,12 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     const oldId = a.supersedesDecisionId ?? a.oldDecisionId;
     if (oldId) {
       const res = container.decisionService.supersedeDecision(oldId, dto, a.supersedeReason ?? a.reason);
-      return { success: true, decision: res.newDecision, superseded: decisionSummary(res.oldDecision) };
+      return { success: true, decision: decisionSummary(res.newDecision), superseded: res.oldDecision.id };
     }
-    return { success: true, decision: container.decisionService.recordDecision(dto) };
+    return { success: true, decision: decisionSummary(container.decisionService.recordDecision(dto)) };
   };
 
-  const handlers: Record<string, (a: Args, agent: string) => unknown> = {
+  const handlers: Record<string, (a: Args, agent: string) => unknown | Promise<unknown>> = {
     // Goals
     moo_create_goal: (a) => {
       const goal = container.goalService.createGoal(
@@ -383,13 +504,15 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     moo_get_goal: (a) => {
       const summary = container.goalService.getGoalStatus(a.goalId);
       const { looseEnds, goal, ...metrics } = summary;
+      const { workspaceId, projectPath, createdAt, updatedAt, ...spec } = goal;
       return {
         success: true,
-        goal,
+        goal: spec,
         metrics,
-        looseEnds: looseEnds.map(taskSummary),
+        // With includeTasks the full list below already covers the open tasks.
+        looseEnds: a.includeTasks === true ? undefined : looseEnds.map((t) => ({ id: t.id, title: t.title, status: t.status })),
         tasks:
-          a.includeTasks !== false
+          a.includeTasks === true
             ? container.taskRepo.listByGoalId(a.goalId).filter((t) => !t.isArchived).map(taskSummary)
             : undefined,
       };
@@ -422,14 +545,18 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       const task = container.taskLifecycleService.getTask(a.taskId);
       return {
         success: true,
-        task,
-        dependencies: container.taskRepo.getDependencies(a.taskId),
-        dependents: container.taskRepo.getDependents(a.taskId),
-        subtasks: container.taskRepo.listSubtasks(a.taskId).map(taskSummary),
-        notes: a.includeNotes === false ? undefined : container.noteRepo.listByTaskId(a.taskId).slice(-20),
+        task: taskView(task),
+        dependencies: nonEmpty(container.taskRepo.getDependencies(a.taskId)),
+        dependents: nonEmpty(container.taskRepo.getDependents(a.taskId)),
+        subtasks: nonEmpty(container.taskRepo.listSubtasks(a.taskId).map(taskSummary)),
+        notes: a.includeNotes === false ? undefined : container.noteRepo.listByTaskId(a.taskId).slice(-20).map(noteView),
       };
     },
     moo_list_tasks: (a) => {
+      if (a.stale) {
+        const stale = container.sessionService.findStaleTasks(wsId, container.projectPath);
+        return { success: true, total: stale.length, tasks: stale.map(({ task, reason }) => ({ ...taskSummary(task), staleReason: reason })) };
+      }
       const tasks = container.taskRepo.list({
         workspaceId: a.workspaceId || wsId,
         goalId: a.goalId,
@@ -451,7 +578,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         return claimResponse(container.claimService.claimTask(next.id, agent, sessionId, { declaredFiles: arr(a.declaredFiles) }));
       }
       if (next) {
-        return { success: true, nextTask: next, hint: `Claim it with moo_claim_task(taskId: '${next.id}').` };
+        return { success: true, nextTask: taskView(next), hint: `Claim it with moo_claim_task(taskId: '${next.id}').` };
       }
       const all = container.taskRepo.list({ workspaceId: wsId, goalId: a.goalId, isArchived: false });
       const count = (status: string) => all.filter((t) => t.status === status).length;
@@ -478,12 +605,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       ),
     moo_checkpoint: (a, agent) => {
       const renewed = container.claimService.renewIfHolder(a.taskId, agent);
+      const noteType = a.noteType || 'attempt_log';
       const note = container.noteRepo.create({
         id: `note-${Math.random().toString(36).slice(2, 9)}`,
         taskId: container.taskLifecycleService.getTask(a.taskId).id,
         authorType: 'agent',
         authorId: agent,
-        noteType: 'attempt_log',
+        noteType,
         content: a.note,
         createdAt: new Date().toISOString(),
       });
@@ -494,13 +622,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         noteId: note.id,
         leaseRenewed: renewed,
         leaseExpiresAt: task?.leaseExpiresAt,
-        hint: renewed ? 'Checkpoint saved; lease renewed.' : 'Note saved, but you do not hold this task, so no lease was renewed.',
+        hint: renewed ? 'Note saved; lease renewed.' : undefined,
       };
     },
-    moo_release_task: (a, agent) => ({
-      success: true,
-      task: taskSummary(container.claimService.releaseTask(a.taskId, agent, a.notes)),
-    }),
+    moo_release_task: (a, agent) =>
+      a.toAgentId
+        ? handlers.moo_handoff_task({ ...a, handoffSummary: a.handoffSummary || a.notes || 'Handed off' }, agent)
+        : { success: true, task: taskSummary(container.claimService.releaseTask(a.taskId, agent, a.notes)) },
     moo_handoff_task: (a, agent) => ({
       success: true,
       task: taskSummary(
@@ -539,9 +667,10 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         hint: 'The task now waits on the user; it appears in their inbox on the web board.',
       };
     },
+    // ---- Hidden aliases folded into listed tools ----
     moo_add_task_note: (a, agent) => ({
       success: true,
-      note: container.noteRepo.create({
+      noteId: container.noteRepo.create({
         id: `note-${Math.random().toString(36).slice(2, 9)}`,
         taskId: container.taskLifecycleService.getTask(a.taskId).id,
         authorType: 'agent',
@@ -549,7 +678,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         noteType: a.noteType || 'general',
         content: a.content,
         createdAt: new Date().toISOString(),
-      }),
+      }).id,
     }),
     moo_capture_discovered_work: (a, agent) => {
       const res = container.discoveredWorkService.captureWork({
@@ -565,7 +694,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     moo_record_decision: recordDecision,
     moo_list_decisions: (a) => {
       const decisions = container.decisionService.listDecisions(undefined, a.status, a.tag, a.workspaceId || wsId);
-      return { success: true, total: decisions.length, decisions };
+      return {
+        success: true,
+        total: decisions.length,
+        decisions: a.verbose
+          ? decisions.map(({ workspaceId, projectPath, authorType, updatedAt, ...d }) => d)
+          : decisions.map((d) => ({ ...decisionSummary(d), status: d.status, rationale: clip(d.rationale, 200) })),
+      };
     },
 
     // Context
@@ -605,7 +740,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     },
     moo_heartbeat_task: (a, agent) => ({
       success: true,
-      task: container.claimService.heartbeatTask(a.taskId, agent, a.extensionSeconds),
+      task: taskSummary(container.claimService.heartbeatTask(a.taskId, agent, a.extensionSeconds)),
     }),
     moo_complete_and_claim_next: (a, agent) => completeTask({ ...a, autoClaimNext: true }, agent),
     moo_get_human_inbox: (a) => {
@@ -694,6 +829,12 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     }
   };
 
+  const argumentsHint = (name: string) => {
+    const schema = toolDefs.get(name)?.inputSchema;
+    if (!schema) return undefined;
+    return { required: schema.required, accepted: Object.keys(schema.properties) };
+  };
+
   const validate = (name: string, a: Args) => {
     const def = toolDefs.get(name);
     const required = (def?.inputSchema.required || []).filter((field) => !IMPLICIT_FIELDS.has(field));
@@ -726,7 +867,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         container.claimService.renewIfHolder(args.taskId, agent);
       }
 
-      const result = handler(args, agent);
+      const result = await handler(args, agent);
       return { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] };
     } catch (err: any) {
       const code = err?.code || (err?.name === 'ZodError' ? 'INVALID_ARGUMENTS' : 'TOOL_ERROR');
@@ -737,7 +878,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
         code,
         recoveryAction: recovery?.action || 'Check the arguments against the tool schema and retry.',
         nextTool: recovery?.nextTool,
-        expectedArguments: code === 'INVALID_ARGUMENTS' ? toolDefs.get(name)?.inputSchema : undefined,
+        expectedArguments: code === 'INVALID_ARGUMENTS' ? argumentsHint(name) : undefined,
       };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: true };
     }

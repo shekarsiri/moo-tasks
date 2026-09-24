@@ -7,6 +7,8 @@ export interface DatabaseConfig {
   dbPath?: string;
   projectPath?: string;
   inMemory?: boolean;
+  /** Write decisions to docs/adr/ in the project. Default: on, except for in-memory databases. */
+  adrSync?: boolean;
 }
 
 export class DatabaseManager {

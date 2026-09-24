@@ -24,15 +24,17 @@ You are connected to the **Moo Tasks** MCP server. Every code change you make is
 3. Work through them with \`moo_get_next_task(claim: true)\`.
 
 ## While working
-- Long task: \`moo_checkpoint(taskId, note)\` logs progress and renews your 30-minute lease.
-- Found other work: \`moo_capture_discovered_work\`. Need the user: \`moo_ask_human\`. An attempt failed: \`moo_log_attempt_failure\`.
+- \`moo_checkpoint(taskId, note)\` at milestones and before you stop: what is done, what is next, open questions. The next session resumes from these notes.
+- Found other work: \`moo_capture_discovered_work(currentTaskId, title)\`; add \`alreadyFixed: true\` for a fix you made along the way. Need the user: \`moo_ask_human\`. An attempt failed: \`moo_log_attempt_failure\`.
 - Chose a library, pattern or trade-off: \`moo_record_decision(title, context, choice, rationale)\`.
 
 ## Finishing
-- \`moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun })\`. Files changed since the claim are captured from git automatically.
-- Parallel sub-agents each pass their own \`agentId\`.
+- \`moo_complete_task(taskId, evidence: { testProof or outputSnippet, commandsRun }, criteria: [{ met, note }])\`: one answer per \`- [ ]\` acceptance item, in order. An unmet item is allowed with a note saying why; it is recorded as a deviation, so never mark it met.
+- If the workspace has a verify command, Moo runs it before accepting. Fix failures; pass \`verifyOverride\` only when a failure is unrelated to your task.
+- Files changed since the claim are captured from git automatically. Parallel sub-agents each pass their own \`agentId\`.
+- After a goal's last task, confirm with the user and close it: \`moo_update_goal(goalId, status: 'completed', summary)\`.
 
-At session start call \`moo_session_resume\`. The board runs at http://localhost:4242.
+At session start call \`moo_session_resume\`; resume any **interrupted work** it lists with \`moo_claim_task\`. The board runs at http://localhost:4242.
 `;
 
 const CLAUDE_MD_BLOCK = `Moo Tasks orchestration rules live in AGENTS.md:

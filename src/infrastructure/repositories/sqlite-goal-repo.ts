@@ -19,6 +19,7 @@ export class SqliteGoalRepository implements IGoalRepository {
       updatedAt: row.updated_at,
       completedAt: row.completed_at || undefined,
       droppedReason: row.dropped_reason || undefined,
+      summary: row.summary || undefined,
     };
   }
 
@@ -87,7 +88,8 @@ export class SqliteGoalRepository implements IGoalRepository {
         max_open_tasks_cap = ?,
         updated_at = ?,
         completed_at = ?,
-        dropped_reason = ?
+        dropped_reason = ?,
+        summary = ?
       WHERE id = ?
     `);
 
@@ -101,6 +103,7 @@ export class SqliteGoalRepository implements IGoalRepository {
       goal.updatedAt,
       goal.completedAt || null,
       goal.droppedReason || null,
+      goal.summary || null,
       goal.id
     );
 

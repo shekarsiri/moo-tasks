@@ -1,6 +1,8 @@
 import crypto from 'crypto';
-import { AuthorType, Task, TaskEvidence } from '../domain/types.js';
+import { AuthorType, Task, TaskEvidence, VerificationRun } from '../domain/types.js';
+import { CriterionInput, deviationsOf, parseChecklist, resolveCriteria, tickChecklist } from '../domain/criteria.js';
 import {
+  CriteriaUnaddressedError,
   InvalidTaskStateError,
   MandatoryReasonMissingError,
   NotTaskHolderError,
@@ -17,6 +19,13 @@ import {
 import { ClaimService, ClaimTaskOptions, ClaimTaskResult, RepoRootResolver } from './claim-service.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
 import { reblockDependents, resolveDependents, returnToQueue, withoutOthersClaimedFiles } from './task-state.js';
+
+export interface CompleteTaskOptions {
+  /** Answers to the acceptance-criteria checklist. */
+  criteria?: CriterionInput[];
+  /** Verify-command result produced by Moo's own runner. */
+  verification?: VerificationRun;
+}
 
 export interface CompleteAndClaimNextResult {
   completedTask: Task;
@@ -35,12 +44,35 @@ export class VerificationService {
     private resolveRepoRoot: RepoRootResolver = () => undefined
   ) {}
 
+  /**
+   * The cheap refusals of completeTask (holder, state, criteria), checked before a slow verify run so
+   * a test suite is never run for a completion that would be refused anyway.
+   */
+  precheckCompletion(taskId: string, agentId: string, criteria?: CriterionInput[]): Task {
+    const task = this.taskRepo.findById(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (task.status !== 'doing') throw new InvalidTaskStateError(taskId, 'complete', task.status, ['doing']);
+    if (task.claimedByAgent !== agentId) throw new NotTaskHolderError(taskId, 'complete', agentId, task.claimedByAgent);
+    const checklist = parseChecklist(task.acceptanceCriteria);
+    if (checklist.length > 0) {
+      const resolved = resolveCriteria(checklist, criteria);
+      if (resolved.unanswered.length > 0 || resolved.unexplained.length > 0) {
+        throw new CriteriaUnaddressedError(taskId, resolved.unanswered, resolved.unexplained);
+      }
+    }
+    return task;
+  }
+
   completeTask(
     taskId: string,
     agentId: string,
     evidence: TaskEvidence,
-    notes?: string
+    notes?: string,
+    options: CompleteTaskOptions = {}
   ): Task {
+    // Git context, criteria results and verification runs are produced here, never taken from the caller.
+    const { gitContext: _git, criteria: _criteria, verification: _verification, ...claimed } = evidence || {};
+    evidence = claimed;
     const preview = this.taskRepo.findById(taskId);
     if (!preview) {
       throw new TaskNotFoundError(taskId);
@@ -65,8 +97,20 @@ export class VerificationService {
         throw new NotTaskHolderError(taskId, 'complete', agentId, task.claimedByAgent);
       }
 
-      // 2. Evidence: real output, or code changes git can attribute to this claim
-      const finalEvidence: TaskEvidence = { ...evidence, gitContext };
+      // 2. Every acceptance-criteria item is answered; unmet ones need a reason and stay open
+      const checklist = parseChecklist(task.acceptanceCriteria);
+      let criteriaResults;
+      if (checklist.length > 0) {
+        const resolved = resolveCriteria(checklist, options.criteria);
+        if (resolved.unanswered.length > 0 || resolved.unexplained.length > 0) {
+          throw new CriteriaUnaddressedError(taskId, resolved.unanswered, resolved.unexplained);
+        }
+        criteriaResults = resolved.results;
+        task.acceptanceCriteria = tickChecklist(task.acceptanceCriteria, criteriaResults);
+      }
+
+      // 3. Evidence: real output, or code changes git can attribute to this claim
+      const finalEvidence: TaskEvidence = { ...evidence, gitContext, criteria: criteriaResults, verification: options.verification };
       const ownChanges = changes ? withoutOthersClaimedFiles(this.taskRepo, changes.files, task) : [];
       if (ownChanges.length > 0) {
         if (!finalEvidence.filesModified || finalEvidence.filesModified.length === 0) {
@@ -86,7 +130,7 @@ export class VerificationService {
         throw new MissingEvidenceError(taskId);
       }
 
-      // 3. Cannot close parent if subtasks are open
+      // 4. Cannot close parent if subtasks are open
       const openSubtasks = this.taskRepo
         .listSubtasks(taskId)
         .filter((s) => ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'].includes(s.status));
@@ -110,6 +154,14 @@ export class VerificationService {
       let gitInfo = '';
       if (gitContext.commitHash) {
         gitInfo = `\nGit: ${gitContext.commitHash}${gitContext.commitSubject ? ` - "${gitContext.commitSubject}"` : ''}${gitContext.branch ? ` on [${gitContext.branch}]` : ''}${gitContext.isDirty ? ' [dirty]' : ''}`;
+      }
+      const deviations = deviationsOf(criteriaResults);
+      if (deviations.length > 0) {
+        gitInfo += `\nDeviations: ${deviations.map((d) => `${d.item} (${d.note})`).join('; ')}`;
+      }
+      if (options.verification) {
+        const v = options.verification;
+        gitInfo += `\nVerify: \`${v.command}\` ${v.passed ? 'passed' : `FAILED (exit ${v.exitCode ?? 'timeout'}), overridden: ${v.overrideReason}`}`;
       }
       if (ownChanges.length > 0) {
         gitInfo += `\nChanges since claim: ${ownChanges.length === changes!.files.length && changes!.diffSummary ? changes!.diffSummary : ownChanges.join(', ')}`;
@@ -149,12 +201,12 @@ export class VerificationService {
     agentId: string,
     sessionId: string,
     evidence: TaskEvidence,
-    options: {
+    options: CompleteTaskOptions & {
       nextClaimOptions?: ClaimTaskOptions;
       notes?: string;
     } = {}
   ): CompleteAndClaimNextResult {
-    const completedTask = this.completeTask(taskId, agentId, evidence, options.notes);
+    const completedTask = this.completeTask(taskId, agentId, evidence, options.notes, options);
 
     if (!this.taskLifecycleService || !this.claimService) {
       return {

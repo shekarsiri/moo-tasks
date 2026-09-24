@@ -1,3 +1,4 @@
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
@@ -8,14 +9,51 @@ import { DatabaseMigrator } from '../../infrastructure/db/migrations.js';
 import { SqliteWorkspaceRepository } from '../../infrastructure/repositories/sqlite-workspace-repo.js';
 import { SqliteTaskRepository } from '../../infrastructure/repositories/sqlite-task-repo.js';
 import { createServiceContainer } from '../../services/index.js';
+import { SqliteNoteRepository } from '../../infrastructure/repositories/sqlite-note-repo.js';
+import { GitContextService } from '../../infrastructure/git/git-context.js';
+import { withoutOthersClaimedFiles } from '../../services/task-state.js';
+import { prepareCommitMsg, recordCommit } from './git-hooks.js';
+
+/** Minutes a claimed task may accumulate changes without a note before the Stop hook asks for one. */
+export const CHECKPOINT_MINUTES = Number(process.env.MOO_CHECKPOINT_MINUTES) || 15;
+
+/** Matches no real agent: lets resume show interrupted work without guessing whose task is "mine". */
+const UNKNOWN_SESSION_AGENT = 'session-start-hook';
+
+/**
+ * Stop hook policy: ask for a checkpoint once when this session's task has changes git can see and
+ * nothing was written down for CHECKPOINT_MINUTES. Returns the reason to block with, or null.
+ */
+export function checkpointNudge(
+  task: Task,
+  lastNoteAt: string | undefined,
+  changedFiles: string[],
+  now: Date = new Date(),
+  minutes: number = CHECKPOINT_MINUTES
+): string | null {
+  if (changedFiles.length === 0) return null;
+  const last = [lastNoteAt, task.claimedAt].filter(Boolean).map((t) => new Date(t!).getTime());
+  const since = last.length ? Math.max(...last) : 0;
+  if (now.getTime() - since < minutes * 60_000) return null;
+  const files = changedFiles.slice(0, 5).join(', ') + (changedFiles.length > 5 ? `, +${changedFiles.length - 5} more` : '');
+  return [
+    `Moo Tasks: task ${task.id} ("${task.title}") has uncommitted progress (${files}) and no note in ${minutes}+ minutes.`,
+    `Before stopping, call moo_checkpoint(taskId: '${task.id}', note: what is done, what is next, open questions) —`,
+    `or moo_complete_task if it is finished — so the next session can pick up from here.`,
+  ].join(' ');
+}
 
 /** Tools that change files; the pre/post edit hooks are installed with this matcher. */
 export const EDIT_TOOL_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit';
 
-export type HookEvent = 'session-start' | 'pre-edit' | 'post-edit';
+export type HookEvent = 'session-start' | 'pre-edit' | 'post-edit' | 'stop';
 
 interface HookInput {
   cwd?: string;
+  /** SessionStart: startup | resume | clear | compact */
+  source?: string;
+  /** Stop: true when Claude is already continuing because of a Stop hook */
+  stop_hook_active?: boolean;
   tool_name?: string;
   tool_input?: { file_path?: string; notebook_path?: string };
 }
@@ -76,9 +114,42 @@ async function readStdin(): Promise<HookInput> {
   }
 }
 
-export async function hookCommand(event: string) {
+const realpath = (p: string) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+};
+
+/** Workspace for a repo root; git reports real paths, which differ from registered ones behind symlinks (/var vs /private/var). */
+export function findWorkspaceForRoot(db: ReturnType<typeof DatabaseManager.getDatabase>, root: string) {
+  const repo = new SqliteWorkspaceRepository(db);
+  const direct = repo.findByPath(root);
+  if (direct) return direct;
+  const real = realpath(root);
+  return repo.list().find((w) => realpath(w.rootPath) === real) || null;
+}
+
+export async function hookCommand(event: string, args: string[] = []) {
   const hooksOff = (process.env.MOO_HOOKS || '').toLowerCase();
   if (hooksOff === 'off' || hooksOff === '0' || hooksOff === 'false') return;
+
+  // Git hooks: run by git from the repository root, with arguments instead of JSON on stdin.
+  if (event === 'prepare-commit-msg' || event === 'post-commit') {
+    const root = DatabaseManager.findProjectRoot(process.cwd());
+    const db = DatabaseManager.getDatabase({ projectPath: root });
+    DatabaseMigrator.runMigrations(db);
+    const workspace = findWorkspaceForRoot(db, root);
+    if (!workspace) return;
+    const taskRepo = new SqliteTaskRepository(db);
+    if (event === 'prepare-commit-msg') {
+      if (args[0]) prepareCommitMsg(root, args[0], args[1], taskRepo, workspace.id);
+    } else {
+      recordCommit(root, taskRepo, workspace.id);
+    }
+    return;
+  }
 
   const input = await readStdin();
   const root = DatabaseManager.findProjectRoot(input.cwd || process.cwd());
@@ -86,20 +157,42 @@ export async function hookCommand(event: string) {
   // Never create a workspace from a hook: projects that never ran `moo init` are left alone.
   const db = DatabaseManager.getDatabase({ projectPath: root });
   DatabaseMigrator.runMigrations(db);
-  const workspace = new SqliteWorkspaceRepository(db).findByPath(root);
+  const workspace = findWorkspaceForRoot(db, root);
   if (!workspace) return;
-
-  if (event === 'session-start') {
-    const container = createServiceContainer({ projectPath: root });
-    process.stdout.write(
-      container.sessionService.getCompactContext(root, undefined, 'standard', workspace.id) + '\n'
-    );
-    return;
-  }
 
   const taskRepo = new SqliteTaskRepository(db);
   const live = taskRepo.list({ status: 'doing', isArchived: false, workspaceId: workspace.id }).filter((t) => hasLiveLease(t));
   const ancestors = ancestorPids();
+
+  if (event === 'session-start') {
+    const container = createServiceContainer({ projectPath: root });
+    // This session's own claim when it has one (a compaction or resume); otherwise show nobody's task
+    // as "mine", so work a previous session left behind surfaces as interrupted instead.
+    const agentId = claimsForSession(live, ancestors, os.hostname(), false)[0]?.claimedByAgent || UNKNOWN_SESSION_AGENT;
+    const verbosity = input.source === 'compact' || input.source === 'resume' ? 'full' : 'standard';
+    const heading = input.source === 'compact' ? '(Context was compacted: this is where you are.)\n' : '';
+    process.stdout.write(heading + container.sessionService.getCompactContext(root, agentId, verbosity, workspace.id) + '\n');
+    return;
+  }
+
+  if (event === 'stop') {
+    if (input.stop_hook_active) return;
+    const notes = new SqliteNoteRepository(db);
+    for (const task of claimsForSession(live, ancestors, os.hostname(), false)) {
+      const lastNote = notes
+        .listByTaskId(task.id)
+        .filter((n) => n.authorId === task.claimedByAgent && !/^Claimed task \(Attempt|^Resumed interrupted/.test(n.content))
+        .pop();
+      const changes = task.claimGitBaseline ? GitContextService.changesSince(task.claimGitBaseline, workspace.rootPath) : null;
+      const own = changes ? withoutOthersClaimedFiles(taskRepo, changes.files, task) : [];
+      const reason = checkpointNudge(task, lastNote?.createdAt, own);
+      if (reason) {
+        process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
+        return;
+      }
+    }
+    return;
+  }
 
   if (event === 'pre-edit') {
     const mine = claimsForSession(live, ancestors);
@@ -121,6 +214,6 @@ export async function hookCommand(event: string) {
     return;
   }
 
-  process.stderr.write(`Unknown hook event '${event}'. Expected session-start, pre-edit or post-edit.\n`);
+  process.stderr.write(`Unknown hook event '${event}'. Expected session-start, pre-edit, post-edit, stop, prepare-commit-msg or post-commit.\n`);
   process.exit(1);
 }

@@ -10,6 +10,8 @@ export interface ToolDef {
     properties: Record<string, any>;
     required?: string[];
   };
+  /** MCP hints; readOnlyHint lets clients auto-approve and parallelize a tool. */
+  annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean };
 }
 
 const str = (description?: string) => (description ? { type: 'string', description } : { type: 'string' });
@@ -19,28 +21,34 @@ const TYPE = { type: 'string', enum: ['feature', 'bug', 'refactor', 'test', 'doc
 const PRIORITY = { type: 'string', enum: ['low', 'medium', 'high', 'critical'] };
 const EVIDENCE = {
   type: 'object',
-  description: 'Proof of work. testProof or outputSnippet (real output), or code changes git sees since the claim.',
-  properties: {
-    testProof: str(),
-    outputSnippet: str(),
-    commandsRun: strArr(),
-    filesModified: strArr('Auto-filled from git when omitted'),
-    notes: str(),
-  },
+  description: 'testProof or outputSnippet with real output; git changes since the claim also count.',
+  properties: { testProof: str(), outputSnippet: str(), commandsRun: strArr(), filesModified: strArr('Default: from git') },
 };
-const AGENT_ID = str('Override the default identity (set one per parallel sub-agent)');
+// The identity rule is spelled out once, on the tools a parallel sub-agent starts with.
+const CRITERIA = {
+  type: 'array',
+  description: 'One answer per "- [ ]" acceptance item, in order: {met, note (required when unmet)}',
+  items: { type: 'object', properties: { item: str(), met: { type: 'boolean' }, note: str() }, required: ['met'] },
+};
+const VERIFY_OVERRIDE = str("Why the workspace verify command's failure is unrelated; completes as a deviation");
+const AGENT_ID_DOC = str('Override the default identity (set one per parallel sub-agent)');
+const AGENT_ID = str();
+const READ_ONLY = { readOnlyHint: true };
 
-const TASK_FIELDS = {
-  title: str('Clean descriptive title; no "C1:"/"H2:" prefixes (use priority/type/tags)'),
+const QUICK_FIELDS = {
+  title: str('Plain title; no "C1:" prefixes'),
   description: str('Markdown spec: overview, numbered plan, key design decisions'),
   acceptanceCriteria: str('Markdown checklist (- [ ]) defining done'),
   goalId: str('Omit to file under the workspace "Ad-hoc work" goal'),
-  parentId: str('Parent task (one level of subtasks)'),
   type: TYPE,
   priority: PRIORITY,
   tags: strArr(),
   declaredFiles: strArr('Files you expect to modify (collision detection)'),
   dependsOnTaskIds: strArr(),
+};
+const TASK_FIELDS = {
+  ...QUICK_FIELDS,
+  parentId: str('Parent task (one level of subtasks)'),
   isDeferred: { type: 'boolean' },
   idempotencyKey: str(),
 };
@@ -63,7 +71,8 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'moo_get_goal',
-    description: 'Goal spec, progress metrics and loose ends; includeTasks lists task summaries.',
+    description: 'Goal spec, progress metrics and open tasks; includeTasks=true lists every task.',
+    annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
       properties: { goalId: str(), includeTasks: { type: 'boolean' } },
@@ -72,7 +81,7 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'moo_update_goal',
-    description: "Edit a goal. status 'dropped' (needs reason) drops its open tasks; status 'active' reopens it.",
+    description: "Edit a goal. 'completed' writes its summary; 'dropped' (needs reason) drops its open tasks; 'active' reopens it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -83,7 +92,8 @@ export const TOOL_DEFS: ToolDef[] = [
         maxOpenTasksCap: { type: 'number' },
         status: { type: 'string', enum: ['active', 'completed', 'dropped'] },
         reason: str('Required when dropping'),
-        reopenTasks: { type: 'boolean', description: "When reactivating, also reopen tasks dropped with the goal (default true)" },
+        summary: str('On completing: your retrospective; a record of shipped work, deviations and decisions is appended'),
+        reopenTasks: { type: 'boolean', description: 'On reactivate, reopen its dropped tasks (default true)' },
       },
       required: ['goalId'],
     },
@@ -91,6 +101,7 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'moo_list_goals',
     description: "List this workspace's goals.",
+    annotations: READ_ONLY,
     inputSchema: { type: 'object', properties: { status: { type: 'string', enum: ['active', 'completed', 'dropped'] } } },
   },
 
@@ -105,7 +116,7 @@ export const TOOL_DEFS: ToolDef[] = [
         ...TASK_FIELDS,
         tasks: { type: 'array', items: { type: 'object' }, description: 'Batch create: objects with the same fields as a single task' },
         claim: { type: 'boolean' },
-        leaseMinutes: { type: 'number', description: 'Claim lease (default 30)' },
+        leaseMinutes: { type: 'number' },
         agentId: AGENT_ID,
       },
     },
@@ -115,7 +126,7 @@ export const TOOL_DEFS: ToolDef[] = [
     description: 'Create and claim a task in one call; start coding right after. goalId optional.',
     inputSchema: {
       type: 'object',
-      properties: { ...TASK_FIELDS, leaseMinutes: { type: 'number' }, agentId: AGENT_ID },
+      properties: { ...QUICK_FIELDS, leaseMinutes: { type: 'number' }, agentId: AGENT_ID_DOC },
       required: ['title', 'acceptanceCriteria'],
     },
   },
@@ -128,11 +139,10 @@ export const TOOL_DEFS: ToolDef[] = [
       properties: {
         title: str(),
         description: str(),
-        acceptanceCriteria: str('Defaults to the title'),
         type: TYPE,
-        tags: strArr(),
         goalId: str(),
         evidence: EVIDENCE,
+        verifyOverride: VERIFY_OVERRIDE,
         agentId: AGENT_ID,
       },
       required: ['title', 'evidence'],
@@ -163,11 +173,13 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'moo_get_task',
     description: 'Full task with dependencies, subtasks and notes.',
+    annotations: READ_ONLY,
     inputSchema: { type: 'object', properties: { taskId: str(), includeNotes: { type: 'boolean' } }, required: ['taskId'] },
   },
   {
     name: 'moo_list_tasks',
     description: 'Task summaries in this workspace, filterable.',
+    annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
       properties: {
@@ -180,6 +192,7 @@ export const TOOL_DEFS: ToolDef[] = [
         type: TYPE,
         tag: str(),
         claimedByAgent: str(),
+        stale: { type: 'boolean', description: 'Only stale backlog, with the reason' },
         limit: { type: 'number' },
       },
     },
@@ -193,7 +206,7 @@ export const TOOL_DEFS: ToolDef[] = [
         goalId: str(),
         avoidFileConflicts: { type: 'boolean' },
         claim: { type: 'boolean' },
-        agentId: AGENT_ID,
+        agentId: AGENT_ID_DOC,
       },
     },
   },
@@ -204,41 +217,38 @@ export const TOOL_DEFS: ToolDef[] = [
     description: 'Claim a task exclusively (30 min lease, renewed whenever you call a tool with its taskId).',
     inputSchema: {
       type: 'object',
-      properties: { taskId: str(), declaredFiles: strArr(), leaseMinutes: { type: 'number' }, agentId: AGENT_ID },
+      properties: { taskId: str(), declaredFiles: strArr(), leaseMinutes: { type: 'number' }, agentId: AGENT_ID_DOC },
       required: ['taskId'],
     },
   },
   {
     name: 'moo_checkpoint',
-    description: 'Log a progress note on your claimed task and renew its lease.',
+    description: 'Add a note to a task (progress, finding, context); renews your lease if you hold it.',
     inputSchema: {
       type: 'object',
-      properties: { taskId: str(), note: str(), agentId: AGENT_ID },
+      properties: { taskId: str(), note: str(), noteType: str('Default attempt_log'), agentId: AGENT_ID },
       required: ['taskId', 'note'],
     },
   },
   {
     name: 'moo_release_task',
-    description: 'Give up your claim; the task returns to the queue.',
-    inputSchema: { type: 'object', properties: { taskId: str(), notes: str(), agentId: AGENT_ID }, required: ['taskId'] },
-  },
-  {
-    name: 'moo_handoff_task',
-    description: 'Transfer your claim to another agent with a summary.',
+    description: 'Give up your claim: back to the queue, or to toAgentId as a handoff.',
     inputSchema: {
       type: 'object',
-      properties: { taskId: str(), toAgentId: str(), handoffSummary: str(), agentId: AGENT_ID },
-      required: ['taskId', 'toAgentId', 'handoffSummary'],
+      properties: { taskId: str(), notes: str('Handoff summary when toAgentId is set'), toAgentId: str(), agentId: AGENT_ID },
+      required: ['taskId'],
     },
   },
   {
     name: 'moo_complete_task',
-    description: 'Complete your claimed task with evidence. autoClaimNext claims the next ready task in the goal.',
+    description: 'Complete your claimed task: evidence plus one criteria answer per acceptance item. Runs the workspace verify command.',
     inputSchema: {
       type: 'object',
       properties: {
         taskId: str(),
         evidence: EVIDENCE,
+        criteria: CRITERIA,
+        verifyOverride: VERIFY_OVERRIDE,
         notes: str(),
         autoClaimNext: { type: 'boolean' },
         agentId: AGENT_ID,
@@ -294,33 +304,25 @@ export const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
-    name: 'moo_add_task_note',
-    description: 'Attach a note to a task.',
-    inputSchema: {
-      type: 'object',
-      properties: { taskId: str(), content: str(), noteType: str(), agentId: AGENT_ID },
-      required: ['taskId', 'content'],
-    },
-  },
-  {
     name: 'moo_capture_discovered_work',
     description:
-      'Record work found mid-task. isMustFixNow=true blocks your current task on it; otherwise it is deferred.',
+      'Record work found mid-task: alreadyFixed=true logs a fix you made along the way; isMustFixNow=true blocks your task on it; otherwise deferred.',
     inputSchema: {
       type: 'object',
       properties: {
         currentTaskId: str(),
         title: str(),
         acceptanceCriteria: str(),
+        alreadyFixed: { type: 'boolean' },
+        fixNote: str('What was wrong and how you fixed it (alreadyFixed)'),
         isMustFixNow: { type: 'boolean' },
         description: str(),
         type: TYPE,
         priority: PRIORITY,
-        tags: strArr(),
         declaredFiles: strArr(),
         agentId: AGENT_ID,
       },
-      required: ['currentTaskId', 'title', 'acceptanceCriteria', 'isMustFixNow'],
+      required: ['currentTaskId', 'title'],
     },
   },
 
@@ -345,9 +347,14 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'moo_list_decisions',
     description: "This workspace's decisions.",
+    annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
-      properties: { status: { type: 'string', enum: ['proposed', 'accepted', 'superseded', 'rejected'] }, tag: str() },
+      properties: {
+        status: { type: 'string', enum: ['proposed', 'accepted', 'superseded', 'rejected'] },
+        tag: str(),
+        verbose: { type: 'boolean', description: 'Full context and rationale' },
+      },
     },
   },
 
@@ -356,6 +363,7 @@ export const TOOL_DEFS: ToolDef[] = [
     name: 'moo_session_resume',
     description:
       'Where you left off: your claimed task, ready work, waiting-on-human, decisions, stall warnings. Call at session start.',
+    annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
       properties: { verbosity: { type: 'string', enum: ['ultra-dense', 'standard', 'full', 'json'] }, agentId: AGENT_ID },
@@ -364,11 +372,13 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'moo_get_file_context',
     description: 'Before editing files: who holds them now (canEdit), past tasks, decisions and notes about them.',
+    annotations: READ_ONLY,
     inputSchema: { type: 'object', properties: { filePaths: strArr(), agentId: AGENT_ID }, required: ['filePaths'] },
   },
   {
     name: 'moo_search',
     description: 'Full-text search over tasks and decisions in this workspace.',
+    annotations: READ_ONLY,
     inputSchema: {
       type: 'object',
       properties: { query: str(), type: { type: 'string', enum: ['all', 'tasks', 'decisions'] }, limit: { type: 'number' } },

@@ -10,6 +10,16 @@ import {
 } from '../../domain/types.js';
 import { ITaskRepository, TaskFilter } from './interfaces.js';
 
+function parseJsonArray(value: unknown): string[] {
+  if (typeof value !== 'string' || !value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
 export class SqliteTaskRepository implements ITaskRepository {
   constructor(private db: DatabaseType) {}
 
@@ -96,6 +106,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       humanAnsweredBy: row.human_answered_by || undefined,
 
       discoveredFromTaskId: row.discovered_from_task_id || undefined,
+      commits: parseJsonArray(row.commits),
+      interruptedFrom: row.interrupted_from || undefined,
       isDeferred: Boolean(row.is_deferred),
       idempotencyKey: row.idempotency_key || undefined,
       isArchived: Boolean(row.is_archived),
@@ -235,6 +247,17 @@ export class SqliteTaskRepository implements ITaskRepository {
       .prepare(`UPDATE tasks SET lease_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'doing' AND claimed_by_agent = ?`)
       .run(leaseExpiresAt, updatedAt, taskId, agentId);
     return result.changes > 0;
+  }
+
+  /** Commits are recorded by git hooks; kept out of update() so a concurrent task write never drops one. */
+  addCommit(taskId: string, commitHash: string): boolean {
+    const row = this.db.prepare(`SELECT commits FROM tasks WHERE id = ?`).get(taskId) as { commits?: string } | undefined;
+    if (!row) return false;
+    const commits = parseJsonArray(row.commits);
+    if (commits.includes(commitHash)) return false;
+    commits.push(commitHash);
+    this.db.prepare(`UPDATE tasks SET commits = ? WHERE id = ?`).run(JSON.stringify(commits), taskId);
+    return true;
   }
 
   findByIdempotencyKey(key: string): Task | null {
@@ -410,7 +433,8 @@ export class SqliteTaskRepository implements ITaskRepository {
         updated_at = ?,
         completed_at = ?,
         last_state_change_at = ?,
-        claim_git_baseline = ?
+        claim_git_baseline = ?,
+        interrupted_from = ?
       WHERE id = ?
     `);
 
@@ -456,6 +480,7 @@ export class SqliteTaskRepository implements ITaskRepository {
       task.completedAt || null,
       task.lastStateChangeAt,
       task.claimGitBaseline ? JSON.stringify(task.claimGitBaseline) : null,
+      task.interruptedFrom || null,
       task.id
     );
 

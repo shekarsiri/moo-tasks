@@ -226,6 +226,10 @@
                   <span class="flex items-center gap-2"><i data-lucide="bot" class="w-3.5 h-3.5 text-blue-400"></i> Assignee</span>
                   <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
                 </button>
+                <button class="filter-menu-item w-full flex items-center justify-between px-2 py-1.5 rounded text-left text-slate-300 hover:bg-surfaceHover hover:text-white transition" data-dimension="health">
+                  <span class="flex items-center gap-2"><i data-lucide="heart-pulse" class="w-3.5 h-3.5 text-amber-400"></i> Health</span>
+                  <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-500"></i>
+                </button>
               </div>
 
               <!-- Submenu View -->
@@ -964,7 +968,7 @@
     <div class="modal-card max-w-md w-full">
       <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
         <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
-          <i data-lucide="pencil" class="w-4 h-4 text-cyan-400"></i> Rename Workspace
+          <i data-lucide="pencil" class="w-4 h-4 text-cyan-400"></i> Workspace Settings
         </h3>
         <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
           <i data-lucide="x" class="w-4 h-4"></i>
@@ -983,6 +987,15 @@
         <div>
           <label for="inputEditWorkspaceRemote" class="block text-xs font-medium text-slate-400 mb-1.5">Git Remote URL</label>
           <input type="text" id="inputEditWorkspaceRemote" class="input-field w-full text-slate-300" placeholder="e.g. git@github.com:user/repo.git">
+        </div>
+        <div>
+          <label for="inputEditWorkspaceVerify" class="block text-xs font-medium text-slate-400 mb-1.5">Verify Command</label>
+          <input type="text" id="inputEditWorkspaceVerify" class="input-field w-full text-slate-300 font-mono" placeholder="e.g. npm test (leave empty to disable)">
+          <p class="text-[11px] text-slate-500 mt-1">Runs in the project root whenever an agent completes a task; a failure blocks completion unless the agent gives an override reason. Agents cannot change this.</p>
+        </div>
+        <div>
+          <label for="inputEditWorkspaceVerifyTimeout" class="block text-xs font-medium text-slate-400 mb-1.5">Verify Timeout (seconds)</label>
+          <input type="number" min="1" id="inputEditWorkspaceVerifyTimeout" class="input-field w-full text-slate-300" placeholder="600">
         </div>
         <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
           <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
