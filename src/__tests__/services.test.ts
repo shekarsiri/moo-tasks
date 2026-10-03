@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createServiceContainer, ServiceContainer } from '../services/index.js';
+import { createServiceContainer, RegisteredContainer as ServiceContainer } from '../services/index.js';
 import {
   GoalCapExceededError,
   InvalidTaskStateError,

@@ -11,17 +11,20 @@ import { ServiceContainer } from '../services/index.js';
 import { CreateTaskDTO } from '../services/task-lifecycle-service.js';
 import { ClaimTaskResult } from '../services/claim-service.js';
 import { DependencyGraph } from '../domain/dependency.js';
-import { HumanOnlyActionError, InvalidArgumentsError, TaskNotFoundError, VerificationFailedError } from '../domain/errors.js';
+import { HumanOnlyActionError, InvalidArgumentsError, NoWorkspaceError, TaskNotFoundError, VerificationFailedError } from '../domain/errors.js';
 import { formatAgentIdentity } from '../domain/lease.js';
 import { Decision, Task, TaskEvidence, TaskNote, VerificationRun } from '../domain/types.js';
 import { runVerifyCommand } from '../services/verify-runner.js';
 import { DuplicateMatch } from '../domain/similarity.js';
 import { deviationsOf } from '../domain/criteria.js';
+import { ageStaleReason } from '../domain/staleness.js';
 import { GitContextService } from '../infrastructure/git/git-context.js';
-import { withoutOthersClaimedFiles } from '../services/task-state.js';
+import { attributeChanges } from '../services/task-state.js';
 import { VERSION } from '../version.js';
 import { ADHOC_GOAL_TITLE } from '../services/goal-service.js';
+import { WorkspaceService } from '../services/workspace-service.js';
 import { TOOL_DEFS, ToolDef } from './tool-defs.js';
+import { inactiveInstructions, PROTOCOL_INSTRUCTIONS } from './instructions.js';
 import { LEGACY_TOOL_DEFS } from './tool-defs-legacy.js';
 
 export interface McpServerOptions {
@@ -59,7 +62,19 @@ const HUMAN_ONLY_TOOLS = new Set([
   'moo_delete_workspace',
 ]);
 
+/** Tools that still answer without a workspace: they explain why Moo is inactive or list workspaces. */
+const WORKSPACE_FREE_TOOLS = new Set([
+  'moo_session_resume',
+  'moo_get_compact_context',
+  'moo_list_workspaces',
+  'moo_get_workspace',
+  'moo_register_workspace',
+]);
+
 const RECOVERY: Record<string, { action: string; nextTool?: string }> = {
+  NO_WORKSPACE: {
+    action: 'Continue without Moo Tasks in this directory, or ask the user to run `moo init` in the project root to enable it.',
+  },
   TASK_BLOCKED_ON_DEPENDENCY: { action: 'Finish its blockers first, or pick other ready work.', nextTool: 'moo_get_next_task' },
   TASK_WAITING_ON_HUMAN: { action: 'The task is paused on a question for the user. Ask the user, or pick other work.', nextTool: 'moo_get_next_task' },
   GOAL_CAP_EXCEEDED: {
@@ -174,12 +189,19 @@ const verificationView = (run: VerificationRun | undefined) =>
 const decisionSummary = (d: Decision) => ({ id: d.id, title: d.title, choice: d.choice, tags: d.tags?.length ? d.tags : undefined });
 
 export function setupMcpServer(container: ServiceContainer, options: McpServerOptions = {}): Server {
+  const wsId = container.activeWorkspace?.id;
   const server = new Server(
     { name: 'moo-tasks', version: VERSION },
-    { capabilities: { tools: {}, resources: {}, prompts: {} } }
+    {
+      capabilities: { tools: {}, resources: {}, prompts: {} },
+      instructions: wsId ? PROTOCOL_INSTRUCTIONS : inactiveInstructions(container.projectPath),
+    }
   );
 
-  const wsId = container.activeWorkspace?.id;
+  const requireWorkspaceId = (): string => {
+    if (!wsId) throw new NoWorkspaceError(container.projectPath);
+    return wsId;
+  };
   const sessionId = `sess-${process.pid}-${Date.now().toString(36)}`;
   const identity = () => formatAgentIdentity(server.getClientVersion()?.name || 'mcp-client', process.ppid);
   const agentOf = (a: Args): string => (typeof a.agentId === 'string' && a.agentId.trim()) || identity();
@@ -306,7 +328,9 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
   const verify = async (a: Args): Promise<VerificationRun | undefined> => {
     const ws = wsId ? container.workspaceService.getWorkspaceById(wsId) : undefined;
     if (!ws?.verifyCommand) return undefined;
-    const run = await runVerifyCommand(ws.verifyCommand, ws.rootPath || container.projectPath, ws.verifyTimeoutSeconds);
+    // In a linked worktree the command runs against the worktree's files, not the main checkout's.
+    const cwd = WorkspaceService.checkoutPathFor(container.location, ws);
+    const run = await runVerifyCommand(ws.verifyCommand, cwd, ws.verifyTimeoutSeconds);
     if (!run.passed) {
       const reason = typeof a.verifyOverride === 'string' ? a.verifyOverride.trim() : '';
       if (!reason) throw new VerificationFailedError(run.command, run.exitCode, run.outputTail);
@@ -367,7 +391,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     // The work is already done, so there is no claim-time baseline: accept uncommitted changes as proof.
     if (!evidence.testProof?.trim() && !evidence.outputSnippet?.trim()) {
       const ctx = GitContextService.getContext(container.projectPath, { details: false });
-      const dirty = withoutOthersClaimedFiles(container.taskRepo, ctx.modifiedFiles || [], { id: '', workspaceId: wsId, declaredFiles: [] });
+      const dirty = attributeChanges(container.taskRepo, ctx.modifiedFiles || [], { id: '', workspaceId: wsId, declaredFiles: [] });
       const claimed = arr(evidence.filesModified);
       const touched = claimed ? dirty.filter((f) => claimed.some((c) => f === c || f.endsWith('/' + c))) : dirty;
       if (touched.length > 0) {
@@ -428,6 +452,13 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
   };
 
   const resume = (a: Args) => {
+    if (!wsId) {
+      return [
+        `# 🐮 Moo Tasks is inactive here`,
+        `${container.projectPath} is not a git repository or a directory registered with \`moo init\`, so no work is tracked.`,
+        `Work normally. To track work here, the user runs \`moo init\` in the project root.`,
+      ].join('\n');
+    }
     const verbosity = a.verbosity || 'standard';
     const agent = typeof a.agentId === 'string' && a.agentId ? a.agentId : identity();
     if (verbosity === 'json') {
@@ -574,8 +605,19 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     },
     moo_get_next_task: (a, agent) => {
       const next = container.taskLifecycleService.getNextUnblockedTask(a.goalId, agent, Boolean(a.avoidFileConflicts), wsId);
-      if (next && a.claim) {
+      // Stale backlog is never claimed automatically: it may no longer be wanted as written.
+      const stale = next ? ageStaleReason(next) : null;
+      if (next && a.claim && !stale) {
         return claimResponse(container.claimService.claimTask(next.id, agent, sessionId, { declaredFiles: arr(a.declaredFiles) }));
+      }
+      if (next && stale) {
+        return {
+          success: true,
+          claimed: false,
+          nextTask: taskView(next),
+          stale,
+          hint: `Not claimed: the only ready work is stale (${stale}). Confirm with the user that it is still wanted, then moo_claim_task(taskId: '${next.id}'), or drop it with moo_drop_task.`,
+        };
       }
       if (next) {
         return { success: true, nextTask: taskView(next), hint: `Claim it with moo_claim_task(taskId: '${next.id}').` };
@@ -794,7 +836,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
     }),
     moo_update_workspace: (a) => ({
       success: true,
-      workspace: container.workspaceService.updateWorkspace(a.workspaceId || container.activeWorkspace.id, {
+      workspace: container.workspaceService.updateWorkspace(a.workspaceId || requireWorkspaceId(), {
         name: a.name,
         gitRemote: a.gitRemote,
       }),
@@ -858,6 +900,8 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
       if (!handler) {
         throw new InvalidArgumentsError(`Unknown tool: ${name}. Available: ${TOOL_DEFS.map((t) => t.name).join(', ')}`);
       }
+      // Without a workspace every query would span all projects, so tools refuse instead.
+      if (!wsId && !WORKSPACE_FREE_TOOLS.has(name)) requireWorkspaceId();
       validate(name, args);
       scopeTaskIds(args);
       cleanupLeases();
@@ -917,6 +961,7 @@ export function setupMcpServer(container: ServiceContainer, options: McpServerOp
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     const { uri } = request.params;
     const text = (mimeType: string, body: string) => ({ contents: [{ uri, mimeType, text: body }] });
+    if (!wsId) return text('text/markdown', String(resume({})));
 
     if (uri === 'moo://context/compact') {
       return text(

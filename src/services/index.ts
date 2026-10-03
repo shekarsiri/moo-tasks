@@ -8,7 +8,7 @@ import { SqliteTaskRepository } from '../infrastructure/repositories/sqlite-task
 import { SqliteDecisionRepository } from '../infrastructure/repositories/sqlite-decision-repo.js';
 import { SqliteNoteRepository } from '../infrastructure/repositories/sqlite-note-repo.js';
 import { SqliteStatusHistoryRepository } from '../infrastructure/repositories/sqlite-status-history-repo.js';
-import { WorkspaceService } from './workspace-service.js';
+import { WorkspaceLocation, WorkspaceRegistration, WorkspaceService } from './workspace-service.js';
 import { GoalService } from './goal-service.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
 import { ClaimService } from './claim-service.js';
@@ -38,9 +38,12 @@ export * from './search-service.js';
 
 export interface ServiceContainer {
   db: DatabaseType;
+  /** The checkout this process works in (a linked worktree included); git and verify run here. */
   projectPath: string;
-  activeWorkspace: Workspace;
-  
+  /** Undefined only when registration was declined for a directory that is not a project. */
+  activeWorkspace?: Workspace;
+  location: WorkspaceLocation;
+
   // Repositories
   workspaceRepo: SqliteWorkspaceRepository;
   goalRepo: SqliteGoalRepository;
@@ -65,14 +68,25 @@ export interface ServiceContainer {
   searchService: SearchService;
 }
 
-export function createServiceContainer(config: DatabaseConfig = {}): ServiceContainer {
-  const projectPath = config.projectPath || DatabaseManager.findProjectRoot();
+export interface ContainerConfig extends DatabaseConfig {
+  /** Whether the start directory may be registered as a new workspace (default: always). */
+  register?: WorkspaceRegistration;
+}
+
+/** A container whose directory is registered (always the case with the default `register: 'always'`). */
+export type RegisteredContainer = ServiceContainer & { activeWorkspace: Workspace };
+
+export function createServiceContainer(config?: ContainerConfig & { register?: 'always' }): RegisteredContainer;
+export function createServiceContainer(config: ContainerConfig): ServiceContainer;
+export function createServiceContainer(config: ContainerConfig = {}): ServiceContainer {
   const db = DatabaseManager.getDatabase(config);
   DatabaseMigrator.runMigrations(db);
 
   const workspaceRepo = new SqliteWorkspaceRepository(db);
   const workspaceService = new WorkspaceService(workspaceRepo);
-  const activeWorkspace = workspaceService.getOrCreateWorkspace(projectPath);
+  const location = workspaceService.resolveLocation(config.projectPath || process.cwd(), config.register ?? 'always');
+  const activeWorkspace = location.workspace || undefined;
+  const projectPath = location.checkoutRoot;
 
   const goalRepo = new SqliteGoalRepository(db);
   const taskRepo = new SqliteTaskRepository(db);
@@ -82,9 +96,12 @@ export function createServiceContainer(config: DatabaseConfig = {}): ServiceCont
 
   const goalService = new GoalService(goalRepo, taskRepo, workspaceRepo, decisionRepo);
   const taskLifecycleService = new TaskLifecycleService(taskRepo, statusHistoryRepo, noteRepo, goalService);
-  // Git evidence is read from the task's own workspace root, not the process cwd.
-  const resolveRepoRoot = (task: { workspaceId?: string }) =>
-    (task.workspaceId && workspaceRepo.findById(task.workspaceId)?.rootPath) || projectPath;
+  // Git evidence is read in this checkout for the active workspace (a worktree sees its own
+  // changes), and from the workspace's registered root for tasks of any other workspace.
+  const resolveRepoRoot = (task: { workspaceId?: string }) => {
+    if (!task.workspaceId || task.workspaceId === activeWorkspace?.id) return projectPath;
+    return workspaceRepo.findById(task.workspaceId)?.rootPath || projectPath;
+  };
   const claimService = new ClaimService(taskRepo, noteRepo, statusHistoryRepo, decisionRepo, resolveRepoRoot);
   const verificationService = new VerificationService(
     taskRepo,
@@ -107,6 +124,7 @@ export function createServiceContainer(config: DatabaseConfig = {}): ServiceCont
     db,
     projectPath,
     activeWorkspace,
+    location,
     workspaceRepo,
     goalRepo,
     taskRepo,

@@ -19,6 +19,8 @@ export interface IWorkspaceRepository {
   findByPath(rootPath: string): Workspace | null;
   findByName(name: string): Workspace | null;
   list(): Workspace[];
+  /** Workspaces with no goals, tasks or decisions (typically auto-registered and never used). */
+  listEmpty(): Workspace[];
   update(workspace: Workspace): Workspace;
   delete(id: string): boolean;
 }
@@ -73,6 +75,10 @@ export interface ITaskRepository {
   addDependency(taskId: string, dependsOnTaskId: string): void;
   removeDependency(taskId: string, dependsOnTaskId: string): void;
   getDependencies(taskId: string): string[];
+  /** Records a file the task's agent edited (from the post-edit hook); repeated paths are ignored. */
+  recordFileTouch(taskId: string, filePath: string, agentId: string | undefined, at: string): void;
+  /** Files recorded as edited for the task, relative to the checkout root. */
+  listTouchedFiles(taskId: string): string[];
   addCommit(taskId: string, commitHash: string): boolean;
   getDependents(taskId: string): string[];
   getAllDependencies(): TaskDependency[];

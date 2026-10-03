@@ -5,43 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Moo Tasks — My issues</title>
   
-  <!-- Lucide Icons Engine -->
-  <script src="https://unpkg.com/lucide@1.47.0"></script>
-
-  <!-- Marked.js Markdown Engine -->
-  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
-
+  <!-- Board libraries, vendored at build time (scripts/build-ui.js): no CDN, works offline -->
+  <script src="/vendor/lucide.min.js"></script>
+  <script src="/vendor/marked.min.js"></script>
   <!-- DOMPurify HTML Sanitizer (all rendered markdown passes through it) -->
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
+  <script src="/vendor/turndown.js"></script>
+  <script src="/vendor/turndown-plugin-gfm.js"></script>
 
-  <!-- Turndown HTML-to-Markdown Engine -->
-  <script src="https://cdn.jsdelivr.net/npm/turndown@7.1.2/dist/turndown.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/turndown-plugin-gfm@1.0.2/dist/turndown-plugin-gfm.min.js"></script>
-
-  <!-- Tailwind CSS Engine & Fonts -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            app: '#0c0d0e',
-            sidebar: '#0d0e10',
-            surface: '#121316',
-            surfaceHover: '#17181c',
-            borderSubtle: '#1a1b1f',
-            borderDefault: '#23262e',
-            borderActive: '#343844',
-            pillActive: '#21242b',
-          }
-        }
-      }
-    }
-  </script>
-  
   <link rel="icon" type="image/png" href="/logo.png">
   <link rel="stylesheet" href="/styles.css">
+  <!-- After styles.css, where the Tailwind CDN used to inject itself: utilities such as .hidden win -->
+  <link rel="stylesheet" href="/vendor/tailwind.css">
 </head>
 <body class="bg-app text-slate-100 font-sans antialiased overflow-hidden select-none h-screen flex">
   
@@ -909,6 +884,30 @@
   </div>
 
   <!-- Modal: Mandatory Reason Prompt -->
+  <div id="modalMoveGoal" class="modal-backdrop hidden p-4">
+    <div class="modal-card max-w-md w-full">
+      <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">
+        <h3 class="text-sm font-semibold text-slate-100 flex items-center gap-2">
+          <i data-lucide="folder-input" class="w-4 h-4 text-sky-400"></i> Move Goal to Another Workspace
+        </h3>
+        <button type="button" class="modal-close text-slate-400 hover:text-white p-1 rounded-md hover:bg-surface transition flex items-center justify-center -mr-1" title="Close">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <form id="formMoveGoal" class="space-y-3.5 text-xs">
+        <p id="moveGoalSummary" class="text-slate-400 leading-relaxed"></p>
+        <div>
+          <label for="selectMoveGoalWorkspace" class="block text-xs font-medium text-slate-300 mb-1.5">Workspace</label>
+          <select id="selectMoveGoalWorkspace" required class="input-field w-full"></select>
+        </div>
+        <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-borderSubtle mt-4">
+          <button type="button" class="modal-close btn-secondary text-xs px-3 py-1.5">Cancel</button>
+          <button type="submit" class="btn-primary text-xs px-3.5 py-1.5">Move</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="modalReasonPrompt" class="modal-backdrop hidden p-4">
     <div class="modal-card max-w-md w-full">
       <div class="flex items-center justify-between pb-3 mb-3.5 border-b border-borderSubtle">

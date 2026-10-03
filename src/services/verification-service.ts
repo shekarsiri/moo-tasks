@@ -18,7 +18,9 @@ import {
 } from '../infrastructure/repositories/interfaces.js';
 import { ClaimService, ClaimTaskOptions, ClaimTaskResult, RepoRootResolver } from './claim-service.js';
 import { TaskLifecycleService } from './task-lifecycle-service.js';
-import { reblockDependents, resolveDependents, returnToQueue, withoutOthersClaimedFiles } from './task-state.js';
+import { reblockDependents, resolveDependents, returnToQueue, attributeChanges } from './task-state.js';
+import { capFileList, evidenceGitContext, noteGitContext, summarizeFiles } from '../domain/evidence.js';
+import { ageStaleReason } from '../domain/staleness.js';
 
 export interface CompleteTaskOptions {
   /** Answers to the acceptance-criteria checklist. */
@@ -109,19 +111,20 @@ export class VerificationService {
         task.acceptanceCriteria = tickChecklist(task.acceptanceCriteria, criteriaResults);
       }
 
-      // 3. Evidence: real output, or code changes git can attribute to this claim
-      const finalEvidence: TaskEvidence = { ...evidence, gitContext, criteria: criteriaResults, verification: options.verification };
-      const ownChanges = changes ? withoutOthersClaimedFiles(this.taskRepo, changes.files, task) : [];
-      if (ownChanges.length > 0) {
-        if (!finalEvidence.filesModified || finalEvidence.filesModified.length === 0) {
-          finalEvidence.filesModified = ownChanges;
-        }
-        // The shortstat covers every changed file, so it is only kept when all of them are ours
-        if (ownChanges.length === changes!.files.length) {
-          gitContext.diffSummary = changes!.diffSummary || gitContext.diffSummary;
-        }
-        gitContext.modifiedFiles = ownChanges;
-      }
+      // 3. Evidence: real output, or code changes git can attribute to this claim. Only the task's
+      // own files are stored, never the whole dirty tree; the shortstat covers every changed file,
+      // so it is only kept when all of them are ours.
+      const ownChanges = changes ? attributeChanges(this.taskRepo, changes.files, task) : [];
+      const ownDiff = ownChanges.length > 0 && ownChanges.length === changes!.files.length ? changes!.diffSummary : undefined;
+      const files = capFileList(evidence.filesModified?.length ? evidence.filesModified : ownChanges);
+      const finalEvidence: TaskEvidence = {
+        ...evidence,
+        filesModified: files.files,
+        filesModifiedTotal: files.total,
+        gitContext: evidenceGitContext(gitContext, ownDiff),
+        criteria: criteriaResults,
+        verification: options.verification,
+      };
       const hasOutputProof =
         Boolean(evidence.testProof && evidence.testProof.trim()) ||
         Boolean(evidence.outputSnippet && evidence.outputSnippet.trim());
@@ -164,7 +167,7 @@ export class VerificationService {
         gitInfo += `\nVerify: \`${v.command}\` ${v.passed ? 'passed' : `FAILED (exit ${v.exitCode ?? 'timeout'}), overridden: ${v.overrideReason}`}`;
       }
       if (ownChanges.length > 0) {
-        gitInfo += `\nChanges since claim: ${ownChanges.length === changes!.files.length && changes!.diffSummary ? changes!.diffSummary : ownChanges.join(', ')}`;
+        gitInfo += `\nChanges since claim: ${ownDiff || summarizeFiles(ownChanges)}`;
       }
 
       this.noteRepo.create({
@@ -174,7 +177,7 @@ export class VerificationService {
         authorId: agentId,
         noteType: 'verification_note',
         content: `Completed by agent ${agentId}.\nCommands: ${evidence.commandsRun?.join(', ') || 'N/A'}\nProof: ${evidence.testProof || evidence.outputSnippet || 'git changes since claim'}${gitInfo}\n${notes ? `Notes: ${notes}` : ''}`.trim(),
-        gitContext,
+        gitContext: noteGitContext(gitContext),
         createdAt: now,
       });
 
@@ -224,6 +227,15 @@ export class VerificationService {
         nextTask: null,
         claimResult: null,
         hint: `Completed task ${taskId}. No further unblocked tasks ready in goal.`,
+      };
+    }
+    const staleReason = ageStaleReason(nextTask);
+    if (staleReason) {
+      return {
+        completedTask,
+        nextTask: null,
+        claimResult: null,
+        hint: `Completed task ${taskId}. The next ready task, ${nextTask.id} ("${nextTask.title}"), is stale (${staleReason}) and was not claimed: confirm with the user that it is still wanted.`,
       };
     }
 

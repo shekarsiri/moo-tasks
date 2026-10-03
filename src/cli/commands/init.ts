@@ -1,8 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import picocolors from 'picocolors';
-import { createServiceContainer } from '../../services/index.js';
+import readline from 'readline/promises';
+import { createServiceContainer, RegisteredContainer } from '../../services/index.js';
 import { DatabaseManager } from '../../infrastructure/db/database.js';
+import { GitContextService } from '../../infrastructure/git/git-context.js';
+import { detectVerifyCommand } from '../../services/verify-detect.js';
+import { installClaudeHooks, installGitHooksHere } from './install.js';
 
 export const MOO_BLOCK_START = '<!-- moo-tasks:start (managed by `moo init`; edits inside this block are overwritten) -->';
 export const MOO_BLOCK_END = '<!-- moo-tasks:end -->';
@@ -99,18 +103,76 @@ export function upsertManagedBlock(
   return result;
 }
 
-export async function initCommand(options: { projectPath?: string; rules?: boolean; force?: boolean }) {
-  const root = options.projectPath ? path.resolve(options.projectPath) : process.cwd();
+export interface InitOptions {
+  projectPath?: string;
+  rules?: boolean;
+  force?: boolean;
+  /** --no-hooks: skip the Claude Code hooks. */
+  hooks?: boolean;
+  /** --no-git-hooks: skip the commit-linking git hooks. */
+  gitHooks?: boolean;
+  /** --no-verify: do not set a verify command. */
+  verify?: boolean;
+  /** -y/--yes: accept the detected verify command without asking. */
+  yes?: boolean;
+}
 
-  // Initialize service container and register global workspace
-  const container = createServiceContainer({ projectPath: root });
+async function confirm(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${question} [Y/n] `)).trim().toLowerCase();
+    return answer === '' || answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Sets the detected verify command when the workspace has none: after asking on a terminal, with
+ * --yes, or never when run non-interactively without --yes (an agent running init only sees the hint).
+ */
+async function setupVerifyCommand(container: RegisteredContainer, root: string, options: InitOptions): Promise<void> {
   const ws = container.activeWorkspace;
+  if (ws.verifyCommand) {
+    console.log(`${picocolors.green('✔')} Verify command: ${picocolors.yellow(ws.verifyCommand)}`);
+    return;
+  }
+  if (options.verify === false) return;
+  const detected = detectVerifyCommand(root);
+  if (!detected) {
+    console.log(`${picocolors.yellow('!')} No test command detected. Set one with ${picocolors.cyan('moo verify:set "<command>"')} so completed tasks are checked.`);
+    return;
+  }
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const accepted = options.yes || (interactive && (await confirm(`Run ${picocolors.yellow(detected.command)} (from ${detected.source}) before accepting a task as done?`)));
+  if (!accepted) {
+    console.log(`${picocolors.yellow('!')} Verify command not set. Suggested: ${picocolors.cyan(`moo verify:set "${detected.command}"`)}`);
+    return;
+  }
+  container.workspaceService.updateWorkspace(ws.id, { verifyCommand: detected.command });
+  console.log(`${picocolors.green('✔')} Verify command set: ${picocolors.yellow(detected.command)} ${picocolors.dim(`(from ${detected.source}; change with moo verify:set)`)}`);
+}
+
+export async function initCommand(options: InitOptions = {}) {
+  const start = options.projectPath ? path.resolve(options.projectPath) : process.cwd();
+
+  // Registers the project (the repository root, or the main repository for a worktree)
+  const container = createServiceContainer({ projectPath: start });
+  const ws = container.activeWorkspace;
+  const root = container.projectPath;
   const globalDbPath = DatabaseManager.resolveGlobalDbPath();
 
   const report = (label: string, filePath: string, result: string) => {
     if (result === 'unchanged') return;
     console.log(`${picocolors.green('✔')} ${result[0].toUpperCase()}${result.slice(1)} ${label}: ${picocolors.cyan(filePath)}`);
   };
+
+  // Outside git, a marker makes the directory a project for the MCP server and hooks.
+  if (!container.location.isProject) {
+    const marker = path.join(root, '.moo.json');
+    fs.writeFileSync(marker, JSON.stringify({ workspace: ws.id, name: ws.name }, null, 2) + '\n');
+    report('project marker', marker, 'created');
+  }
 
   // AGENTS.md carries the protocol; every other agent file points at it or mirrors it.
   const agentsMdPath = path.join(root, 'AGENTS.md');
@@ -137,11 +199,17 @@ export async function initCommand(options: { projectPath?: string; rules?: boole
     }
   }
 
+  // Enforcement and evidence are on by default; each step can be skipped.
+  if (options.hooks !== false) installClaudeHooks('local', root);
+  const isGit = Boolean(GitContextService.repoRoots(root));
+  if (options.gitHooks !== false && isGit) installGitHooksHere(root);
+  await setupVerifyCommand(container, root, options);
+
   console.log(`\n${picocolors.bold(picocolors.green('✔ Initialized Moo Tasks workspace!'))}`);
   console.log(`  ${picocolors.gray('Workspace:')}      ${picocolors.bold(picocolors.cyan(ws.name))} (${picocolors.dim(ws.id)})`);
   console.log(`  ${picocolors.gray('Root Path:')}      ${picocolors.cyan(ws.rootPath)}`);
   console.log(`  ${picocolors.gray('Global Database:')} ${picocolors.yellow(globalDbPath)}`);
   console.log(`  ${picocolors.gray('Agent Rules:')}    ${picocolors.cyan('AGENTS.md, CLAUDE.md, .cursor/rules, .windsurf/rules')}`);
   console.log(`  ${picocolors.gray('Web UI:')}         ${picocolors.yellow('moo start')} ${picocolors.dim('(or npx moo-tasks start)')}`);
-  console.log(`  ${picocolors.gray('MCP Mode:')}       ${picocolors.yellow('moo mcp')} ${picocolors.dim('(or npx moo-tasks mcp)')}\n`);
+  console.log(`  ${picocolors.gray('Check setup:')}    ${picocolors.yellow('moo doctor')}\n`);
 }

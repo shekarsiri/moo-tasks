@@ -3,15 +3,34 @@ import path from 'path';
 import os from 'os';
 import picocolors from 'picocolors';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { EDIT_TOOL_MATCHER } from './hook.js';
 import { installGitHooks } from './git-hooks.js';
+import { ensureHookShim } from '../../infrastructure/hook-shim.js';
 
-const HOOK_COMMAND_PATTERN = /\bhook (session-start|pre-edit|post-edit|stop)\b/;
+/**
+ * Moo hook commands: the shim (`".../moo-hook" pre-edit`) and the older direct forms
+ * (`"node" "cli.js" hook pre-edit`, `moo hook pre-edit`), but not another tool's `--hook stop`.
+ */
+export const HOOK_COMMAND_PATTERN = /(?:moo-hook"?|(?:\bmoo|\bmoo-tasks|"[^"]*")\s+hook)\s+(session-start|pre-edit|post-edit|stop)\b/;
 
-/** Shell command that runs this installation's CLI directly (no npx startup cost per edit). */
+/**
+ * Shell command prefix hooks run: the stable shim (no npx startup per edit, and it survives Node
+ * upgrades), or this install's CLI directly when the shim cannot be written.
+ */
 export function hookCommandPrefix(): string {
+  const shim = ensureHookShim();
+  if (shim) return `"${shim}"`;
   const cli = fileURLToPath(new URL('../index.js', import.meta.url));
   return `"${process.execPath}" "${cli}" hook`;
+}
+
+export type HookScope = 'user' | 'project' | 'local';
+
+/** user: ~/.claude/settings.json; project: .claude/settings.json (shared); local: .claude/settings.local.json (personal). */
+export function claudeSettingsPath(scope: HookScope, root: string = process.cwd()): string {
+  if (scope === 'user') return path.join(os.homedir(), '.claude', 'settings.json');
+  return path.join(root, '.claude', scope === 'local' ? 'settings.local.json' : 'settings.json');
 }
 
 /**
@@ -89,26 +108,53 @@ function configureMcp(label: string, filePath: string, entry: Record<string, unk
   }
 }
 
-function installClaudeHooks(scope: string) {
-  const settingsPath =
-    scope === 'user'
-      ? path.join(os.homedir(), '.claude', 'settings.json')
-      : path.join(process.cwd(), '.claude', 'settings.json');
+/**
+ * Keeps a personal file out of commits through `.git/info/exclude`, which is local to this clone,
+ * so no tracked file (such as .gitignore) changes. Ignored when the directory is not a git repo.
+ */
+export function excludeFromGit(root: string, relativePath: string): boolean {
+  try {
+    const ignored = (() => {
+      try {
+        execFileSync('git', ['check-ignore', '-q', relativePath], { cwd: root, stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    if (ignored) return false;
+    const exclude = path.resolve(
+      root,
+      execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'], { cwd: root, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    );
+    fs.mkdirSync(path.dirname(exclude), { recursive: true });
+    const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf-8') : '';
+    fs.writeFileSync(exclude, `${current}${current && !current.endsWith('\n') ? '\n' : ''}/${relativePath}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function installClaudeHooks(scope: HookScope, root: string = process.cwd()): boolean {
+  const settingsPath = claudeSettingsPath(scope, root);
   const settings = readJsonConfig(settingsPath);
   if (!settings) {
     console.log(`${picocolors.yellow('!')} ${settingsPath} is not valid JSON; hooks not installed.`);
-    return;
+    return false;
   }
   writeJsonAtomic(settingsPath, mergeClaudeHooks(settings, hookCommandPrefix()));
+  if (scope === 'local') excludeFromGit(root, '.claude/settings.local.json');
   console.log(`${picocolors.green('✔')} Installed Claude Code hooks (${scope}): ${picocolors.cyan(settingsPath)}`);
   console.log(
     `  ${picocolors.dim('SessionStart resumes context (full after compaction); edits without a claimed task are blocked; edits renew the lease; Stop asks for a checkpoint on unsaved progress. Disable with MOO_HOOKS=off.')}`
   );
+  return true;
 }
 
-function installGitHooksHere() {
+export function installGitHooksHere(root: string = process.cwd()): boolean {
   try {
-    for (const r of installGitHooks(process.cwd(), hookCommandPrefix())) {
+    for (const r of installGitHooks(root, hookCommandPrefix())) {
       if (r.result === 'skipped-foreign') {
         console.log(
           `${picocolors.yellow('!')} ${r.path} belongs to another tool; add this line to it to link commits to tasks:\n    ${hookCommandPrefix()} ${r.hook} "$@" || true`
@@ -117,8 +163,10 @@ function installGitHooksHere() {
         console.log(`${picocolors.green('✔')} ${r.result === 'installed' ? 'Installed' : 'Updated'} git ${r.hook} hook: ${picocolors.cyan(r.path)}`);
       }
     }
+    return true;
   } catch (err: any) {
     console.log(`${picocolors.yellow('!')} Git hooks not installed (not a git repository?): ${err.message}`);
+    return false;
   }
 }
 
@@ -141,7 +189,7 @@ export async function installCommand(target: string, options: { hooks?: boolean;
   if (normalized === 'claude' || normalized === 'all') {
     configureMcp('Claude Code', path.join(os.homedir(), '.claude.json'), mcpConfigEntry);
     if (options.hooks) {
-      installClaudeHooks(options.scope === 'user' ? 'user' : 'project');
+      installClaudeHooks(options.scope === 'user' || options.scope === 'local' ? options.scope : 'project');
     }
   }
 

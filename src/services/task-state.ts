@@ -17,22 +17,32 @@ export function openBlockerIds(taskRepo: ITaskRepository, taskId: string): strin
 }
 
 /**
- * Drops changed files that another live claim in the workspace declared and this task did not:
- * with several agents in one checkout, git alone cannot tell whose edit a file is.
+ * The changed files (from git) that belong to this task. With several agents in one checkout git
+ * alone cannot tell whose edit a file is, so, in order of precision:
+ * 1. Files the post-edit hook recorded for this task: only changed files it touched or declared.
+ * 2. Otherwise files another live claim touched or declared are dropped, and when other agents are
+ *    working here, a task that declared files keeps only those.
+ * A lone agent without recorded edits keeps every changed file, as before.
  */
-export function withoutOthersClaimedFiles(
+export function attributeChanges(
   taskRepo: ITaskRepository,
   files: string[],
   task: Pick<Task, 'id' | 'workspaceId' | 'declaredFiles'>
 ): string[] {
-  const others = taskRepo
-    .list({ status: 'doing', isArchived: false, workspaceId: task.workspaceId })
-    .filter((t) => t.id !== task.id && hasLiveLease(t))
-    .flatMap((t) => t.declaredFiles || []);
-  if (others.length === 0) return files;
   const own = task.declaredFiles || [];
   const overlaps = (file: string, list: string[]) => list.some((d) => FileConflictDetector.pathsOverlap(file, d));
-  return files.filter((f) => overlaps(f, own) || !overlaps(f, others));
+
+  const touched = task.id ? new Set(taskRepo.listTouchedFiles(task.id)) : new Set<string>();
+  if (touched.size > 0) return files.filter((f) => touched.has(f) || overlaps(f, own));
+
+  const others = taskRepo
+    .list({ status: 'doing', isArchived: false, workspaceId: task.workspaceId })
+    .filter((t) => t.id !== task.id && hasLiveLease(t));
+  if (others.length === 0) return files;
+  const othersDeclared = others.flatMap((t) => t.declaredFiles || []);
+  const othersTouched = new Set(others.flatMap((t) => taskRepo.listTouchedFiles(t.id)));
+  const notTheirs = files.filter((f) => overlaps(f, own) || (!othersTouched.has(f) && !overlaps(f, othersDeclared)));
+  return own.length > 0 ? notTheirs.filter((f) => overlaps(f, own)) : notTheirs;
 }
 
 /** Drops the claim and lease. Callers use it whenever a task leaves `doing`. */

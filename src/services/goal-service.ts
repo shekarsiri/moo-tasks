@@ -7,12 +7,26 @@ import {
   Task,
 } from '../domain/types.js';
 import { deviationsOf } from '../domain/criteria.js';
-import { GoalCapExceededError, GoalNotFoundError, MandatoryReasonMissingError } from '../domain/errors.js';
+import { GoalCapExceededError, GoalNotFoundError, InvalidArgumentsError, MandatoryReasonMissingError } from '../domain/errors.js';
+import { hasLiveLease } from '../domain/lease.js';
 import { IDecisionRepository, IGoalRepository, ITaskRepository, IWorkspaceRepository } from '../infrastructure/repositories/interfaces.js';
 import { clearClaim, returnToQueue } from './task-state.js';
 
 export const ADHOC_GOAL_TITLE = 'Ad-hoc work';
 const ADHOC_GOAL_CAP = 25;
+const OPEN_TASK_STATUSES = ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'];
+
+/**
+ * Days a finished goal may sit idle before it is closed automatically (MOO_GOAL_AUTOCLOSE_DAYS,
+ * default 3); null when set to `off`. Agents rarely close goals themselves, and unclosed goals
+ * pile up in every session's context.
+ */
+export function goalAutoCloseDays(): number | null {
+  const raw = (process.env.MOO_GOAL_AUTOCLOSE_DAYS || '').trim().toLowerCase();
+  if (raw === 'off' || raw === 'false' || raw === 'never') return null;
+  const days = Number(raw);
+  return raw && Number.isFinite(days) && days >= 0 ? days : 3;
+}
 
 export class GoalService {
   constructor(
@@ -240,6 +254,98 @@ export class GoalService {
     }
 
     return { goal, droppedTaskCount: openTasks.length };
+  }
+
+  /**
+   * Completes active goals whose tasks are all finished (at least one done) and that saw no
+   * activity for idleDays, with a generated summary. idleDays 0 closes every finished goal (the
+   * board's bulk action). The Ad-hoc goal is a standing goal and never closes.
+   */
+  closeFinishedGoals(workspaceId: string, idleDays: number, now: Date = new Date()): Goal[] {
+    const closed: Goal[] = [];
+    for (const goal of this.goalRepo.list(undefined, 'active', workspaceId)) {
+      if (goal.title === ADHOC_GOAL_TITLE) continue;
+      const tasks = this.taskRepo.listByGoalId(goal.id);
+      if (!tasks.some((t) => t.status === 'done') || tasks.some((t) => OPEN_TASK_STATUSES.includes(t.status))) continue;
+      const lastActivity = Math.max(
+        new Date(goal.updatedAt).getTime(),
+        ...tasks.map((t) => new Date(t.completedAt || t.updatedAt).getTime())
+      );
+      if (now.getTime() - lastActivity < idleDays * 86_400_000) continue;
+      closed.push(
+        this.updateGoal(goal.id, {
+          status: 'completed',
+          summary:
+            idleDays > 0
+              ? `Closed automatically: every task was finished and the goal saw no activity for ${idleDays}+ days.`
+              : 'Closed from the board: every task was finished.',
+        })
+      );
+    }
+    return closed;
+  }
+
+  /** Session-start housekeeping: closes finished goals idle past goalAutoCloseDays(); never throws. */
+  closeIdleGoals(workspaceId: string | undefined): Goal[] {
+    const days = goalAutoCloseDays();
+    if (days === null || !workspaceId) return [];
+    try {
+      return this.closeFinishedGoals(workspaceId, days);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Moves a goal filed under the wrong project, with all of its tasks, to another workspace in one
+   * transaction. The Ad-hoc goal belongs to its workspace and stays. Tasks an agent is working on
+   * must be finished or released first, since that agent's session is scoped to the old workspace.
+   * Dependency links to tasks outside the goal are kept and reported.
+   */
+  moveGoal(
+    goalId: string,
+    targetWorkspaceId: string
+  ): { goal: Goal; movedTaskCount: number; crossWorkspaceDependencies: { taskId: string; dependsOnTaskId: string }[] } {
+    return this.taskRepo.runExclusive(() => {
+      const goal = this.getGoal(goalId);
+      const target = this.workspaceRepo?.findById(targetWorkspaceId);
+      if (!target) throw new InvalidArgumentsError(`Workspace ${targetWorkspaceId} not found.`);
+      if (goal.title === ADHOC_GOAL_TITLE) {
+        throw new InvalidArgumentsError('The "Ad-hoc work" goal belongs to its workspace and cannot be moved.');
+      }
+      if (goal.workspaceId === target.id) return { goal, movedTaskCount: 0, crossWorkspaceDependencies: [] };
+
+      const tasks = this.taskRepo.listByGoalId(goalId);
+      const claimed = tasks.filter((t) => t.status === 'doing' && hasLiveLease(t));
+      if (claimed.length > 0) {
+        throw new InvalidArgumentsError(
+          `${claimed.map((t) => t.id).join(', ')} ${claimed.length === 1 ? 'is' : 'are'} being worked on; finish or release ${claimed.length === 1 ? 'it' : 'them'} before moving the goal.`
+        );
+      }
+
+      const now = new Date().toISOString();
+      goal.workspaceId = target.id;
+      goal.projectPath = target.rootPath;
+      goal.updatedAt = now;
+      this.goalRepo.update(goal);
+      for (const task of tasks) {
+        task.workspaceId = target.id;
+        task.updatedAt = now;
+        this.taskRepo.update(task);
+      }
+
+      const ids = new Set(tasks.map((t) => t.id));
+      const crossWorkspaceDependencies: { taskId: string; dependsOnTaskId: string }[] = [];
+      for (const task of tasks) {
+        for (const dep of this.taskRepo.getDependencies(task.id)) {
+          if (!ids.has(dep)) crossWorkspaceDependencies.push({ taskId: task.id, dependsOnTaskId: dep });
+        }
+        for (const dependent of this.taskRepo.getDependents(task.id)) {
+          if (!ids.has(dependent)) crossWorkspaceDependencies.push({ taskId: dependent, dependsOnTaskId: task.id });
+        }
+      }
+      return { goal, movedTaskCount: tasks.length, crossWorkspaceDependencies };
+    });
   }
 
   reopenGoal(goalId: string, authorId: string, reopenTasks: boolean = true): Goal {

@@ -156,3 +156,13 @@ export class InvalidArgumentsError extends DomainError {
     this.name = 'InvalidArgumentsError';
   }
 }
+
+export class NoWorkspaceError extends DomainError {
+  constructor(public directory: string) {
+    super(
+      `No Moo workspace for ${directory}: it is not a git repository or a directory registered with \`moo init\`. Moo Tasks is inactive here.`,
+      'NO_WORKSPACE'
+    );
+    this.name = 'NoWorkspaceError';
+  }
+}

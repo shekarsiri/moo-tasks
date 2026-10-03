@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
-import { createServiceContainer, ServiceContainer } from '../services/index.js';
+import { createServiceContainer, RegisteredContainer as ServiceContainer } from '../services/index.js';
 import {
   InvalidTaskStateError,
   NotTaskHolderError,
@@ -862,11 +862,11 @@ describe('Workspace verify command', async () => {
 });
 
 describe('Web board request guard', async () => {
-  const { buildServer } = await import('../server/app.js');
+  const { boardServer } = await import('./helpers.js');
 
   it('serves health and same-host requests but rejects foreign Host and Origin headers', async () => {
     const container = createServiceContainer({ inMemory: true, projectPath: '/test/web' });
-    const app = buildServer(container);
+    const app = boardServer(container);
 
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     expect(health.json()).toMatchObject({ ok: true, service: 'moo-tasks' });
@@ -898,7 +898,7 @@ describe('Web board request guard', async () => {
       container.taskLifecycleService.createTask({ title, acceptanceCriteria: 'x', workspaceId });
     create('Task in A', container.activeWorkspace.id);
     create('Task in B', other.id);
-    const app = buildServer(container);
+    const app = boardServer(container);
     const titles = async (headers: Record<string, string> = {}) =>
       (await app.inject({ method: 'GET', url: '/api/tasks', headers: { host: 'localhost', ...headers } }))
         .json()

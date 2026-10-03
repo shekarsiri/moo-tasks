@@ -55,6 +55,20 @@ export class SqliteWorkspaceRepository implements IWorkspaceRepository {
     return row ? this.mapRow(row) : null;
   }
 
+  listEmpty(): Workspace[] {
+    // Rows from before workspace ids were backfilled are matched by project path, as list queries do.
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM workspaces w
+         WHERE NOT EXISTS (SELECT 1 FROM goals g WHERE g.workspace_id = w.id OR (g.workspace_id IS NULL AND g.project_path = w.root_path))
+           AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.workspace_id = w.id)
+           AND NOT EXISTS (SELECT 1 FROM decisions d WHERE d.workspace_id = w.id OR (d.workspace_id IS NULL AND d.project_path = w.root_path))
+         ORDER BY name ASC`
+      )
+      .all();
+    return rows.map((r) => this.mapRow(r));
+  }
+
   list(): Workspace[] {
     const stmt = this.db.prepare(`SELECT * FROM workspaces ORDER BY name ASC`);
     const rows = stmt.all();

@@ -1,5 +1,5 @@
 import picocolors from 'picocolors';
-import { createServiceContainer } from '../../services/index.js';
+import { openCliWorkspace } from '../workspace.js';
 
 export async function listCommand(options: {
   goal?: string;
@@ -9,13 +9,28 @@ export async function listCommand(options: {
   tag?: string;
   agent?: string;
   deferred?: boolean;
+  stale?: boolean;
   projectPath?: string;
   json?: boolean;
 }) {
-  const root = options.projectPath ? options.projectPath : process.cwd();
-  const container = createServiceContainer({ projectPath: root });
+  const { container, workspace } = openCliWorkspace(options.projectPath);
 
-  const filter: any = { isArchived: false };
+  if (options.stale) {
+    const stale = container.sessionService.findStaleTasks(workspace.id, container.projectPath);
+    if (options.json) {
+      console.log(JSON.stringify(stale.map(({ task, reason }) => ({ ...task, staleReason: reason })), null, 2));
+      return;
+    }
+    console.log(`\n${picocolors.bold(picocolors.blue('🧹 STALE BACKLOG'))} (${stale.length})\n`);
+    for (const { task, reason } of stale) {
+      console.log(`  ${picocolors.bold(task.id)} (${picocolors.dim(task.priority)}) ${task.title}`);
+      console.log(`    ${picocolors.gray(reason)}`);
+    }
+    console.log(stale.length ? `\n  Drop or reschedule them on the board, or with moo_drop_task / moo_update_task.\n` : '');
+    return;
+  }
+
+  const filter: any = { isArchived: false, workspaceId: workspace.id };
   if (options.goal) filter.goalId = options.goal;
   if (options.status) filter.status = options.status;
   if (options.priority) filter.priority = options.priority;

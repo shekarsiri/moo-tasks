@@ -19,12 +19,15 @@ function setTabWorkspaceId(id) {
   }
 }
 const nativeFetch = window.fetch.bind(window);
+// The server puts the board token in the page; board writes carry it (see src/server/board-auth.ts).
+const BOARD_TOKEN = document.querySelector('meta[name="moo-token"]')?.content || '';
 window.fetch = (input, init = {}) => {
   const url = typeof input === 'string' ? input : input.url;
-  const wsId = getTabWorkspaceId();
-  if (wsId && url.startsWith('/api/')) {
+  if (url.startsWith('/api/')) {
+    const wsId = getTabWorkspaceId();
     const headers = new Headers(init.headers || {});
-    if (!headers.has('X-Moo-Workspace')) headers.set('X-Moo-Workspace', wsId);
+    if (wsId && !headers.has('X-Moo-Workspace')) headers.set('X-Moo-Workspace', wsId);
+    if (BOARD_TOKEN && !headers.has('X-Moo-Token')) headers.set('X-Moo-Token', BOARD_TOKEN);
     init = { ...init, headers };
   }
   return nativeFetch(input, init);
@@ -3699,6 +3702,12 @@ async function renderGoalDetails(goalId) {
           <button class="btn-primary text-xs flex items-center gap-1.5" onclick="openCreateTaskForGoal(${jsArg(g.id)})">
             <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Issue
           </button>
+          ${g.title !== 'Ad-hoc work' && state.workspaces.length > 1
+            ? `<button class="btn-secondary text-xs flex items-center gap-1.5" onclick="promptMoveGoal(${jsArg(g.id)}, ${jsArg(g.title)})" title="Filed under the wrong project? Move it with all of its issues">
+                <i data-lucide="folder-input" class="w-3.5 h-3.5"></i> Move
+              </button>`
+            : ''
+          }
           ${g.status === 'active'
             ? `<button class="btn-danger text-xs flex items-center gap-1" onclick="promptKillGoal(${jsArg(g.id)})"><i data-lucide="x-circle" class="w-3.5 h-3.5"></i> Kill Goal</button>`
             : `<button class="btn-success text-xs flex items-center gap-1" onclick="reopenGoal(${jsArg(g.id)})"><i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reopen Goal</button>`
@@ -4005,6 +4014,7 @@ function renderReviewFeed() {
               <div class="text-[10px] text-slate-500 uppercase font-mono mb-1">Files Modified:</div>
               <div class="flex flex-wrap gap-1">
                 ${ev.filesModified.map((f) => `<span class="inline-code font-mono text-[11px] text-slate-300 bg-surface border border-borderDefault px-1.5 py-0.5 rounded">${escapeHtml(f)}</span>`).join('')}
+                ${ev.filesModifiedTotal > ev.filesModified.length ? `<span class="font-mono text-[11px] text-slate-500 px-1.5 py-0.5">+${ev.filesModifiedTotal - ev.filesModified.length} more</span>` : ''}
               </div>
             </div>
           ` : ''}
@@ -4202,7 +4212,10 @@ function resumeGoalList(goals) {
   if (!goals.length) return '';
   return `
     <div class="bg-surface border border-subtle p-4 rounded-lg mt-3">
-      <h3 class="text-sm font-bold text-slate-200 mb-2 flex items-center gap-1.5"><i data-lucide="flag" class="w-4 h-4 text-emerald-400"></i> Goals ready to close <span class="text-slate-500 font-mono text-xs">${goals.length}</span></h3>
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <h3 class="text-sm font-bold text-slate-200 flex items-center gap-1.5"><i data-lucide="flag" class="w-4 h-4 text-emerald-400"></i> Goals ready to close <span class="text-slate-500 font-mono text-xs">${goals.length}</span></h3>
+        ${goals.length > 1 ? `<button class="btn-success text-xs shrink-0" onclick="closeFinishedGoals()">Close all ${goals.length}</button>` : ''}
+      </div>
       <div class="space-y-1.5">
         ${goals.map((g) => `
           <div class="p-2 bg-card rounded border border-subtle flex items-center justify-between gap-2">
@@ -4819,6 +4832,55 @@ window.promptKillGoal = (goalId) => {
     showToast('Goal killed and child tasks dropped', 'info');
     refreshAll();
   });
+};
+
+window.closeFinishedGoals = async () => {
+  const res = await fetch('/api/goals/close-finished', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.success === false) {
+    showToast(data.error || 'Could not close the goals', 'error');
+    return;
+  }
+  showToast(`Closed ${data.closedCount} finished goal(s); each has a generated summary`, 'success');
+  refreshAll();
+};
+
+window.promptMoveGoal = (goalId, goalTitle) => {
+  const current = getTabWorkspaceId() || state.activeWorkspace?.id;
+  const targets = state.workspaces.filter((w) => w.id !== current);
+  if (targets.length === 0) {
+    showToast('There is no other workspace to move it to', 'info');
+    return;
+  }
+  const modal = document.getElementById('modalMoveGoal');
+  const select = document.getElementById('selectMoveGoalWorkspace');
+  select.innerHTML = targets
+    .map((w) => `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)} — ${escapeHtml(w.rootPath)}</option>`)
+    .join('');
+  document.getElementById('moveGoalSummary').textContent = `"${goalTitle}" and all of its issues will belong to the chosen workspace.`;
+  modal.classList.remove('hidden');
+  document.getElementById('formMoveGoal').onsubmit = async (e) => {
+    e.preventDefault();
+    modal.classList.add('hidden');
+    const target = targets.find((w) => w.id === select.value);
+    const res = await fetch(`/api/goals/${goalId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: select.value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      showToast(data.error || 'Could not move the goal', 'error');
+      return;
+    }
+    const crossLinks = data.crossWorkspaceDependencies?.length || 0;
+    showToast(
+      `Moved ${data.movedTaskCount} issue(s) to ${target ? target.name : 'the workspace'}${crossLinks ? `; ${crossLinks} dependency link(s) now cross workspaces` : ''}`,
+      'success'
+    );
+    switchView('goals');
+    refreshAll();
+  };
 };
 
 window.reopenGoal = async (goalId) => {

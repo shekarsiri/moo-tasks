@@ -1,9 +1,86 @@
+import fs from 'fs';
 import { Database as DatabaseType } from 'better-sqlite3';
+import { noteGitContext, slimStoredEvidence } from '../../domain/evidence.js';
+
+interface MigrationContext {
+  /** The step may rewrite stored data: a backup was taken, or there was nothing worth one. */
+  safeToRewrite: boolean;
+}
 
 interface Migration {
   version: number;
   name: string;
-  up: (db: DatabaseType) => void;
+  up: (db: DatabaseType, context: MigrationContext) => void;
+  /**
+   * For steps that rewrite stored data: whether this database holds data worth copying aside
+   * (VACUUM INTO) first. A failed copy leaves safeToRewrite false.
+   */
+  backupFirst?: (db: DatabaseType) => boolean;
+  /** Reclaim the space the step freed (VACUUM), best effort, after its transaction commits. */
+  compactAfter?: boolean;
+}
+
+/** Copies the database next to itself (`tasks.db.backup.<time>-<label>`); null for in-memory or on failure. */
+export function backupDatabase(db: DatabaseType, label: string): string | null {
+  if (db.memory || !db.name) return null;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
+  let target = `${db.name}.backup.${stamp}-${label}`;
+  for (let n = 2; fs.existsSync(target); n++) target = `${db.name}.backup.${stamp}-${label}-${n}`;
+  try {
+    db.prepare('VACUUM INTO ?').run(target);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/** Rebuilds the file to drop freed pages and truncates the WAL. Needs a moment without other writers. */
+export function compactDatabase(db: DatabaseType): boolean {
+  if (db.memory) return false;
+  try {
+    db.exec('VACUUM');
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rewrites git data stored by earlier versions: notes keep only branch and commit, evidence loses
+ * whole-tree file lists and multi-line diff stats, and long file lists are capped.
+ */
+export function slimGitHistory(db: DatabaseType): { notes: number; tasks: number } {
+  let notes = 0;
+  const updateNote = db.prepare(`UPDATE task_notes SET git_context = ? WHERE id = ?`);
+  for (const row of db.prepare(`SELECT id, git_context FROM task_notes WHERE git_context IS NOT NULL`).all() as { id: string; git_context: string }[]) {
+    let slim: string | null = null;
+    try {
+      const ctx = noteGitContext(JSON.parse(row.git_context));
+      slim = ctx ? JSON.stringify(ctx) : null;
+    } catch {
+      // Unparseable snapshot: drop it
+    }
+    if (slim !== row.git_context) {
+      updateNote.run(slim, row.id);
+      notes++;
+    }
+  }
+  let tasks = 0;
+  const updateTask = db.prepare(`UPDATE tasks SET evidence = ? WHERE id = ?`);
+  for (const row of db.prepare(`SELECT id, evidence FROM tasks WHERE evidence IS NOT NULL`).all() as { id: string; evidence: string }[]) {
+    try {
+      const evidence = JSON.parse(row.evidence);
+      const slim = slimStoredEvidence(evidence);
+      if (slim !== evidence) {
+        updateTask.run(JSON.stringify(slim), row.id);
+        tasks++;
+      }
+    } catch {
+      // Leave unparseable evidence as it is
+    }
+  }
+  return { notes, tasks };
 }
 
 function hasColumn(db: DatabaseType, table: string, column: string): boolean {
@@ -78,6 +155,45 @@ const MIGRATIONS: Migration[] = [
     version: 7,
     name: 'remember who was interrupted when a lease is auto-released',
     up: (db) => addColumn(db, 'tasks', 'interrupted_from TEXT'),
+  },
+  {
+    version: 8,
+    name: 'files each task edited, recorded by the post-edit hook',
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_file_touches (
+          task_id TEXT NOT NULL,
+          path TEXT NOT NULL,
+          agent_id TEXT,
+          touched_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, path),
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+        );
+      `),
+  },
+  {
+    version: 9,
+    name: 'slim stored git snapshots (backed up first, compacted after)',
+    backupFirst: (db) => Boolean(db.prepare(`SELECT 1 FROM task_notes WHERE git_context IS NOT NULL UNION ALL SELECT 1 FROM tasks WHERE evidence IS NOT NULL LIMIT 1`).get()),
+    compactAfter: true,
+    // Without a backup the rewrite is skipped; `moo db:compact` can run it later.
+    up: (db, { safeToRewrite }) => {
+      if (safeToRewrite) slimGitHistory(db);
+    },
+  },
+  {
+    version: 10,
+    name: 'agent sessions: git baseline at session start, for the stop hook',
+    up: (db) =>
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+          session_id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          baseline TEXT,
+          started_at TEXT NOT NULL,
+          nudged_at TEXT
+        );
+      `),
   },
 ];
 
@@ -246,17 +362,24 @@ export class DatabaseMigrator {
     // Version 1 is the baseline above; databases from before versioning may lack its row.
     db.prepare(`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?)`).run(new Date().toISOString());
 
+    const isApplied = (version: number) => Boolean(db.prepare(`SELECT 1 FROM schema_version WHERE version = ?`).get(version));
     for (const migration of MIGRATIONS) {
+      if (isApplied(migration.version)) continue;
+      // VACUUM INTO cannot run inside a transaction, so the copy is taken just before it.
+      const needsBackup = !db.memory && Boolean(migration.backupFirst?.(db));
+      const safeToRewrite = !needsBackup || backupDatabase(db, `pre-v${migration.version}`) !== null;
+      let ranHere = false;
       db.transaction(() => {
         // Re-checked inside the lock: another process may have applied it a moment ago.
-        const applied = db.prepare(`SELECT 1 FROM schema_version WHERE version = ?`).get(migration.version);
-        if (applied) return;
-        migration.up(db);
+        if (isApplied(migration.version)) return;
+        migration.up(db, { safeToRewrite });
         db.prepare(`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`).run(
           migration.version,
           new Date().toISOString()
         );
+        ranHere = true;
       }).immediate();
+      if (ranHere && migration.compactAfter) compactDatabase(db);
     }
   }
 }

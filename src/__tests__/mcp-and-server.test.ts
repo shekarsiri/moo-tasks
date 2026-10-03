@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createServiceContainer, ServiceContainer } from '../services/index.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { createServiceContainer, RegisteredContainer as ServiceContainer } from '../services/index.js';
 import { setupMcpServer } from '../mcp/server.js';
-import { buildServer } from '../server/app.js';
+import { boardServer } from './helpers.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -19,6 +22,33 @@ describe('MCP Tools & Fastify HTTP Server', () => {
   });
 
   describe('MCP Protocol Server Tools', () => {
+    const initialize = (server: any) =>
+      server._requestHandlers.get('initialize')({
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test-client', version: '1.0.0' } },
+      });
+
+    it('sends the Moo protocol as server instructions on initialize', async () => {
+      const res = await initialize(setupMcpServer(container));
+      expect(res.instructions).toContain('moo_session_resume');
+      expect(res.instructions).toContain('moo_quick_start');
+      expect(res.instructions).toContain('moo_complete_task');
+      expect(res.instructions.length).toBeLessThan(1200);
+    });
+
+    it('says Moo is inactive in instructions when the directory has no workspace', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'moo-plain-'));
+      try {
+        const plain = createServiceContainer({ inMemory: true, projectPath: dir, register: 'if-project' });
+        const res = await initialize(setupMcpServer(plain));
+        expect(res.instructions).toContain('inactive');
+        expect(res.instructions).toContain('moo init');
+        expect(res.instructions).not.toContain('moo_quick_start');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it('lists all registered MCP tools including update, dependencies, and bulk tools', async () => {
       const server = setupMcpServer(container);
       const listHandler = (server as any)._requestHandlers.get(ListToolsRequestSchema.shape.method.value);
@@ -288,7 +318,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
 
   describe('Fastify REST Server Endpoints', () => {
     it('handles REST API calls for goals, tasks, decisions and export', async () => {
-      const app = buildServer(container);
+      const app = boardServer(container);
 
       // Create Goal via POST /api/goals
       const goalRes = await app.inject({
@@ -415,7 +445,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
     });
 
     it('hydrates dependsOnTaskIds in list responses for REST and MCP consumers', async () => {
-      const app = buildServer(container);
+      const app = boardServer(container);
 
       // Two predecessor tasks with no dependencies
       const rootRes = await app.inject({
@@ -856,7 +886,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
     });
 
     it('tests REST endpoints for markdown import, search, and stall diagnostics', async () => {
-      const server = buildServer(container);
+      const server = boardServer(container);
 
       // 1. POST /api/import/markdown
       const importRes = await server.inject({
@@ -1046,7 +1076,7 @@ describe('MCP Tools & Fastify HTTP Server', () => {
     });
 
     it('handles Fastify HTTP API workspace management, rename, and deletion', async () => {
-      const app = buildServer(container);
+      const app = boardServer(container);
 
       // 1. List workspaces
       const wsListRes = await app.inject({

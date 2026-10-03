@@ -14,12 +14,16 @@ import { exportCommand } from './commands/export.js';
 import { importCommand } from './commands/import.js';
 import { searchCommand } from './commands/search.js';
 import { runVerify, setVerifyCommand } from './commands/verify.js';
+import { doctorCommand } from './commands/doctor.js';
+import { dbCompactCommand } from './commands/db.js';
 import {
   workspacesCommand,
   addWorkspaceCommand,
   renameWorkspaceCommand,
   setRemoteWorkspaceCommand,
   removeWorkspaceCommand,
+  pruneWorkspacesCommand,
+  moveGoalCommand,
 } from './commands/workspaces.js';
 
 
@@ -64,6 +68,18 @@ program
   .alias('ws:delete')
   .description('Unregister a workspace from the global registry')
   .action(removeWorkspaceCommand);
+
+program
+  .command('workspaces:prune')
+  .alias('ws:prune')
+  .description('List workspaces nothing was ever tracked in (no goals, tasks or decisions); remove them with --yes')
+  .option('-y, --yes', 'Remove them')
+  .action(pruneWorkspacesCommand);
+
+program
+  .command('goal:move <goalId> <workspace>')
+  .description('Move a goal and all of its tasks to another workspace (id, name or path), e.g. one filed under the wrong project')
+  .action(moveGoalCommand);
 
 program
   .command('search <query>')
@@ -113,6 +129,7 @@ program
   .option('--tag <tag>', 'Filter by Tag name')
   .option('-a, --agent <agentId>', 'Filter by claimed agent')
   .option('--deferred', 'Include or filter deferred tasks')
+  .option('--stale', 'Only stale backlog (untouched for weeks, or declared files gone), with the reason')
   .option('--json', 'Output raw JSON')
   .option('--project-path <path>', 'Custom project root path')
   .action(listCommand);
@@ -150,9 +167,13 @@ program
 
 program
   .command('init')
-  .description('Register this repository and write or refresh the Moo protocol block in agent rule files')
+  .description('Set up this project: register it, write the Moo protocol into agent rule files, install Claude Code and git hooks, and set a detected verify command')
   .option('-f, --force', 'Kept for compatibility; init always refreshes only its managed block')
   .option('--rules', 'Kept for compatibility; same as plain init')
+  .option('--no-hooks', 'Do not install the Claude Code hooks (.claude/settings.local.json)')
+  .option('--no-git-hooks', 'Do not install the commit-linking git hooks')
+  .option('--no-verify', 'Do not set a verify command')
+  .option('-y, --yes', 'Set the detected verify command without asking')
   .option('--project-path <path>', 'Custom project root path')
   .action(initCommand);
 
@@ -161,7 +182,7 @@ program
   .description('Install & configure MCP plugin for claude, cursor, windsurf, antigravity, codex, or all; "git" installs only the commit-linking git hooks')
   .option('--hooks', 'Claude Code: also install SessionStart/PreToolUse/PostToolUse/Stop hooks (resume context, enforce claiming, ask for checkpoints)')
   .option('--git-hooks', 'Also install git prepare-commit-msg/post-commit hooks that link commits to tasks (Moo-Task: trailers)')
-  .option('--scope <scope>', 'Where to install hooks: project (.claude/settings.json) or user (~/.claude/settings.json)', 'project')
+  .option('--scope <scope>', 'Where to install hooks: project (.claude/settings.json, shared), local (.claude/settings.local.json, personal) or user (~/.claude/settings.json)', 'project')
   .action(installCommand);
 
 program
@@ -178,6 +199,19 @@ program
   .option('--clear', 'Remove the verify command')
   .option('--project-path <path>', 'Custom project root path')
   .action(setVerifyCommand);
+
+program
+  .command('doctor')
+  .description('Check this project\'s Moo setup (workspace, rules, MCP, hooks, verify command, board, database) and print fixes')
+  .option('--json', 'Output raw JSON')
+  .option('--project-path <path>', 'Custom project root path')
+  .action(doctorCommand);
+
+program
+  .command('db:compact')
+  .description('Back up the database, slim stored git snapshots and rebuild the file to reclaim space')
+  .option('--no-backup', 'Skip the backup copy')
+  .action(dbCompactCommand);
 
 program
   .command('hook <event> [args...]')

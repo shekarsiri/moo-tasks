@@ -45,6 +45,8 @@ export interface TaskEvidence {
   commandsRun?: string[];
   outputSnippet?: string;
   filesModified?: string[];
+  /** Set when more files changed than filesModified lists. */
+  filesModifiedTotal?: number;
   testProof?: string;
   notes?: string;
   gitContext?: GitContext;

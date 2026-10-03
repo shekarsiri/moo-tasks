@@ -1,19 +1,19 @@
 import picocolors from 'picocolors';
-import { createServiceContainer } from '../../services/index.js';
+import { openCliWorkspace } from '../workspace.js';
 
 export async function statusCommand(options: { projectPath?: string; agent?: string; raw?: boolean }) {
-  const root = options.projectPath ? options.projectPath : process.cwd();
-  const container = createServiceContainer({ projectPath: root });
+  const { container, workspace } = openCliWorkspace(options.projectPath);
+  const root = container.projectPath;
   const agentId = options.agent;
 
-  const context = container.sessionService.getCompactContext(root, agentId);
+  const context = container.sessionService.getCompactContext(root, agentId, 'standard', workspace.id);
 
   if (options.raw) {
     console.log(context);
     return;
   }
 
-  const summary = container.sessionService.whereDidILeaveOff(root, agentId);
+  const summary = container.sessionService.whereDidILeaveOff(root, agentId, workspace.id);
 
   console.log(`\n${picocolors.bold(picocolors.blue('🐮 MOO TASKS STATUS & CONTEXT OVERVIEW'))}`);
   console.log(`  ${picocolors.gray('Project:')} ${picocolors.yellow(container.projectPath)}\n`);

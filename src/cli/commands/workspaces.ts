@@ -4,7 +4,7 @@ import { createServiceContainer } from '../../services/index.js';
 import { DatabaseManager } from '../../infrastructure/db/database.js';
 
 export async function workspacesCommand(options: { json?: boolean; projectPath?: string }) {
-  const container = createServiceContainer({ projectPath: options.projectPath });
+  const container = createServiceContainer({ projectPath: options.projectPath, register: 'never' });
   const workspaces = container.workspaceService.listWorkspaces();
 
   const details = workspaces.map((ws) => {
@@ -22,7 +22,7 @@ export async function workspacesCommand(options: { json?: boolean; projectPath?:
       totalGoals: goals.length,
       openTasks: openTasks.length,
       totalTasks: tasks.length,
-      isActive: ws.id === container.activeWorkspace.id,
+      isActive: ws.id === container.activeWorkspace?.id,
       createdAt: ws.createdAt,
     };
   });
@@ -55,7 +55,7 @@ export async function workspacesCommand(options: { json?: boolean; projectPath?:
 }
 
 export async function addWorkspaceCommand(dirPath: string, options: { name?: string }) {
-  const container = createServiceContainer();
+  const container = createServiceContainer({ register: 'never' });
   const resolved = path.resolve(dirPath || process.cwd());
   const ws = container.workspaceService.getOrCreateWorkspace(resolved, options.name);
 
@@ -64,7 +64,7 @@ export async function addWorkspaceCommand(dirPath: string, options: { name?: str
 }
 
 export async function renameWorkspaceCommand(idOrName: string, newName: string) {
-  const container = createServiceContainer();
+  const container = createServiceContainer({ register: 'never' });
   const ws = container.workspaceService.getWorkspace(idOrName);
   if (!ws) {
     console.error(picocolors.red(`Error: Workspace "${idOrName}" not found.`));
@@ -81,7 +81,7 @@ export async function renameWorkspaceCommand(idOrName: string, newName: string) 
 }
 
 export async function setRemoteWorkspaceCommand(idOrName: string, gitRemote: string) {
-  const container = createServiceContainer();
+  const container = createServiceContainer({ register: 'never' });
   const ws = container.workspaceService.getWorkspace(idOrName);
   if (!ws) {
     console.error(picocolors.red(`Error: Workspace "${idOrName}" not found.`));
@@ -93,7 +93,7 @@ export async function setRemoteWorkspaceCommand(idOrName: string, gitRemote: str
 }
 
 export async function removeWorkspaceCommand(idOrName: string) {
-  const container = createServiceContainer();
+  const container = createServiceContainer({ register: 'never' });
   const ws = container.workspaceService.getWorkspace(idOrName);
   if (!ws) {
     console.error(picocolors.red(`Error: Workspace "${idOrName}" not found.`));
@@ -102,4 +102,44 @@ export async function removeWorkspaceCommand(idOrName: string) {
 
   container.workspaceService.deleteWorkspace(ws.id);
   console.log(`${picocolors.green('✔')} Removed workspace: ${picocolors.cyan(ws.name)} (${ws.id})`);
+}
+
+/** Unregisters workspaces nothing was ever tracked in; lists them first, deletes only with --yes. */
+export async function pruneWorkspacesCommand(options: { yes?: boolean }) {
+  const container = createServiceContainer({ register: 'never' });
+  const empty = container.workspaceService.listEmptyWorkspaces();
+  if (empty.length === 0) {
+    console.log(`${picocolors.green('✔')} No empty workspaces.`);
+    return;
+  }
+  console.log(`\n${picocolors.bold(`${empty.length} workspace(s) with no goals, tasks or decisions:`)}`);
+  for (const ws of empty) console.log(`  - ${picocolors.cyan(ws.name)} ${picocolors.dim(`(${ws.id})`)} ${ws.rootPath}`);
+  if (!options.yes) {
+    console.log(`\nRun ${picocolors.yellow('moo ws:prune --yes')} to remove them. A project is registered again the next time Moo is used in it.\n`);
+    return;
+  }
+  for (const ws of empty) container.workspaceService.deleteWorkspace(ws.id);
+  console.log(`\n${picocolors.green('✔')} Removed ${empty.length} empty workspace(s).\n`);
+}
+
+/** Moves a goal (and its tasks) that was filed under the wrong project to another workspace. */
+export async function moveGoalCommand(goalId: string, workspace: string) {
+  const container = createServiceContainer({ register: 'never' });
+  const target = container.workspaceService.getWorkspace(workspace);
+  if (!target) {
+    console.error(picocolors.red(`Error: Workspace "${workspace}" not found. List them with moo ws.`));
+    process.exit(1);
+  }
+  try {
+    const result = container.goalService.moveGoal(goalId, target.id);
+    console.log(
+      `${picocolors.green('✔')} Moved goal ${picocolors.cyan(result.goal.id)} "${result.goal.title}" and ${result.movedTaskCount} task(s) to ${picocolors.bold(target.name)}.`
+    );
+    for (const link of result.crossWorkspaceDependencies) {
+      console.log(`  ${picocolors.yellow('!')} ${link.taskId} depends on ${link.dependsOnTaskId}, which is in another workspace now.`);
+    }
+  } catch (err: any) {
+    console.error(picocolors.red(`Error: ${err.message}`));
+    process.exit(1);
+  }
 }

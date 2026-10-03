@@ -226,6 +226,18 @@ export class SqliteTaskRepository implements ITaskRepository {
    * Runs fn inside a BEGIN IMMEDIATE transaction so read-check-write sequences are
    * serialized across every process sharing the database file.
    */
+  recordFileTouch(taskId: string, filePath: string, agentId: string | undefined, at: string): void {
+    this.db
+      .prepare(`INSERT OR IGNORE INTO task_file_touches (task_id, path, agent_id, touched_at) VALUES (?, ?, ?, ?)`)
+      .run(taskId, filePath, agentId || null, at);
+  }
+
+  listTouchedFiles(taskId: string): string[] {
+    return (this.db.prepare(`SELECT path FROM task_file_touches WHERE task_id = ? ORDER BY path`).all(taskId) as { path: string }[]).map(
+      (r) => r.path
+    );
+  }
+
   runExclusive<T>(fn: () => T): T {
     if (this.db.inTransaction) return fn();
     return this.db.transaction(fn).immediate();

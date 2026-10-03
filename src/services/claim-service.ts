@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { noteGitContext } from '../domain/evidence.js';
 import { Decision, Task, TaskNote, TaskStatus } from '../domain/types.js';
 import {
   AgentConcurrencyLimitError,
@@ -165,7 +166,7 @@ export class ClaimService {
           : isTakeover
             ? `Resumed interrupted task from ${previousHolder} (Attempt #${task.attemptCount} continues, Lease: ${leaseSeconds}s). Session: ${sessionId}`
             : `Claimed task (Attempt #${task.attemptCount}, Lease: ${leaseSeconds}s). Session: ${sessionId}`,
-        gitContext,
+        gitContext: noteGitContext(gitContext),
         createdAt: now.toISOString(),
       });
 

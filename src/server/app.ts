@@ -4,9 +4,10 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { ServiceContainer } from '../services/index.js';
+import { RegisteredContainer } from '../services/index.js';
 import { DatabaseManager } from '../infrastructure/db/database.js';
 import { Workspace } from '../domain/types.js';
+import { BOARD_TOKEN_COOKIE, BOARD_TOKEN_HEADER, boardToken, cookieValue, injectToken, isLoopback, tokensMatch } from './board-auth.js';
 import {
   DomainError,
   GoalNotFoundError,
@@ -22,7 +23,11 @@ export interface ServerOptions {
   host?: string;
   /** Serving on the LAN: also accept requests addressed to this machine's network IPs. */
   lan?: boolean;
+  /** Board token (default: the machine's, from ~/.moo/board-token). */
+  token?: string;
 }
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** Hostnames a request may be addressed to. Anything else is DNS rebinding or a stray proxy. */
 function allowedHostnames(lan: boolean): Set<string> {
@@ -46,7 +51,7 @@ function hostnameOf(hostHeader: string): string {
   return value.split(':')[0];
 }
 
-export function buildServer(container: ServiceContainer, options: ServerOptions = {}): FastifyInstance {
+export function buildServer(container: RegisteredContainer, options: ServerOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: false,
   });
@@ -68,6 +73,37 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
       if (!hostnames.has(originHost) && !hostnames.has(`[${originHost}]`)) {
         return reply.status(403).send({ success: false, error: 'Cross-origin requests are not allowed.' });
       }
+    }
+  });
+
+  // Board token: required for every request from another device, and for writes from this one.
+  const token = options.token || boardToken();
+  app.addHook('onRequest', async (req, reply) => {
+    const url = new URL(req.url, 'http://board.local');
+    const presented =
+      (req.headers[BOARD_TOKEN_HEADER] as string | undefined) || cookieValue(req.headers.cookie, BOARD_TOKEN_COOKIE);
+    if (!isLoopback(req.ip)) {
+      // The --lan link carries the token once; keep it in a cookie and drop it from the address bar.
+      const fromLink = url.searchParams.get('token');
+      if (req.method === 'GET' && tokensMatch(fromLink || undefined, token)) {
+        url.searchParams.delete('token');
+        return reply
+          .header('Set-Cookie', `${BOARD_TOKEN_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/`)
+          .redirect(url.pathname + url.search);
+      }
+      if (!tokensMatch(presented, token) && url.pathname !== '/api/health') {
+        return reply
+          .status(401)
+          .send({ success: false, error: 'This board needs its access link: open the URL printed by `moo start --lan` on the host machine.' });
+      }
+      return;
+    }
+    if (MUTATING_METHODS.has(req.method) && url.pathname.startsWith('/api/') && !tokensMatch(presented, token)) {
+      return reply.status(403).send({
+        success: false,
+        code: 'BOARD_TOKEN_REQUIRED',
+        error: 'Board changes are made in the board itself. Agents use the Moo MCP tools; verifying, rejecting, answering questions and changing the verify command are for people in the board.',
+      });
     }
   });
 
@@ -419,6 +455,23 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
     const result = container.goalService.killGoal(id, reason, authorId || 'human');
     broadcast('goals_updated', { goalId: id, action: 'killed' });
     broadcast('tasks_updated', { goalId: id });
+    return { success: true, ...result };
+  });
+
+  app.post('/api/goals/close-finished', async (req) => {
+    const closed = container.goalService.closeFinishedGoals(wsOf(req).id, 0);
+    if (closed.length) broadcast('goals_updated', { closed: closed.map((g) => g.id) });
+    return { success: true, closedCount: closed.length, goals: closed.map((g) => ({ id: g.id, title: g.title })) };
+  });
+
+  app.post('/api/goals/:id/move', async (req, reply) => {
+    const { id } = req.params as any;
+    const { workspaceId } = (req.body || {}) as any;
+    if (!workspaceId) return reply.status(400).send({ success: false, error: 'workspaceId is required' });
+    const result = container.goalService.moveGoal(id, workspaceId);
+    broadcast('goals_updated', { goalId: id });
+    broadcast('tasks_updated', { goalId: id });
+    broadcast('workspaces_updated', {});
     return { success: true, ...result };
   });
 
@@ -775,9 +828,18 @@ export function buildServer(container: ServiceContainer, options: ServerOptions 
   }
 
   if (fs.existsSync(uiPath)) {
+    // The page itself carries the token, so its writes are accepted.
+    const page = async (_req: FastifyRequest, reply: any) =>
+      reply
+        .type('text/html; charset=utf-8')
+        .header('Cache-Control', 'no-store')
+        .send(injectToken(fs.readFileSync(path.join(uiPath, 'index.html'), 'utf-8'), token));
+    app.get('/', page);
+    app.get('/index.html', page);
     app.register(fastifyStatic, {
       root: uiPath,
       prefix: '/',
+      index: false,
     });
   }
 

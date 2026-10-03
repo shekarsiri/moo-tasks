@@ -1,5 +1,5 @@
 import picocolors from "picocolors";
-import { createServiceContainer } from "../../services/index.js";
+import { openCliWorkspace } from "../workspace.js";
 
 export async function searchCommand(
   query: string,
@@ -15,9 +15,9 @@ export async function searchCommand(
     process.exit(1);
   }
 
-  const root = options.projectPath ? options.projectPath : process.cwd();
-  const container = createServiceContainer({ projectPath: root });
+  const { container, workspace } = openCliWorkspace(options.projectPath);
   const results = container.searchService.search(query, {
+    workspaceId: workspace.id,
     type: options.type || "all",
     limit: options.limit ? parseInt(options.limit, 10) : 20,
   });

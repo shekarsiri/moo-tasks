@@ -14,6 +14,7 @@ import {
   SubtaskNestingError,
   TaskNotFoundError,
 } from '../domain/errors.js';
+import { ageStaleReason } from '../domain/staleness.js';
 import { DependencyGraph } from '../domain/dependency.js';
 import { FileConflictDetector } from '../domain/conflict.js';
 import { DuplicateMatch, TaskSimilarityDetector } from '../domain/similarity.js';
@@ -435,7 +436,13 @@ export class TaskLifecycleService {
 
     if (unblockedTasks.length === 0) return null;
 
+    // Stale backlog goes last whatever its priority: a forgotten "critical" task must not be the
+    // first thing a new session picks up.
+    const now = new Date();
+    const stale = new Set(unblockedTasks.filter((t) => ageStaleReason(t, now)).map((t) => t.id));
     unblockedTasks.sort((a, b) => {
+      const sDiff = Number(stale.has(a.id)) - Number(stale.has(b.id));
+      if (sDiff !== 0) return sDiff;
       const pDiff = (priorityWeight[b.priority] || 2) - (priorityWeight[a.priority] || 2);
       if (pDiff !== 0) return pDiff;
       return a.orderIndex - b.orderIndex;

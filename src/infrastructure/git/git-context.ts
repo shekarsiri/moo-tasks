@@ -101,6 +101,22 @@ function hashOne(file: string, cwd?: string): string {
 
 export class GitContextService {
   /**
+   * The checkout's top level and the main repository it belongs to. A linked worktree shares the
+   * main checkout's `.git` directory, so both resolve to the same main root; a submodule (whose
+   * git dir lives under the superproject's `.git/modules`) is its own main root.
+   */
+  static repoRoots(cwd: string): { toplevel: string; mainRoot: string } | null {
+    try {
+      const [toplevel, commonDir] = git(['rev-parse', '--show-toplevel', '--git-common-dir'], cwd).trim().split('\n');
+      if (!toplevel || !commonDir) return null;
+      const common = path.resolve(cwd, commonDir);
+      return { toplevel, mainRoot: path.basename(common) === '.git' ? path.dirname(common) : toplevel };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Branch, HEAD and dirty files from one git call. `details` adds the last commit subject and a
    * shortstat of uncommitted changes (two more calls), which only completion evidence needs.
    */

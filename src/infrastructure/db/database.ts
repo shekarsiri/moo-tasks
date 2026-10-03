@@ -3,6 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+export function realpathOrResolve(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 export interface DatabaseConfig {
   dbPath?: string;
   projectPath?: string;
@@ -50,18 +58,29 @@ export class DatabaseManager {
    * Discovers the repository root or current project directory.
    */
   static findProjectRoot(startPath: string = process.cwd()): string {
-    let current = path.resolve(startPath);
-    while (current !== path.dirname(current)) {
-      if (
-        fs.existsSync(path.join(current, '.git')) ||
-        fs.existsSync(path.join(current, '.moo.json')) ||
-        fs.existsSync(path.join(current, '.moo'))
-      ) {
-        return current;
+    return this.detectProject(startPath).root;
+  }
+
+  /**
+   * The nearest directory that is a project: a git checkout (`.git` dir or worktree file), or one
+   * marked for Moo (`.moo.json`, or a `.moo` dir that is not the global Moo home). Without one, the
+   * start directory is returned with isProject false, so callers can decline to register it.
+   */
+  static detectProject(startPath: string = process.cwd()): { root: string; isProject: boolean; isGit: boolean } {
+    const start = path.resolve(startPath);
+    const globalHome = realpathOrResolve(process.env.MOO_HOME || path.join(os.homedir(), '.moo'));
+    let current = start;
+    while (true) {
+      if (fs.existsSync(path.join(current, '.git'))) return { root: current, isProject: true, isGit: true };
+      if (fs.existsSync(path.join(current, '.moo.json'))) return { root: current, isProject: true, isGit: false };
+      const mooDir = path.join(current, '.moo');
+      if (fs.existsSync(mooDir) && realpathOrResolve(mooDir) !== globalHome) {
+        return { root: current, isProject: true, isGit: false };
       }
-      current = path.dirname(current);
+      const parent = path.dirname(current);
+      if (parent === current) return { root: start, isProject: false, isGit: false };
+      current = parent;
     }
-    return path.resolve(startPath);
   }
 
   /**

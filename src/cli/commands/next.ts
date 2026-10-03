@@ -1,11 +1,10 @@
 import picocolors from 'picocolors';
-import { createServiceContainer } from '../../services/index.js';
+import { openCliWorkspace } from '../workspace.js';
 
 export async function nextCommand(options: { goal?: string; projectPath?: string; json?: boolean }) {
-  const root = options.projectPath ? options.projectPath : process.cwd();
-  const container = createServiceContainer({ projectPath: root });
+  const { container, workspace } = openCliWorkspace(options.projectPath);
 
-  const next = container.taskLifecycleService.getNextUnblockedTask(options.goal);
+  const next = container.taskLifecycleService.getNextUnblockedTask(options.goal, undefined, false, workspace.id);
 
   if (options.json) {
     console.log(JSON.stringify(next, null, 2));

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Decision, NoteType, SessionResumeSummary, StaleTask, Task, TaskNote, TaskStatus } from '../domain/types.js';
 import { hasLiveLease } from '../domain/lease.js';
+import { ageStaleReason } from '../domain/staleness.js';
 import { ADHOC_GOAL_TITLE } from './goal-service.js';
 import {
   ITaskRepository,
@@ -41,8 +42,6 @@ export interface StallWarning {
 }
 
 const OPEN_STATUSES: TaskStatus[] = ['todo', 'doing', 'blocked-on-dependency', 'waiting-on-human'];
-const STALE_TODO_DAYS = 14;
-const STALE_DEFERRED_DAYS = 30;
 const RESUME_NOTE_TYPES = new Set<NoteType>(['attempt_log', 'checkpoint', 'general', 'handoff_note', 'attempt_failure', 'discovered_work']);
 
 export class SessionService {
@@ -72,8 +71,8 @@ export class SessionService {
         });
       }
 
-      // 2. Excessive Reopens: Reopen count >= 2
-      if (t.reopenCount >= 2) {
+      // 2. Excessive Reopens: Reopen count >= 2, while the work is still open
+      if (t.reopenCount >= 2 && OPEN_STATUSES.includes(t.status)) {
         warnings.push({
           taskId: t.id,
           taskTitle: t.title,
@@ -128,7 +127,8 @@ export class SessionService {
       : this.goalRepo.list(projectPath, 'active');
     const unblockedReadyTasks = [];
     const nextUnblocked = this.taskLifecycleService.getNextUnblockedTask(undefined, agentId, false, workspaceId);
-    if (nextUnblocked) {
+    // Stale backlog ranks last; when only stale work is left it is listed as stale, not as ready.
+    if (nextUnblocked && !ageStaleReason(nextUnblocked, now)) {
       unblockedReadyTasks.push(nextUnblocked);
     }
 
@@ -145,12 +145,11 @@ export class SessionService {
       .list({ isArchived: false, workspaceId })
       .filter((t) => OPEN_STATUSES.includes(t.status));
     const recentOpen = [...open].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    const focusGoalId =
-      currentTask?.goalId ||
-      interruptedTasks[0]?.goalId ||
-      recentOpen.find((t) => t.goalId && activeGoals.some((g) => g.id === t.goalId && g.title !== ADHOC_GOAL_TITLE))?.goalId ||
-      activeGoals.find((g) => g.title !== ADHOC_GOAL_TITLE)?.id ||
-      activeGoals[0]?.id;
+    // A real goal wins over the standing "Ad-hoc work" goal, which only describes itself.
+    const candidates = [currentTask?.goalId, ...interruptedTasks.map((t) => t.goalId), ...recentOpen.map((t) => t.goalId), ...activeGoals.map((g) => g.id)]
+      .map((id) => activeGoals.find((g) => g.id === id))
+      .filter((g): g is (typeof activeGoals)[number] => Boolean(g));
+    const focusGoalId = (candidates.find((g) => g.title !== ADHOC_GOAL_TITLE) || candidates[0])?.id;
     const focusGoal = activeGoals.find((g) => g.id === focusGoalId);
     const progress = (goalId: string) => {
       const tasks = this.taskRepo.listByGoalId(goalId).filter((t) => !t.isArchived && t.status !== 'dropped');
@@ -182,15 +181,12 @@ export class SessionService {
    * STALE_DEFERRED_DAYS, and open tasks none of whose declared files exist in this project.
    */
   findStaleTasks(workspaceId?: string, projectPath?: string, now: Date = new Date()): StaleTask[] {
-    const days = (iso: string) => (now.getTime() - new Date(iso).getTime()) / 86_400_000;
     const stale: StaleTask[] = [];
     for (const t of this.taskRepo.list({ isArchived: false, workspaceId })) {
       if (!['todo', 'blocked-on-dependency'].includes(t.status) || t.interruptedFrom) continue;
-      const age = days(t.updatedAt);
-      if (t.isDeferred && age >= STALE_DEFERRED_DAYS) {
-        stale.push({ task: t, reason: `deferred and untouched for ${Math.floor(age)} days` });
-      } else if (!t.isDeferred && age >= STALE_TODO_DAYS) {
-        stale.push({ task: t, reason: `untouched for ${Math.floor(age)} days` });
+      const byAge = ageStaleReason(t, now);
+      if (byAge) {
+        stale.push({ task: t, reason: byAge });
       } else if (projectPath && fs.existsSync(projectPath) && t.declaredFiles?.length) {
         const exists = t.declaredFiles.some((f) => fs.existsSync(path.resolve(projectPath, f)));
         // New files are fine to declare; only flag when not even their directories exist here.

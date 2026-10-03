@@ -4,9 +4,9 @@
 
 # 🐮 Moo Tasks
 
-[![CI](https://github.com/shekarsiri/moo-tasks/actions/workflows/ci.yml/badge.svg)](https://github.com/shekarsiri/moo-tasks/actions)
+[![npm](https://img.shields.io/npm/v/moo-tasks.svg)](https://www.npmjs.com/package/moo-tasks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node: >=18.0.0](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org)
+[![Node: >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 [![MCP Ready](https://img.shields.io/badge/MCP-Compatible-purple.svg)](https://modelcontextprotocol.io)
 
 **Agentic Task Orchestration & Management Engine** built for AI coding agents (**Claude Code**, **Cursor**, **Windsurf**, **Antigravity**, **Copilot**) and human-in-the-loop pair programming.
@@ -41,6 +41,8 @@ Standard AI coding agents often suffer from:
 - **Goal Coverage & Loose Ends**: Live metrics on task completion percentage and lingering open tasks.
 - **Quality Metrics**: Per goal: share of acceptance criteria met, tasks with deviations, verify pass rate, share of work linked to commits, cycle time, attempts and reopens.
 - **Completion Summary**: Completing a goal writes a record of what shipped, deviations, what was left open or dropped, and the decisions made along the way, plus the closer's own retrospective. Agents are prompted to close a goal after its last task.
+- **Auto-Close**: A goal whose tasks are all finished closes itself (with that summary) after 3 idle days (`MOO_GOAL_AUTOCLOSE_DAYS`, `off` to disable); the board's Session Resume view can close every finished goal at once.
+- **Move Goals**: A goal filed under the wrong project moves, with all its tasks, from the board (goal view → Move) or with `moo goal:move <goalId> <workspace>`.
 - **Scope Drift Detection**: Automatically identifies and flags orphan tasks with no linked goal.
 - **Goal Open Caps**: Hard cap on maximum open tasks per goal (default: 10), preventing agents from over-planning.
 - **Cascade Operations**: Atomically drop, kill, or reopen all tasks under a goal with mandatory reasons.
@@ -69,11 +71,12 @@ Standard AI coding agents often suffer from:
 - **Mid-Task Work Capture**: Capture new work found mid-flight without relinquishing current task claim.
 - **Must-Fix vs Deferred**: Mark as `must-fix-now` (inserted as blocker) or `deferred` (backlog pile).
 - **Already Fixed**: `alreadyFixed: true` records a fix made along the way as done work linked to the current task, with just a title.
-- **Stale Backlog**: Todo work untouched for 14 days, deferred work for 30 days, and tasks whose declared files and folders don't exist in the project are flagged on resume, in `moo_list_tasks(stale: true)` and by the board's Health filter.
+- **Stale Backlog**: Todo work untouched for 14 days, deferred work for 30 days, and tasks whose declared files and folders don't exist in the project are flagged on resume, in `moo_list_tasks(stale: true)`, `moo list --stale` and by the board's Health filter. Stale tasks rank last in the ready queue and are never claimed automatically (`moo_get_next_task(claim: true)` offers them with the reason instead).
 
 ### 🤖 6. Ownership, Concurrency & Leases
 - **Exclusive Task Claims**: 30-minute leases, renewed whenever the agent calls a tool with the task's `taskId`; claims held by a dead agent process are released.
 - **Checkpoints**: `moo_checkpoint` logs progress and renews the lease during long-running tasks.
+- **Exact File Attribution**: The Claude Code post-edit hook records every file an agent edits on the claim it belongs to, so parallel agents in one checkout no longer get each other's files. Without recorded edits, files other live claims hold are excluded, and while another agent is working a task keeps only its declared files.
 - **Interrupted Work**: When a session ends mid-task, `moo_session_resume` lists the task under *Interrupted work* with its last notes (even after the lease monitor requeues it). Claiming it continues the work: the original git baseline is kept, so the earlier session's edits count, and it is not a new attempt.
 - **Commit Links**: `moo install git` adds git hooks that append `Moo-Task: <id>` trailers to commits carrying a task's files and record each commit on its tasks.
 - **Agent Concurrency Limits**: Cap simultaneous tasks held per agent (default: 1).
@@ -95,6 +98,14 @@ Standard AI coding agents often suffer from:
 
 Requires **Node.js 22 or newer**. SQLite ships as a prebuilt binary, so no compiler is needed.
 
+### Set up a project (one step)
+```bash
+cd your-project
+moo init          # or: npx moo-tasks init
+moo doctor        # check the setup; every warning comes with the command that fixes it
+```
+`moo init` registers the project, writes the Moo protocol into the agent rule files, installs the Claude Code hooks (in `.claude/settings.local.json`, kept out of git) and the commit-linking git hooks, and offers the test command it detects (`npm test`, `go test ./...`, `cargo test`, `pytest`, `flutter test`, `make test`, ...) as the verify command. Skip any step with `--no-hooks`, `--no-git-hooks` or `--no-verify`; `-y` accepts the detected verify command without asking.
+
 ### Option A: Install Globally (Recommended for `moo` command)
 Install `moo-tasks` globally to access the short `moo` command anywhere:
 ```bash
@@ -103,14 +114,15 @@ npm install -g moo-tasks
 ```
 Once installed, you can use `moo` directly:
 ```bash
-moo init           # Register this repo as a workspace & write agent rule files
+moo init           # Set up this project: rules, hooks, git hooks, verify command
+moo doctor         # Check the setup and print fixes
 moo install claude # Configure an agent's MCP server (add --hooks for Claude Code)
 moo start          # Launch real-time Web UI (http://127.0.0.1:4242)
 moo ws             # List registered global workspaces
 moo status         # Show Where-Did-I-Leave-Off context
 moo search <query> # Full-text SQLite search
 ```
-Other commands: `moo list`, `moo next`, `moo run <prompt>`, `moo import <file>`, `moo export`, `moo ws:add|ws:rename|ws:remote|ws:remove`. Run `moo --help` for details.
+Other commands: `moo list [--stale]`, `moo next`, `moo run <prompt>`, `moo import <file>`, `moo export`, `moo goal:move <goalId> <workspace>`, `moo ws:add|ws:rename|ws:remote|ws:remove|ws:prune`, `moo db:compact`. Run `moo --help` for details.
 
 > 💡 **Note on `moo` vs `npx`**:
 > - Bare `moo <command>` works when installed globally via `npm install -g moo-tasks`.
@@ -131,11 +143,15 @@ Run in your project root:
 npx moo-tasks init
 ```
 This:
-- Registers the project as a workspace in the global SQLite database (`~/.moo/tasks.db`, WAL mode; override with `MOO_HOME` or `MOO_DB_PATH`).
+- Registers the project as a workspace in the global SQLite database (`~/.moo/tasks.db`, WAL mode; override with `MOO_HOME` or `MOO_DB_PATH`). A git worktree belongs to its main repository's workspace; outside git, a `.moo.json` marker is written so the directory counts as a project.
+- Installs the Claude Code hooks and git hooks and sets the verify command, as described above.
 - Writes (or refreshes) a managed Moo protocol block in `AGENTS.md`, `CLAUDE.md` (which imports `@AGENTS.md`), `.cursor/rules/moo-tasks.mdc`, and `.windsurf/rules/moo-tasks.md`. Text outside the block is left untouched; legacy `.cursorrules` / `.windsurfrules` are refreshed only if they already exist.
 
+#### Workspaces
+A project becomes a workspace the first time Moo runs in it: a git checkout (any subdirectory maps to the repository root, any linked worktree to its main repository) or a directory with a `.moo.json` marker. Elsewhere (your home folder, `/`, temp directories) nothing is registered: the MCP server tells the agent Moo is inactive there and its tools answer `NO_WORKSPACE`. `moo ws:prune` lists workspaces nothing was ever tracked in and removes them with `--yes`.
+
 #### 2. Web Board
-The MCP server starts the web board automatically in the background, so once an agent is connected it is available at **`http://localhost:4242`** (one board is shared by every agent on the machine). Set `MOO_NO_UI=1` to disable auto-start, or `MOO_PORT` to change the port.
+The MCP server starts the web board automatically in the background, so once an agent is connected it is available at **`http://localhost:4242`** (one board is shared by every agent on the machine). Set `MOO_NO_UI=1` to disable auto-start, or `MOO_PORT` to change the port. The board's libraries are bundled, so it works offline.
 
 To run it manually:
 ```bash
@@ -145,8 +161,11 @@ npx moo-tasks start
 To access the Web UI from another device or tablet on your local network (LAN):
 ```bash
 npx moo-tasks start --lan
-# Automatically logs: http://192.168.x.x:4242/
+# Prints: http://192.168.x.x:4242/?token=...
 ```
+The board has no login, so it is protected by a per-machine token in `~/.moo/board-token`:
+- From another device every request needs it. Open the printed link once; the board keeps the token in a cookie. Delete the file to rotate it.
+- On this machine reads are open, but writes need the token, which the board page carries. Agents therefore cannot verify their own work, answer their own questions or change the verify command with a plain `curl`; they work through the MCP tools.
 
 ---
 
@@ -167,14 +186,15 @@ npx moo-tasks install codex        # Prints a generic MCP config snippet
 
 ### Claude Code Hooks (optional)
 ```bash
-npx moo-tasks install claude --hooks                # project: .claude/settings.json
+npx moo-tasks install claude --hooks                # project: .claude/settings.json (shared with the team)
+npx moo-tasks install claude --hooks --scope local  # personal: .claude/settings.local.json (what moo init uses)
 npx moo-tasks install claude --hooks --scope user   # user: ~/.claude/settings.json
 ```
-This adds `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop` hooks that run `moo hook <session-start|pre-edit|post-edit|stop>`:
-- **session-start** injects the Where-Did-I-Leave-Off context; after a compaction or resume it re-injects this session's task in full, with its recent notes.
+`moo init` installs them for you (scope `local`, i.e. `.claude/settings.local.json`). They add `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop` hooks that run `~/.moo/bin/moo-hook <session-start|pre-edit|post-edit|stop>`. That shim is rewritten to the running install whenever moo starts, so upgrading Node (mise, nvm, asdf) or moo never breaks the hooks; with no install found it exits quietly and never blocks.
+- **session-start** injects the Where-Did-I-Leave-Off context (after a compaction or resume, this session's task in full with its recent notes), records where the working tree stood, and closes finished goals that have been idle.
 - **pre-edit** blocks `Edit` / `Write` / `MultiEdit` / `NotebookEdit` on files inside the workspace when this session holds no claimed task in the workspace.
-- **post-edit** renews the claim's lease.
-- **stop** asks once for a `moo_checkpoint` when this session's task has changes git can see and no note for 15 minutes (`MOO_CHECKPOINT_MINUTES`), so the next session can pick up where this one stopped.
+- **post-edit** renews the claim's lease and records the edited file on that claim (exact attribution).
+- **stop** asks once for a `moo_checkpoint` when this session's task has changes git can see and no note for 15 minutes (`MOO_CHECKPOINT_MINUTES`); without a claimed task, it asks once to `moo_log_work` files the session changed that no task accounts for (such as edits made through the shell).
 
 Re-running the installer replaces earlier Moo hooks and leaves other hooks alone. Projects that never ran `moo init` are ignored; set `MOO_HOOKS=off` to disable the hooks temporarily.
 
@@ -182,13 +202,17 @@ Re-running the installer replaces earlier Moo hooks and leaves other hooks alone
 ```bash
 moo install git                     # or add --git-hooks to any install
 ```
-Installs `prepare-commit-msg` and `post-commit` hooks (honouring `core.hooksPath`). Commits get a `Moo-Task: <id>` trailer for each in-progress or recently completed task whose files are staged, and the commit hash is recorded on those tasks. Existing hooks from other tools are never overwritten; the installer prints the line to add instead. A Moo failure never blocks a commit.
+`moo init` installs them in git repositories. They are `prepare-commit-msg` and `post-commit` hooks (honouring `core.hooksPath`, shared by all worktrees). Commits get a `Moo-Task: <id>` trailer for each in-progress or recently completed task whose files are staged, and the commit hash is recorded on those tasks. Existing hooks from other tools are never overwritten; the installer prints the line to add instead. A Moo failure never blocks a commit.
 
 ### Verify Command (recommended)
 ```bash
 moo verify:set "npm test" --timeout 600   # show with `moo verify:set`, clear with --clear
 moo verify                                # run it now, as completion does
 ```
+`moo init` offers the detected test command. The first verify command can be set from anywhere, but changing or clearing one needs an interactive terminal (or the board's Workspace Settings), so an agent can only make the gate stricter. In a worktree it runs against the worktree's files.
+
+### Storage
+Evidence and notes keep only the task's own files and diff summary, never a snapshot of the whole working tree. Upgrading slims data stored by older versions automatically, after copying the database to `~/.moo/tasks.db.backup.<time>-pre-v9`. `moo db:compact` repeats that on demand (backup, slim, rebuild the file).
 
 ### Manual Configuration
 ```json
@@ -258,7 +282,9 @@ Reading, searching and read-only commands never need a task. Parallel sub-agents
 | `moo_get_file_context` | Before editing: who holds the files now, plus past tasks, decisions and notes about them |
 | `moo_search` | Full-text search over tasks and decisions in this workspace |
 
-**Board-only actions**: verifying completed work, answering human questions, rejecting a completed task, undoing a status change, and deleting a workspace are done by humans in the web board, not by agents.
+**Board-only actions**: verifying completed work, answering human questions, rejecting a completed task, undoing a status change, moving a goal to another workspace, and deleting a workspace are done by humans in the web board, not by agents (the board's write API needs the board token, see above).
+
+The server also sends a short version of the protocol as MCP server instructions, so agents learn it in projects without an `AGENTS.md`.
 
 Read-only tools carry the MCP `readOnlyHint` annotation, so clients can approve and run them in parallel. Responses are compact by design: task views omit git baselines, session ids and bookkeeping timestamps.
 
@@ -275,6 +301,8 @@ src/
 │   ├── errors.ts             # Domain-specific typed error classes
 │   ├── dependency.ts         # DAG cycle detector & unblocked evaluator
 │   ├── conflict.ts           # File touch overlap conflict detector
+│   ├── evidence.ts           # Lean evidence and note shapes (no whole-tree snapshots)
+│   ├── staleness.ts          # When queued work counts as stale
 │   └── similarity.ts         # Duplicate task similarity detector
 │
 ├── infrastructure/            # Persistence & External Integrations
@@ -282,6 +310,7 @@ src/
 │   ├── db/migrations.ts      # Schema DDL and versioning
 │   ├── git/git-context.ts    # Git branch, commit, dirty status extractor
 │   ├── web/web-ui.ts         # Web board auto-start (shared, one per machine)
+│   ├── hook-shim.ts          # ~/.moo/bin/moo-hook: stable entry point for Claude Code and git hooks
 │   └── repositories/         # SQLite Repository Implementations
 │
 ├── services/                  # Application Services (Use Cases)
@@ -297,11 +326,12 @@ src/
 │   ├── housekeeping-service.ts# Archiving & multi-format export
 │   ├── markdown-import-service.ts # PRD / checklist import into goals & tasks
 │   ├── search-service.ts      # FTS5 full-text search
-│   ├── workspace-service.ts   # Global workspace registry
+│   ├── workspace-service.ts   # Global workspace registry, project and worktree resolution
+│   ├── verify-detect.ts       # Test command detection for moo init
 │   └── index.ts               # Dependency Injection Container
 │
 ├── mcp/                       # Model Context Protocol Stdio Server
-├── server/                    # Fastify HTTP + Server-Sent Events (SSE) Engine
+├── server/                    # Fastify HTTP + Server-Sent Events (SSE) Engine; board-auth.ts holds the board token
 ├── cli/                       # CLI Commands (init, install, hook, start, mcp, ws, status, ...)
 └── ui/                        # Vanilla JS + Tailwind + Lucide Icons Web UI
 ```

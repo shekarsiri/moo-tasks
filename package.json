@@ -31,7 +31,7 @@
   "scripts": {
     "build": "tsc && node scripts/build-ui.js",
     "build:backend": "tsc",
-    "dev": "tsx src/cli/index.ts start",
+    "dev": "node scripts/build-ui.js --vendor-only && tsx src/cli/index.ts start",
     "dev:mcp": "tsx src/cli/index.ts mcp",
     "test": "vitest run",
     "prepublishOnly": "npm run test && npm run build",
@@ -66,8 +66,14 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.13.5",
+    "dompurify": "3.4.15",
+    "lucide": "1.47.0",
+    "marked": "15.0.12",
+    "tailwindcss": "3.4.19",
     "ts-node": "^10.9.2",
     "tsx": "^4.19.3",
+    "turndown": "7.1.2",
+    "turndown-plugin-gfm": "1.0.2",
     "typescript": "^5.7.3",
     "vitest": "^3.0.6"
   }

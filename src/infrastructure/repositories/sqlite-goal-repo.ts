@@ -81,6 +81,7 @@ export class SqliteGoalRepository implements IGoalRepository {
     const stmt = this.db.prepare(`
       UPDATE goals SET
         workspace_id = ?,
+        project_path = ?,
         title = ?,
         verbatim_prompt = ?,
         description = ?,
@@ -95,6 +96,7 @@ export class SqliteGoalRepository implements IGoalRepository {
 
     stmt.run(
       goal.workspaceId || null,
+      goal.projectPath,
       goal.title,
       goal.verbatimPrompt,
       goal.description || null,

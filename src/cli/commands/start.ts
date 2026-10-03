@@ -1,8 +1,9 @@
 import os from 'os';
 import picocolors from 'picocolors';
-import { createServiceContainer } from '../../services/index.js';
+import { createServiceContainer, RegisteredContainer } from '../../services/index.js';
 import { buildServer } from '../../server/app.js';
 import { probeWebUi } from '../../infrastructure/web/web-ui.js';
+import { boardToken, boardTokenPath } from '../../server/board-auth.js';
 
 function getLocalIpAddresses(): string[] {
   const interfaces = os.networkInterfaces();
@@ -30,7 +31,13 @@ export async function startServerCommand(options: {
 }) {
   const port = parseInt(options.port || '4242', 10);
   const host = options.lan ? '0.0.0.0' : options.host || '127.0.0.1';
-  const container = createServiceContainer({ projectPath: options.projectPath });
+  // The board serves every workspace; it opens on the one it was started in, else the first one.
+  // Starting it from a directory that is not a project must not register that directory.
+  const found = createServiceContainer({ projectPath: options.projectPath, register: 'if-project' });
+  const fallback = found.activeWorkspace || found.workspaceService.listWorkspaces()[0];
+  const container: RegisteredContainer = fallback
+    ? { ...found, activeWorkspace: fallback }
+    : createServiceContainer({ projectPath: options.projectPath });
   const app = buildServer(container, { lan: host === '0.0.0.0' });
 
   try {
@@ -42,9 +49,12 @@ export async function startServerCommand(options: {
 
     if (host === '0.0.0.0' || options.lan) {
       if (lanIps.length > 0) {
+        // Other devices need the token; the link carries it once and the board keeps it in a cookie.
+        const token = boardToken();
         for (const ip of lanIps) {
-          console.log(`   ${picocolors.gray('Intranet / LAN:')} ${picocolors.green(picocolors.underline(`http://${ip}:${port}`))}`);
+          console.log(`   ${picocolors.gray('Intranet / LAN:')} ${picocolors.green(picocolors.underline(`http://${ip}:${port}/?token=${token}`))}`);
         }
+        console.log(`   ${picocolors.gray('Access:')}       ${picocolors.dim('share this link only with your own devices; rotate it by deleting ' + boardTokenPath())}`);
       } else {
         console.log(`   ${picocolors.gray('Network:')}      ${picocolors.cyan(picocolors.underline(`http://0.0.0.0:${port}`))}`);
       }
